@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskLedger } from "../src/runtime/task-ledger";
@@ -156,4 +156,18 @@ test("CLI guidance survives a failed model start and a ledger reload", async () 
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
+});
+
+test("a task remembers its own model across reloads until it is cleared", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-ledger-model-"));
+  try {
+    const product = join(root, "product");
+    await mkdir(product);
+    const ledger = await TaskLedger.create(join(root, ".alpha"), { objective: "Build", projectRoot: product, criteria: [{ id: "build", description: "Build", kind: "build" }], modelSelector: "openrouter/anthropic/claude" });
+    expect((await TaskLedger.load(ledger.file)).state.modelSelector).toBe("openrouter/anthropic/claude");
+    await ledger.setModel(null);
+    expect((await TaskLedger.load(ledger.file)).state.modelSelector).toBeUndefined();
+    await ledger.setModel("alibaba-token-plan/qwen3.6-flash");
+    expect((await TaskLedger.load(ledger.file)).state.modelSelector).toBe("alibaba-token-plan/qwen3.6-flash");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

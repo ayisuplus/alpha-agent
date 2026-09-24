@@ -7,7 +7,7 @@ const parameters = type({
   orders: type({ id: "string", objective: "string", ownedPaths: "string[]", resources: "string[]" }).array(),
 });
 
-export function createWorkOrderTool(ledger: TaskLedger, dataRoot: string, signal?: AbortSignal): CustomTool<typeof parameters> {
+export function createWorkOrderTool(ledger: TaskLedger, dataRoot: string, signal?: AbortSignal, modelSelector?: string): CustomTool<typeof parameters> {
   return {
     name: "alpha_delegate",
     label: "Delegate two independent source changes",
@@ -25,6 +25,7 @@ export function createWorkOrderTool(ledger: TaskLedger, dataRoot: string, signal
           baseRevision: ledger.state.revision!,
           orders: args.orders,
           signal: combined,
+          modelSelector,
         });
         if (report.committed.length) await ledger.refreshRevision();
         return { content: [{ type: "text", text: JSON.stringify(report) }], isError: report.status !== "merged" };

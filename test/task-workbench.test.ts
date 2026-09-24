@@ -145,3 +145,77 @@ test("workbench serves recorded evidence but refuses a ledger path outside its d
     await rm(root, { recursive: true, force: true });
   }
 });
+
+async function startServer(root: string, env: Record<string, string | undefined>) {
+  const child = Bun.spawn([process.execPath, "run", join(import.meta.dir, "..", "src", "server.ts")], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+  if (!child.stdout || typeof child.stdout === "number") throw new Error("Server output is not readable");
+  const reader = child.stdout.getReader();
+  const decoder = new TextDecoder();
+  let output = "";
+  let port: string | undefined;
+  const timeout = setTimeout(() => child.kill(), 15_000);
+  while (!port) {
+    const part = await reader.read();
+    if (part.done) break;
+    output += decoder.decode(part.value);
+    port = /ALPHA_SERVER_READY (\d+)/.exec(output)?.[1];
+  }
+  clearTimeout(timeout);
+  if (!port) throw new Error(`Server did not start: ${output}`);
+  return { child, base: `http://127.0.0.1:${port}` };
+}
+
+test("model endpoints work against an isolated OMP store and never return keys", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-models-api-"));
+  let child: ReturnType<typeof Bun.spawn> | null = null;
+  try {
+    const product = join(root, "products", "sample");
+    const dataRoot = join(root, ".alpha");
+    await mkdir(product, { recursive: true });
+    const ledger = await TaskLedger.create(dataRoot, { objective: "Pick a model", projectRoot: product, criteria: [{ id: "build", description: "Build", kind: "build" }] });
+    // A temporary agent directory and no broker variables keep the test away from the real credential store.
+    const env: Record<string, string | undefined> = { ...process.env, ALPHA_WORKSPACE_ROOT: root, ALPHA_OMP_AGENT_DIR: join(root, "omp-agent") };
+    delete env.OMP_AUTH_BROKER_URL;
+    delete env.OMP_AUTH_BROKER_TOKEN;
+    const server = await startServer(root, env);
+    child = server.child;
+    const { base } = server;
+    const json = { "content-type": "application/json", origin: base };
+    type Catalog = { models: Array<{ selector: string; provider: string; available: boolean }>; providers: Array<{ id: string; origin: string | null; storedKey: boolean; models: number }>; builtin: string };
+
+    const catalog = await fetch(`${base}/api/models`).then(response => response.json()) as Catalog;
+    expect(catalog.builtin).toBe("alibaba-token-plan/qwen3.6-flash");
+    const provider = catalog.providers.find(item => item.origin === null && item.models > 0);
+    expect(provider).toBeDefined();
+    const key = "sk-alpha-test-0123456789";
+    const saved = await fetch(`${base}/api/providers/${provider!.id}/key`, { method: "PUT", headers: json, body: JSON.stringify({ apiKey: key }) });
+    expect(saved.status).toBe(200);
+    expect(await saved.text()).not.toContain(key);
+    expect((await fetch(`${base}/api/providers/${provider!.id}/key`, { method: "PUT", headers: json, body: JSON.stringify({ apiKey: "short" }) })).status).toBe(400);
+    expect((await fetch(`${base}/api/providers/no-such-provider/key`, { method: "PUT", headers: json, body: JSON.stringify({ apiKey: key }) })).status).toBe(400);
+
+    const afterText = await fetch(`${base}/api/models`).then(response => response.text());
+    expect(afterText).not.toContain(key);
+    const after = JSON.parse(afterText) as Catalog;
+    expect(after.providers.find(item => item.id === provider!.id)).toMatchObject({ origin: "api_key", storedKey: true });
+    const selector = after.models.find(item => item.provider === provider!.id && item.available)?.selector;
+    expect(selector).toBeDefined();
+
+    const setModel = (model: unknown) => fetch(`${base}/api/tasks/${ledger.state.id}/model`, { method: "POST", headers: json, body: JSON.stringify({ model }) });
+    expect((await setModel(selector)).status).toBe(200);
+    expect((await TaskLedger.load(ledger.file)).state.modelSelector).toBe(selector);
+    expect((await setModel(`${provider!.id}/not-a-real-model`)).status).toBe(400);
+    expect((await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ model: { default: `${provider!.id}/not-a-real-model` } }) })).status).toBe(400);
+    expect((await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ model: { default: selector } }) })).status).toBe(200);
+
+    expect(await fetch(`${base}/api/providers/${provider!.id}/key`, { method: "DELETE", headers: { origin: base } }).then(response => response.json())).toEqual({ removed: 1 });
+    const cleared = await fetch(`${base}/api/models`).then(response => response.json()) as Catalog;
+    expect(cleared.providers.find(item => item.id === provider!.id)?.origin).toBeNull();
+    expect((await setModel(null)).status).toBe(200);
+    expect((await TaskLedger.load(ledger.file)).state.modelSelector).toBeUndefined();
+  } finally {
+    child?.kill();
+    if (child) await child.exited;
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
+}, 60_000);

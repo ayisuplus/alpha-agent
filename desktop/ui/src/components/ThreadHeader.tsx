@@ -3,7 +3,8 @@ import { ChevronDown, CircleAlert, Info } from "lucide-react";
 import type { TaskView } from "../api/types";
 import { criterionState, describeStep, parseFailure } from "../state/evidence";
 import { criterionLabel, failureHeadline, formatDateTime, phaseInfo, reopenText, taskStatus, taskTitle } from "../state/labels";
-import { openDetail } from "../state/workbench";
+import { openDetail, openSettings, setTaskModel } from "../state/workbench";
+import { ModelPicker } from "./ModelPicker";
 import { Badge, Spinner, StateIcon } from "./ui";
 import "./ThreadHeader.css";
 
@@ -14,6 +15,7 @@ function FailureAlert({ reason }: { reason: string }) {
     ? `第 ${failure.step}/${failure.total} 步${failure.spec ? `（${describeStep(failure.spec)}）` : ""}失败：${failure.message}`
     : reason;
   const verification = !!failure || /verification|browser|preview/i.test(reason);
+  const modelProblem = /Authenticated model is unavailable|no response within/i.test(reason);
   return <div className="thread-alert tone-danger" role="status">
     <CircleAlert size={16} aria-hidden />
     <div className="thread-alert-body">
@@ -23,12 +25,14 @@ function FailureAlert({ reason }: { reason: string }) {
     <div className="thread-alert-actions">
       {detail.length > 140 && <button className="link-button" onClick={() => setExpanded(value => !value)}>{expanded ? "收起" : "展开"}</button>}
       {verification && <button className="link-button" onClick={() => openDetail({ kind: "evidence", criterionId: "user-path" })}>查看证据</button>}
+      {modelProblem && <button className="link-button" onClick={() => openSettings("model")}>模型设置</button>}
     </div>
   </div>;
 }
 
 export function ThreadHeader({ task, busy, phase, compact }: { task: TaskView; busy: boolean; phase: string | null; compact?: boolean }) {
   const [showObjective, setShowObjective] = useState(false);
+  const [modelSaving, setModelSaving] = useState(false);
   const status = taskStatus(task);
   const criteria = [...task.criteria.map(item => item.id).filter(id => id !== "local-preview"), "local-preview"];
   const history = [...(task.contractHistory ?? [])].sort((a, b) => b.version - a.version);
@@ -46,6 +50,11 @@ export function ThreadHeader({ task, busy, phase, compact }: { task: TaskView; b
       <button className="objective-toggle" aria-expanded={showObjective} onClick={() => setShowObjective(value => !value)}>
         目标 v{task.contractVersion}<ChevronDown size={14} aria-hidden />
       </button>
+      <ModelPicker value={task.modelSelector ?? null} allowDefault onChange={async value => {
+        setModelSaving(true);
+        try { await setTaskModel(value); } finally { setModelSaving(false); }
+      }} label="这个任务的模型" disabled={busy || modelSaving}
+        disabledReason={modelSaving ? "正在保存模型" : "任务运行中，结束后才能更换模型"} />
       {task.createdAt && <span>创建于 {formatDateTime(task.createdAt)}</span>}
       <span>更新于 {formatDateTime(task.updatedAt)}</span>
     </div>

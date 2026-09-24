@@ -12,6 +12,8 @@ export function runModelWorkOrders(input: {
   baseRevision: string;
   orders: WorkOrder[];
   signal?: AbortSignal;
+  /** Workers run on the same model as the task that delegated to them. */
+  modelSelector?: string;
 }): Promise<WorkBatchReport> {
   return executeWorkOrders({ ...input, async runWorker(order, directory, signal) {
     signal?.throwIfAborted();
@@ -19,7 +21,7 @@ export function runModelWorkOrders(input: {
     await mkdir(runDir, { recursive: true });
     const requestFile = join(runDir, "request.json");
     const resultFile = join(runDir, "result.json");
-    await writeFile(requestFile, JSON.stringify({ projectRoot: directory, dataRoot: join(runDir, "state"), objective: order.objective, workOrder: order }));
+    await writeFile(requestFile, JSON.stringify({ projectRoot: directory, dataRoot: join(runDir, "state"), objective: order.objective, workOrder: order, modelSelector: input.modelSelector }));
     const child = Bun.spawn([process.execPath, "run", join(appRoot, "scripts", "run-worker.ts"), requestFile, resultFile], {
       cwd: appRoot, stdin: "ignore", stdout: "pipe", stderr: "pipe",
     });

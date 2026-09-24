@@ -1,4 +1,4 @@
-import type { ActivityEntry, ControlHolder, EvidenceDetail, ReviewDetail, ReviewSummary, Settings, SettingsPatch, TaskList, TaskView } from "./types";
+import type { ActivityEntry, ControlHolder, EvidenceDetail, ModelCatalog, ReviewDetail, ReviewSummary, Settings, SettingsPatch, TaskList, TaskView } from "./types";
 
 const SERVER_MESSAGES: Record<string, string> = {
   "A task is already running": "已有任务或操作正在进行，请等它结束",
@@ -57,6 +57,11 @@ export const api = {
   settings: () => request<{ settings: Settings }>("/api/settings").then(result => result.settings),
   updateSettings: (patch: SettingsPatch) => send<{ settings: Settings }>("PUT", "/api/settings", patch).then(result => result.settings),
   checkGeneration: (url: string) => post<{ url: string; online: boolean }>("/api/generation/check", { url }),
+  models: () => request<ModelCatalog>("/api/models"),
+  testModel: (model: string) => post<{ ok: boolean; latencyMs: number; error?: string }>("/api/models/test", { model }),
+  setApiKey: (provider: string, apiKey: string) => send<{ saved: boolean }>("PUT", `/api/providers/${encodeURIComponent(provider)}/key`, { apiKey }),
+  removeApiKey: (provider: string) => send<{ removed: number }>("DELETE", `/api/providers/${encodeURIComponent(provider)}/key`),
+  setTaskModel: (id: string, model: string | null) => post<{ task: TaskView }>(`${taskPath(id)}/model`, { model }).then(result => result.task),
   tasks: () => request<TaskList>("/api/tasks"),
   task: (id: string) => request<{ task: TaskView }>(taskPath(id)).then(result => result.task),
   activity: (id: string) => request<{ entries: ActivityEntry[] }>(`${taskPath(id)}/activity`).then(result => result.entries),
@@ -65,7 +70,7 @@ export const api = {
   evidence: (id: string, evidenceId: string) => request<EvidenceDetail>(`${taskPath(id)}/evidence/${encodeURIComponent(evidenceId)}`),
   control: () => request<{ holder: ControlHolder }>("/api/browser/control").then(result => result.holder),
   setControl: (holder: ControlHolder) => post<{ holder: ControlHolder }>("/api/browser/control", { holder }),
-  start: (brief: string) => post<{ runId: string }>("/api/tasks", { brief }),
+  start: (brief: string, model?: string | null) => post<{ runId: string }>("/api/tasks", { brief, model: model ?? null }),
   revise: (id: string, brief: string) => post<{ runId: string }>(`${taskPath(id)}/revise`, { brief }),
   resume: (id: string, brief: string) => post<{ runId: string }>(`${taskPath(id)}/resume`, { brief }),
   guidance: (id: string, text: string) => post<{ id: string; status?: string }>(`${taskPath(id)}/guidance`, { text }),

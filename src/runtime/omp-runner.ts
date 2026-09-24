@@ -1,10 +1,6 @@
 import { join, resolve } from "node:path";
-import {
-  createAgentSession,
-  discoverAuthStorage,
-  ModelRegistry,
-  SessionManager,
-} from "@oh-my-pi/pi-coding-agent";
+import { createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent";
+import { ompRegistry } from "./models";
 import { TaskLedger } from "./task-ledger";
 import { createBrowserTool } from "./browser-tool";
 import { createBuildTool } from "./build-tool";
@@ -32,6 +28,8 @@ export interface RunOptions {
   workOrder?: WorkOrder;
   /** Local ComfyUI endpoint for the media tools; the tools' own default applies when omitted. */
   comfyUrl?: string;
+  /** Recorded on a newly created task so later runs keep using it; omitted means the task follows the default. */
+  taskModel?: string;
   /** Which generation tools the model is offered; all are offered when omitted. */
   generation?: { image: boolean; voice: boolean; video: boolean };
 }
@@ -81,8 +79,7 @@ export function taskPrompt(ledger: TaskLedger, correction: string): string {
 export async function runTask(options: RunOptions): Promise<TaskLedger> {
   const projectRoot = resolve(options.projectRoot);
   const dataRoot = resolve(options.dataRoot);
-  const authStorage = await discoverAuthStorage();
-  const modelRegistry = new ModelRegistry(authStorage);
+  const { authStorage, modelRegistry } = await ompRegistry();
   const available = modelRegistry.getAvailable();
   const selector = options.modelSelector ?? DEFAULT_MODEL;
   const model = available.find(item => `${item.provider}/${item.id}` === selector);
@@ -90,6 +87,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   const ledger = options.existingLedger ?? await TaskLedger.create(dataRoot, {
     objective: options.objective,
     projectRoot,
+    modelSelector: options.workOrder ? undefined : options.taskModel,
     criteria: options.workOrder
       ? [{ id: "build", description: "Worker output builds successfully", kind: "build" }]
       : [
@@ -152,7 +150,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     allowRestrictedCustomTools: true,
     customTools: [
       createBuildTool(projectRoot),
-      ...(!options.workOrder ? [createWorkOrderTool(ledger, dataRoot, options.signal)] : []),
+      ...(!options.workOrder ? [createWorkOrderTool(ledger, dataRoot, options.signal, selector)] : []),
       ...(media.image ? [createImageTool(projectRoot, dataRoot, join(presets, "flux2-image.api.json"), options.comfyUrl)] : []),
       ...(media.voice ? [createVoiceTool(projectRoot, dataRoot, join(presets, "voxcpm2-voice.api.json"), options.comfyUrl)] : []),
       ...(media.video ? [createVideoTool(projectRoot, dataRoot, join(presets, "h3-video.api.json"), options.comfyUrl)] : []),

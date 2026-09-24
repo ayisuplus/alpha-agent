@@ -1,4 +1,4 @@
-import type { ActivityEntry, GuidanceStatus, ReviewSummary, TaskView } from "../api/types";
+import type { ActivityEntry, GuidanceStatus, ReviewSummary, RunRecord, TaskView } from "../api/types";
 import { TERMINAL_PHASES } from "./labels";
 
 export interface ToolCall {
@@ -35,6 +35,8 @@ export interface Turn {
   review?: ReviewSummary;
   live: boolean;
   modelRun: boolean;
+  /** Models of the ledger's run records that finished inside this turn (a repair turn can hold several runs). */
+  models: string[];
 }
 
 export type TimelineItem =
@@ -45,7 +47,7 @@ export type TimelineItem =
   | Turn;
 
 export interface TimelineInput {
-  task: Pick<TaskView, "objective" | "contractVersion" | "contractHistory" | "guidanceHistory" | "createdAt">;
+  task: Pick<TaskView, "objective" | "contractVersion" | "contractHistory" | "guidanceHistory" | "createdAt"> & { runs?: RunRecord[] };
   activity: ActivityEntry[];
   reviews: ReviewSummary[];
   /** Whether an operation for this task is in progress right now. */
@@ -137,7 +139,7 @@ function buildTurn(id: string, entries: ActivityEntry[]): Turn {
     else if (phases.includes("浏览器验收")) kind = "verify";
   }
   return {
-    type: "turn", id, index: 0, kind, blocks, outcome, toolCount, modelRun, live: false,
+    type: "turn", id, index: 0, kind, blocks, outcome, toolCount, modelRun, live: false, models: [],
     startedAt: entries[0].recordedAt, endedAt: entries.at(-1)!.recordedAt, contractVersion: entries[0].contractVersion,
   };
 }
@@ -187,6 +189,13 @@ export function buildTimeline(input: TimelineInput): TimelineItem[] {
     else turn.blocks.splice(index, 0, block);
   }
 
+  // A run record is written when a model run ends, so it falls inside the turn that ran it.
+  for (const run of task.runs ?? []) {
+    const time = Date.parse(run.recordedAt);
+    const turn = turns.find(item => time >= Date.parse(item.startedAt) - 1_000 && (item.live || time <= Date.parse(item.endedAt) + 5_000));
+    if (turn && !turn.models.includes(run.model)) turn.models.push(run.model);
+  }
+
   const byOperation = new Map(reviews.map(review => [review.operationId, review]));
   for (const turn of turns) {
     const review = byOperation.get(turn.id);
@@ -221,7 +230,7 @@ export function attachLiveText(items: TimelineItem[], liveText: string, busy: bo
     if (!busy) return items;
     const turns = items.filter(item => item.type === "turn").length;
     const text: Block = { type: "text", id: "live-text", at: now, text: liveText, live: true };
-    return [...items, { type: "turn", id: "live", index: turns + 1, kind: "other", startedAt: now, endedAt: now, contractVersion: 0, blocks: [text], outcome: null, toolCount: 0, modelRun: true, live: true }];
+    return [...items, { type: "turn", id: "live", index: turns + 1, kind: "other", startedAt: now, endedAt: now, contractVersion: 0, blocks: [text], outcome: null, toolCount: 0, modelRun: true, live: true, models: [] }];
   }
   const turn = items[index] as Turn;
   const blocks = [...turn.blocks];

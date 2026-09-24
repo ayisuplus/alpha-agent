@@ -4,7 +4,7 @@ import type { WorkOrder, WorkerResult } from "../src/runtime/work-orders";
 
 const [requestFile, resultFile] = Bun.argv.slice(2);
 if (!requestFile || !resultFile) throw new Error("Worker request and result paths are required");
-const request = JSON.parse(await readFile(requestFile, "utf8")) as { projectRoot: string; dataRoot: string; objective: string; workOrder: WorkOrder };
+const request = JSON.parse(await readFile(requestFile, "utf8")) as { projectRoot: string; dataRoot: string; objective: string; workOrder: WorkOrder; modelSelector?: string };
 const controller = new AbortController();
 process.once("SIGINT", () => controller.abort());
 try {

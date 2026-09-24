@@ -3,13 +3,14 @@ import type { ServerWebSocket } from "bun";
 import { cp, mkdir, readFile, readdir, realpath, unlink, writeFile } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { publishLocalPreview, type PreviewInstance } from "./runtime/local-preview";
-import { runTask, type RunEvent } from "./runtime/omp-runner";
+import { DEFAULT_MODEL, runTask, type RunEvent } from "./runtime/omp-runner";
+import { ModelServiceError, isModelAvailable, listModels, removeApiKey, setApiKey, testModel } from "./runtime/models";
 import { TaskLedger, fingerprintSource } from "./runtime/task-ledger";
 import { assertGeneratedAssetsIntact } from "./runtime/media-integrity";
 import { verifyBrowserPlan } from "./runtime/browser-verifier";
 import { TaskActivity, type ActivityKind } from "./runtime/task-activity";
 import { readSourceReviews, snapshotSource, writeSourceReview } from "./runtime/source-review";
-import { SettingsError, SettingsStore, WorkbenchMeta, normalizeComfyUrl } from "./runtime/settings";
+import { SettingsError, SettingsStore, WorkbenchMeta, isModelSelector, normalizeComfyUrl } from "./runtime/settings";
 import { ComfyClient } from "./runtime/comfy-client";
 
 const appRoot = resolve(import.meta.dir, "..");
@@ -123,6 +124,8 @@ function taskView(ledger: TaskLedger) {
     contractVersion: ledger.state.contractVersion ?? 1,
     status: ledger.state.status,
     revision: ledger.state.revision,
+    projectRoot: ledger.state.projectRoot,
+    modelSelector: ledger.state.modelSelector ?? null,
     running: active?.ledger?.state.id === ledger.state.id,
     acceptsGuidance: active?.ledger?.state.id === ledger.state.id && !!active.steer,
     pending: ledger.completionGaps(),
@@ -154,6 +157,7 @@ function taskSummary(ledger: TaskLedger) {
     originalObjective: ledger.state.contractHistory?.[0]?.objective ?? ledger.state.objective,
     contractVersion: ledger.state.contractVersion ?? 1,
     status: ledger.state.status,
+    modelSelector: ledger.state.modelSelector ?? null,
     running: active?.ledger?.state.id === ledger.state.id,
     pendingCount: ledger.completionGaps().length,
     createdAt: ledger.state.createdAt,
@@ -308,9 +312,11 @@ function sessionHooks(runId: string) {
 }
 
 /** Run options taken from the workbench settings; read when each operation starts, so changes apply to the next run. */
-async function configuredRun() {
+async function configuredRun(taskModel?: string) {
   const settings = await settingsStore.get();
   return {
+    // A task keeps its own model; otherwise it follows the workbench default, then Alpha's built-in default.
+    modelSelector: taskModel ?? settings.model.default ?? DEFAULT_MODEL,
     maxToolCalls: settings.budget.maxToolCalls,
     wallTimeMs: settings.budget.wallTimeMinutes * 60_000,
     comfyUrl: settings.generation.comfyUrl,
@@ -318,11 +324,11 @@ async function configuredRun() {
   };
 }
 
-async function execute(runId: string, objective: string, projectRoot: string, controller: AbortController, existingLedger?: TaskLedger): Promise<void> {
+async function execute(runId: string, objective: string, projectRoot: string, controller: AbortController, existingLedger?: TaskLedger, newTaskModel?: string): Promise<void> {
   let beforeSource: Awaited<ReturnType<typeof snapshotSource>> | null = null;
   const emitRun = (message: Record<string, unknown>) => emit({ ...message, taskId: active?.runId === runId ? active.ledger?.state.id : existingLedger?.state.id });
   try {
-    const configured = await configuredRun();
+    const configured = await configuredRun(existingLedger?.state.modelSelector ?? newTaskModel);
     beforeSource = await snapshotSource(projectRoot);
     emitRun({ type: "status", phase: "构建中", runId });
     const forwardEvent = (event: RunEvent) => {
@@ -331,6 +337,7 @@ async function execute(runId: string, objective: string, projectRoot: string, co
     };
     const ledger = await runTask({
       ...configured,
+      taskModel: newTaskModel,
       projectRoot, objective, dataRoot, signal: controller.signal, existingLedger,
       onEvent: forwardEvent,
       onLedger(created) {
@@ -379,7 +386,7 @@ async function execute(runId: string, objective: string, projectRoot: string, co
           emitRun({ type: "status", phase: "修复中", runId, pending: current.completionGaps() });
           const failedRevision = current.state.revision;
           const repaired = await runTask({
-            ...configured,
+            ...await configuredRun(current.state.modelSelector),
             projectRoot, dataRoot, signal: controller.signal, existingLedger: current,
             objective: `Visible browser acceptance failed: ${reason}. Read the failure evidence and inspect the exact failing step. Decide whether the product or the verification plan is wrong; preserve the original requirements and do not change product code to fix an invalid test selector. Then rebuild.`,
             onEvent: forwardEvent,
@@ -493,17 +500,55 @@ const server = Bun.serve({
       return image ? new Response(image, { headers: { "content-type": "image/png" } }) : new Response("Not found", { status: 404 });
     }
     if (url.pathname === "/api/settings" && request.method === "GET") return Response.json({ settings: await settingsStore.get() });
+    if (url.pathname === "/api/models" && request.method === "GET") {
+      const settings = await settingsStore.get();
+      return Response.json({ ...await listModels(), default: settings.model.default, builtin: DEFAULT_MODEL });
+    }
     // Every state-changing request must come from the workbench page itself.
     if (request.method !== "GET" && request.method !== "HEAD" && request.headers.get("origin") && request.headers.get("origin") !== `http://127.0.0.1:${server.port}`) return new Response("Forbidden", { status: 403 });
     if (url.pathname === "/api/settings" && request.method === "PUT") {
       try {
-        const settings = await settingsStore.update(await request.json().catch(() => null));
+        const patch = await request.json().catch(() => null) as { model?: { default?: unknown } } | null;
+        const nextDefault = patch?.model?.default;
+        if (typeof nextDefault === "string" && isModelSelector(nextDefault) && !(await isModelAvailable(nextDefault))) {
+          return Response.json({ error: "这个模型没有可用的认证，不能设为默认" }, { status: 400 });
+        }
+        const settings = await settingsStore.update(patch);
         broadcast({ type: "settings", settings });
         return Response.json({ settings });
       } catch (error) {
         if (error instanceof SettingsError) return Response.json({ error: error.message }, { status: 400 });
         throw error;
       }
+    }
+    if (url.pathname === "/api/models/test" && request.method === "POST") {
+      const body = await request.json().catch(() => ({})) as { model?: unknown };
+      if (!isModelSelector(body.model)) return Response.json({ error: "请选择要测试的模型" }, { status: 400 });
+      return Response.json(await testModel(body.model, dataRoot));
+    }
+    const providerKey = /^\/api\/providers\/([A-Za-z0-9._-]{1,80})\/key$/.exec(url.pathname);
+    if (providerKey && (request.method === "PUT" || request.method === "DELETE")) {
+      try {
+        if (request.method === "DELETE") return Response.json({ removed: await removeApiKey(providerKey[1]) });
+        const body = await request.json().catch(() => ({})) as { apiKey?: unknown };
+        await setApiKey(providerKey[1], typeof body.apiKey === "string" ? body.apiKey : "");
+        return Response.json({ saved: true });
+      } catch (error) {
+        if (error instanceof ModelServiceError) return Response.json({ error: error.message }, { status: 400 });
+        throw error;
+      }
+    }
+    const taskModel = /^\/api\/tasks\/([0-9a-f-]{36})\/model$/.exec(url.pathname);
+    if (taskModel && request.method === "POST") {
+      const ledger = await loadLedger(taskModel[1]);
+      if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+      if (active?.ledger?.state.id === ledger.state.id || verification?.taskId === ledger.state.id) return Response.json({ error: "任务运行中，结束后才能更换模型" }, { status: 409 });
+      const body = await request.json().catch(() => ({})) as { model?: unknown };
+      if (body.model !== null && !isModelSelector(body.model)) return Response.json({ error: "模型格式不正确" }, { status: 400 });
+      if (typeof body.model === "string" && !(await isModelAvailable(body.model))) return Response.json({ error: "这个模型没有可用的认证" }, { status: 400 });
+      await ledger.setModel(typeof body.model === "string" ? body.model : null);
+      emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+      return Response.json({ task: taskView(ledger) });
     }
     if (url.pathname === "/api/generation/check" && request.method === "POST") {
       const body = await request.json().catch(() => ({})) as { url?: unknown };
@@ -517,16 +562,19 @@ const server = Bun.serve({
     }
     if (url.pathname === "/api/tasks" && request.method === "POST") {
       if (active || verification || publishing) return Response.json({ error: "A task is already running" }, { status: 409 });
-      const body = await request.json().catch(() => ({})) as { brief?: unknown };
+      const body = await request.json().catch(() => ({})) as { brief?: unknown; model?: unknown };
       const brief = typeof body.brief === "string" ? body.brief.trim() : "";
       if (!brief) return Response.json({ error: "Brief is required" }, { status: 400 });
+      if (body.model !== undefined && body.model !== null && !isModelSelector(body.model)) return Response.json({ error: "模型格式不正确" }, { status: 400 });
+      const chosenModel = typeof body.model === "string" ? body.model : undefined;
+      if (chosenModel && !(await isModelAvailable(chosenModel))) return Response.json({ error: "这个模型没有可用的认证" }, { status: 400 });
       const runId = randomUUID();
       const projectRoot = join(productsRoot, runId);
       await mkdir(productsRoot, { recursive: true });
       await cp(join(appRoot, "templates", "web-minimal"), projectRoot, { recursive: true });
       const controller = new AbortController();
       active = { runId, controller, steeringIds: new Set() };
-      void execute(runId, brief, projectRoot, controller);
+      void execute(runId, brief, projectRoot, controller, undefined, chosenModel);
       return Response.json({ runId, projectRoot });
     }
     const cancel = /^\/api\/tasks\/([^/]+)\/cancel$/.exec(url.pathname);

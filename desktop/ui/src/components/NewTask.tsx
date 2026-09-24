@@ -3,6 +3,7 @@ import { CircleAlert, Globe, Hammer, MonitorPlay, PencilLine } from "lucide-reac
 import { taskTitle } from "../state/labels";
 import { useStore } from "../state/store";
 import { clearStarting, openTask, startTask, store } from "../state/workbench";
+import { ModelPicker } from "./ModelPicker";
 import { Button, Spinner } from "./ui";
 import "./NewTask.css";
 
@@ -29,6 +30,7 @@ export function NewTask() {
     return running ? taskTitle(running) : null;
   });
   const [draft, setDraft] = useState(() => starting?.brief ?? "");
+  const [model, setModel] = useState<string | null>(null);
   const text = draft.trim();
 
   if (starting && !starting.error) {
@@ -43,7 +45,7 @@ export function NewTask() {
 
   const submit = () => {
     if (!text || busy || pending) return;
-    void startTask(text);
+    void startTask(text, model);
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) {
@@ -76,6 +78,7 @@ export function NewTask() {
         rows={5}
       />
       <div className="composer-bar">
+        <ModelPicker value={model} onChange={setModel} allowDefault label="这个任务的模型" />
         <span className="composer-hint">
           {busy && activeTaskId && runningTitle
             ? <>「{runningTitle}」正在运行，同一时间只运行一个任务。<button className="link-button" onClick={() => void openTask(activeTaskId)}>查看</button></>

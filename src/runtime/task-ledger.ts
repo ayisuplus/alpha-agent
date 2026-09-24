@@ -71,6 +71,8 @@ export interface TaskState {
   updatedAt: string;
   reopenReason?: string;
   lastFailure?: string;
+  /** The model this task runs with ("provider/id"); absent means the workbench default. */
+  modelSelector?: string;
 }
 
 const EXCLUDED_DIRS = new Set([".alpha", ".git", "node_modules", "dist"]);
@@ -113,6 +115,7 @@ export class TaskLedger {
     objective: string;
     projectRoot: string;
     criteria: AcceptanceCriterion[];
+    modelSelector?: string;
   }): Promise<TaskLedger> {
     if (!input.objective.trim()) throw new Error("Task objective is required");
     if (input.criteria.length === 0 || new Set(input.criteria.map(item => item.id)).size !== input.criteria.length) {
@@ -138,6 +141,7 @@ export class TaskLedger {
       preview: null,
       createdAt: now,
       updatedAt: now,
+      ...(input.modelSelector ? { modelSelector: input.modelSelector } : {}),
     };
     const ledger = new TaskLedger(file, state);
     await ledger.save();
@@ -251,6 +255,12 @@ export class TaskLedger {
     if (!guidance) throw new Error("Guidance not found");
     if (guidance.status === "processed" || guidance.status === status) return;
     guidance.status = status;
+    await this.save();
+  }
+
+  async setModel(selector: string | null): Promise<void> {
+    if (selector) this.state.modelSelector = selector;
+    else delete this.state.modelSelector;
     await this.save();
   }
 

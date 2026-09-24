@@ -6,6 +6,7 @@ import { formatDateTime, formatDuration, formatTime, guidanceLabel, guidanceText
 import type { Block, TimelineItem, ToolCall, Turn, TurnKind } from "../state/timeline";
 import { openDetail } from "../state/workbench";
 import { Markdown } from "./Markdown";
+import { shortModel } from "./ModelPicker";
 import { Badge, Spinner, StateIcon, ToolGlyph } from "./ui";
 import "./Timeline.css";
 
@@ -194,7 +195,7 @@ const AgentTurn = memo(function AgentTurn({ turn, defaultOpen, evidence }: { tur
       <button className="agent-turn-toggle" aria-expanded={open} onClick={() => setOpen(value => !value)}>
         <span className="agent-turn-title">第 {turn.index} 轮 · {KIND_LABEL[turn.kind]}</span>
         <span className="agent-turn-meta">
-          {formatTime(turn.startedAt)}{duration && !turn.live ? ` · ${duration}` : ""}{turn.toolCount ? ` · ${turn.toolCount} 次工具调用` : ""}
+          {formatTime(turn.startedAt)}{duration && !turn.live ? ` · ${duration}` : ""}{turn.toolCount ? ` · ${turn.toolCount} 次工具调用` : ""}{turn.models.length ? ` · ${turn.models.map(shortModel).join("、")}` : ""}
         </span>
         <ChevronDown size={14} className="agent-turn-chevron" aria-hidden />
       </button>

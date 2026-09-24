@@ -101,6 +101,18 @@ test("timeline orders objective revisions, guidance and runtime-only operations"
   expect(guidanceText(DEFAULT_RESUME_INSTRUCTION)).toBe("按当前验收问题继续修复");
 });
 
+test("each turn lists the models whose runs finished inside it", () => {
+  clock = Date.parse("2026-09-24T03:00:00.000Z");
+  const first = [entry("run-1", "status", "任务已创建"), entry("run-1", "text", "Working."), entry("run-1", "status", "待验收")];
+  clock += 120_000;
+  const second = [entry("run-2", "status", "构建中"), entry("run-2", "text", "Fixing."), entry("run-2", "status", "修复中"), entry("run-2", "text", "Again."), entry("run-2", "status", "已验收")];
+  const run = (model: string, at: string) => ({ model, toolCalls: 3, elapsedMs: 1_000, outcome: "returned" as const, recordedAt: at });
+  const task = { ...baseTask, runs: [run("alibaba-token-plan/qwen3.6-flash", first[1].recordedAt), run("openrouter/anthropic/claude", second[1].recordedAt), run("openrouter/anthropic/claude", second[3].recordedAt), run("openrouter/other", at(10_000))] };
+  const [one, two] = turns(buildTimeline({ task, activity: [...first, ...second], reviews: [], busy: false }));
+  expect(one.models).toEqual(["alibaba-token-plan/qwen3.6-flash"]);
+  expect(two.models).toEqual(["openrouter/anthropic/claude"]);
+});
+
 test("timeline explains tasks recorded before activity history existed", () => {
   const items = buildTimeline({ task: baseTask, activity: [], reviews: [], busy: false });
   expect(items.map(item => item.type)).toEqual(["objective", "legacy"]);

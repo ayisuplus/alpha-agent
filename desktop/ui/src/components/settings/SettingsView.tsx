@@ -1,14 +1,16 @@
 import type { ComponentType } from "react";
-import { Gauge, Keyboard, MonitorCog, Sparkles, X, type LucideIcon } from "lucide-react";
+import { Bot, Gauge, Keyboard, MonitorCog, Sparkles, X, type LucideIcon } from "lucide-react";
 import { useStore } from "../../state/store";
 import { closePanel, openSettings, store, type SettingsSection } from "../../state/workbench";
 import { IconButton, Spinner } from "../ui";
+import { ModelSettings } from "./ModelSettings";
 import { GenerationSettings, InterfaceSettings, RunSettings, ShortcutSettings } from "./sections";
 import "./settings.css";
 
 interface SectionEntry { id: SettingsSection; label: string; icon: LucideIcon; render: ComponentType }
 
 export const SECTIONS: SectionEntry[] = [
+  { id: "model", label: "模型", icon: Bot, render: ModelSettings },
   { id: "run", label: "运行", icon: Gauge, render: RunSettings },
   { id: "generation", label: "生成服务", icon: Sparkles, render: GenerationSettings },
   { id: "interface", label: "界面", icon: MonitorCog, render: InterfaceSettings },

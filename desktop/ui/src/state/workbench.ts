@@ -1,6 +1,6 @@
 import { api } from "../api/client";
 import { connectEvents, type ConnectionState } from "../api/events";
-import type { ActivityEntry, ControlHolder, ReviewSummary, ServerMessage, Settings, SettingsPatch, TaskList, TaskSummary, TaskView } from "../api/types";
+import type { ActivityEntry, ControlHolder, ModelCatalog, ReviewSummary, ServerMessage, Settings, SettingsPatch, TaskList, TaskSummary, TaskView } from "../api/types";
 import { TERMINAL_PHASES } from "./labels";
 import { createStore } from "./store";
 import { mergeActivity } from "./timeline";
@@ -34,6 +34,8 @@ export interface AppState {
   /** A workbench-level page shown in the middle column instead of the task (currently only settings). */
   panel: Panel | null;
   settings: Settings | null;
+  /** Loaded on demand (settings, model pickers); lists every tool-capable model and whether it can be used. */
+  models: ModelCatalog | null;
 }
 
 export const store = createStore<AppState>({
@@ -56,6 +58,7 @@ export const store = createStore<AppState>({
   detail: null,
   panel: null,
   settings: null,
+  models: null,
 });
 
 export function isOccupied(state: AppState): boolean {
@@ -91,6 +94,7 @@ function upsertSummary(tasks: TaskSummary[], task: TaskView): TaskSummary[] {
   const summary: TaskSummary = {
     id: task.id, objective: task.objective, originalObjective: task.originalObjective, contractVersion: task.contractVersion,
     status: task.status, running: task.running, pendingCount: task.pending.length, createdAt: task.createdAt, updatedAt: task.updatedAt,
+    modelSelector: task.modelSelector,
   };
   const index = tasks.findIndex(item => item.id === task.id);
   if (index < 0) return [summary, ...tasks];
@@ -152,6 +156,47 @@ export function newTask(): void {
 
 export function openDetail(detail: AppState["detail"]): void {
   store.set({ detail });
+}
+
+let modelsRequest: Promise<ModelCatalog | null> | null = null;
+
+export function loadModels(force = false): Promise<ModelCatalog | null> {
+  if (!force && store.get().models) return Promise.resolve(store.get().models);
+  if (!force && modelsRequest) return modelsRequest;
+  modelsRequest = api.models()
+    .then(models => { store.set({ models }); return models; })
+    .catch(error => { notify(messageOf(error)); return null; })
+    .finally(() => { modelsRequest = null; });
+  return modelsRequest;
+}
+
+export async function saveApiKey(provider: string, key: string): Promise<boolean> {
+  try {
+    await api.setApiKey(provider, key);
+    await loadModels(true);
+    notify("API Key 已保存", "info");
+    return true;
+  } catch (error) {
+    notify(messageOf(error));
+    return false;
+  }
+}
+
+export async function deleteApiKey(provider: string): Promise<void> {
+  try {
+    await api.removeApiKey(provider);
+    await loadModels(true);
+    notify("API Key 已删除", "info");
+  } catch (error) { notify(messageOf(error)); }
+}
+
+export async function setTaskModel(model: string | null): Promise<void> {
+  const task = store.get().task;
+  if (!task) return;
+  try {
+    const updated = await api.setTaskModel(task.id, model);
+    if (store.get().selectedId === updated.id) store.set({ task: updated });
+  } catch (error) { notify(messageOf(error)); }
 }
 
 export function openSettings(section: SettingsSection = "model"): void {
@@ -342,12 +387,12 @@ async function perform<T>(action: PendingAction, work: () => Promise<T>): Promis
   }
 }
 
-export async function startTask(brief: string): Promise<void> {
+export async function startTask(brief: string, model: string | null = null): Promise<void> {
   const text = brief.trim();
   if (!text || store.get().pending) return;
   store.set({ pending: "start", starting: { brief: text, error: null } });
   try {
-    const { runId } = await api.start(text);
+    const { runId } = await api.start(text, model);
     store.set({ activeRunId: runId });
   } catch (error) {
     store.set({ starting: { brief: text, error: messageOf(error) } });

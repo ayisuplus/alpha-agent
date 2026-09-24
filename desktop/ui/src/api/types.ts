@@ -12,6 +12,8 @@ export interface TaskSummary {
   pendingCount: number;
   createdAt?: string;
   updatedAt: string;
+  /** The task's own model; null means it follows the workbench default. */
+  modelSelector?: string | null;
 }
 
 export interface Criterion {
@@ -52,6 +54,7 @@ export interface RunRecord {
 
 export interface TaskView extends TaskSummary {
   revision: string | null;
+  projectRoot?: string;
   acceptsGuidance: boolean;
   pending: string[];
   criteria: Criterion[];
@@ -115,6 +118,34 @@ export interface TaskList {
   tasks: TaskSummary[];
   activeTaskId: string | null;
   activeRunId: string | null;
+}
+
+export interface ModelInfo {
+  selector: string;
+  provider: string;
+  id: string;
+  name: string;
+  contextWindow: number | null;
+  reasoning: boolean;
+  tools: boolean;
+  images: boolean;
+  available: boolean;
+}
+
+export interface ProviderInfo {
+  id: string;
+  origin: "api_key" | "oauth" | "env" | "config" | "runtime" | "fallback" | null;
+  envVar?: string;
+  storedKey: boolean;
+  models: number;
+  available: number;
+}
+
+export interface ModelCatalog {
+  models: ModelInfo[];
+  providers: ProviderInfo[];
+  default: string | null;
+  builtin: string;
 }
 
 export type FontSize = "sm" | "md" | "lg";

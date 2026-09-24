@@ -153,3 +153,42 @@
 .settings-field.stacked { flex-direction: column; align-items: stretch; gap: 10px; }
 .settings-field.stacked .settings-field-control { justify-content: flex-start; }
 .settings-field.stacked .settings-inline { justify-content: flex-start; }
+
+.settings-note { margin: 8px 0 0; color: var(--text-muted); font-size: var(--text-xs); line-height: 1.6; }
+.settings-note.warning { padding: 8px 10px; border: 1px solid var(--warning-border); border-radius: var(--radius-sm); background: var(--warning-bg); color: var(--text-secondary); }
+.settings-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--text);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.settings-error > svg { flex: 0 0 auto; margin-top: 2px; color: var(--danger); }
+.settings-subheading-row { display: flex; align-items: center; justify-content: space-between; margin-top: 24px; }
+.settings-subheading-row .settings-subheading { margin: 0; }
+.settings-filter { width: 100%; margin-top: 12px; font-family: var(--font-sans); }
+.settings-more { margin-top: 10px; }
+
+.provider-list { display: flex; flex-direction: column; margin-top: 8px; }
+.provider-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.provider-main { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 180px; }
+.provider-name { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 600; }
+.provider-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-muted); font-size: var(--text-xs); }
+.provider-actions { display: inline-flex; align-items: center; gap: 6px; }
+.provider-hint { color: var(--text-faint); font-size: var(--text-xs); }
+.provider-key-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; }
+.provider-key-form .settings-text { flex: 1; min-width: 180px; }
