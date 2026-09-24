@@ -68,7 +68,7 @@ textarea { resize: vertical; width: 100%; min-height: 72px; border: 1px solid #3
 .delivery > button { align-self: flex-start; }
 .evidence { color: #cbd5de; font-size: 11px; }
 .evidence summary { cursor: pointer; font-weight: 600; }
-.evidence ul { margin-top: 9px; }
+.evidence ul { margin-top: 9px; max-height: 220px; overflow-y: auto; }
 .evidence li { padding: 5px 0; overflow-wrap: anywhere; }
 .evidence img { display: block; width: 100%; max-height: 420px; object-fit: contain; object-position: top; border-radius: 8px; margin-top: 8px; }
 .activity { min-height: 170px; display: flex; flex-direction: column; flex: 1; }
