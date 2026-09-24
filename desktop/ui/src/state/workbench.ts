@@ -1,7 +1,8 @@
 import { api } from "../api/client";
 import { connectEvents, type ConnectionState } from "../api/events";
-import type { ActivityEntry, ControlHolder, ModelCatalog, ReviewSummary, ServerMessage, Settings, SettingsPatch, TaskList, TaskSummary, TaskView } from "../api/types";
-import { TERMINAL_PHASES } from "./labels";
+import type { ActivityEntry, ControlHolder, ModelCatalog, ReviewSummary, ServerMessage, Settings, SettingsPatch, TaskList, TaskMeta, TaskSummary, TaskView } from "../api/types";
+import { TERMINAL_PHASES, taskTitle } from "./labels";
+import { buildTaskReport } from "./report";
 import { createStore } from "./store";
 import { mergeActivity } from "./timeline";
 
@@ -36,6 +37,7 @@ export interface AppState {
   settings: Settings | null;
   /** Loaded on demand (settings, model pickers); lists every tool-capable model and whether it can be used. */
   models: ModelCatalog | null;
+  paletteOpen: boolean;
 }
 
 export const store = createStore<AppState>({
@@ -59,6 +61,7 @@ export const store = createStore<AppState>({
   panel: null,
   settings: null,
   models: null,
+  paletteOpen: false,
 });
 
 export function isOccupied(state: AppState): boolean {
@@ -94,7 +97,7 @@ function upsertSummary(tasks: TaskSummary[], task: TaskView): TaskSummary[] {
   const summary: TaskSummary = {
     id: task.id, objective: task.objective, originalObjective: task.originalObjective, contractVersion: task.contractVersion,
     status: task.status, running: task.running, pendingCount: task.pending.length, createdAt: task.createdAt, updatedAt: task.updatedAt,
-    modelSelector: task.modelSelector,
+    modelSelector: task.modelSelector, meta: task.meta,
   };
   const index = tasks.findIndex(item => item.id === task.id);
   if (index < 0) return [summary, ...tasks];
@@ -143,14 +146,14 @@ export async function syncSelected(id: string): Promise<void> {
 export async function openTask(id: string): Promise<void> {
   const state = store.get();
   if (state.selectedId !== id) {
-    store.set({ selectedId: id, task: null, activity: [], reviews: [], liveText: "", detail: null, starting: null, panel: null });
-  } else store.set({ starting: null, panel: null });
+    store.set({ selectedId: id, task: null, activity: [], reviews: [], liveText: "", detail: null, starting: null, panel: null, paletteOpen: false });
+  } else store.set({ starting: null, panel: null, paletteOpen: false });
   remember(id);
   await syncSelected(id);
 }
 
 export function newTask(): void {
-  store.set({ selectedId: null, task: null, activity: [], reviews: [], liveText: "", detail: null, starting: null, panel: null });
+  store.set({ selectedId: null, task: null, activity: [], reviews: [], liveText: "", detail: null, starting: null, panel: null, paletteOpen: false });
   remember(null);
 }
 
@@ -200,11 +203,63 @@ export async function setTaskModel(model: string | null): Promise<void> {
 }
 
 export function openSettings(section: SettingsSection = "model"): void {
-  store.set({ panel: { kind: "settings", section } });
+  store.set({ panel: { kind: "settings", section }, paletteOpen: false });
 }
 
 export function closePanel(): void {
   store.set({ panel: null });
+}
+
+export function openPalette(): void { store.set({ paletteOpen: true }); }
+export function closePalette(): void { store.set({ paletteOpen: false }); }
+
+export async function updateTaskMeta(id: string, patch: TaskMeta): Promise<boolean> {
+  try {
+    const updated = await api.updateTaskMeta(id, patch);
+    store.set(state => ({
+      tasks: upsertSummary(state.tasks, updated),
+      task: state.selectedId === id ? updated : state.task,
+    }));
+    return true;
+  } catch (error) { notify(messageOf(error)); return false; }
+}
+
+export async function openProductFolder(id: string): Promise<void> {
+  try {
+    const task = await api.task(id);
+    if (!task.projectRoot || !window.alpha?.openFolder) throw new Error("桌面端才能打开产品目录");
+    const error = await window.alpha.openFolder(task.projectRoot);
+    if (error) throw new Error(error);
+  } catch (error) { notify(messageOf(error)); }
+}
+
+export async function openPreviewInBrowser(id: string): Promise<void> {
+  try {
+    const task = await api.task(id);
+    if (!task.preview?.live) throw new Error("这个任务没有在线预览");
+    if (!window.alpha?.openExternal || !await window.alpha.openExternal(task.preview.url)) throw new Error("无法在浏览器打开预览");
+  } catch (error) { notify(messageOf(error)); }
+}
+
+export async function exportTaskReport(id: string): Promise<void> {
+  try {
+    const [task, activity, reviews] = await Promise.all([api.task(id), api.activity(id), api.reviews(id)]);
+    const content = buildTaskReport(task, activity, reviews);
+    const filename = `${taskTitle(task).replace(/[<>:"/\\|?*]/g, "_")}-报告.md`;
+    if (window.alpha?.saveText) {
+      if (await window.alpha.saveText(filename, content)) notify("报告已保存", "info");
+      return;
+    }
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(new Blob([content], { type: "text/markdown;charset=utf-8" }));
+    link.href = url; link.download = filename; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  } catch (error) { notify(messageOf(error)); }
+}
+
+export async function copyTaskId(id: string): Promise<void> {
+  try { await navigator.clipboard.writeText(id); notify("任务 ID 已复制", "info"); }
+  catch { notify("无法访问剪贴板"); }
 }
 
 function applyPatch(settings: Settings, patch: SettingsPatch): Settings {
@@ -263,6 +318,24 @@ export function previewLocked(state: AppState): boolean {
   return state.controlHolder === "user" || state.operation !== null;
 }
 
+const notifiedPhases = new Set<string>();
+function notifyStatus(message: Extract<ServerMessage, { type: "status" }>): void {
+  if (!message.taskId || !["已验收", "待验收", "失败", "用户接管"].includes(message.phase)) return;
+  const key = `${message.taskId}:${message.runId ?? ""}:${message.phase}`;
+  if (notifiedPhases.has(key)) return;
+  notifiedPhases.add(key);
+  setTimeout(async () => {
+    if (!store.get().settings?.notifications.enabled || document.hasFocus() || !window.alpha?.notify) return;
+    const task = await api.task(message.taskId!).catch(() => null);
+    if (!task || (message.phase === "待验收" && (task.running || task.status !== "active"))) {
+      notifiedPhases.delete(key);
+      return;
+    }
+    window.alpha.notify(`Alpha · ${taskTitle(task)}`, message.phase === "用户接管" ? "浏览器需要你接管" : `任务${message.phase}`, task.id);
+    window.alpha.attention?.();
+  }, message.phase === "待验收" ? 1_000 : 0);
+}
+
 function handleMessage(message: ServerMessage): void {
   const state = store.get();
   switch (message.type) {
@@ -292,6 +365,7 @@ function handleMessage(message: ServerMessage): void {
       store.set({ settings: applyPatch(message.settings, unsentSettings) });
       break;
     case "status": {
+      notifyStatus(message);
       const terminal = TERMINAL_PHASES.has(message.phase);
       store.set({ operation: terminal ? null : { taskId: message.taskId ?? null, phase: message.phase } });
       if (message.phase === "发布本机预览" || message.phase === "浏览器验收") revealPreviewForBrowserWork();
@@ -336,6 +410,7 @@ async function resync(): Promise<void> {
 }
 
 export function startWorkbench(): () => void {
+  const stopNotificationClick = window.alpha?.onOpenTask?.(id => { void openTask(id); });
   const disconnect = connectEvents({
     onMessage: handleMessage,
     onState: connection => store.set({ connection }),
@@ -367,6 +442,7 @@ export function startWorkbench(): () => void {
   const onUnload = () => void flushSettings();
   window.addEventListener("beforeunload", onUnload);
   return () => {
+    stopNotificationClick?.();
     window.removeEventListener("beforeunload", onUnload);
     disconnect();
     clearInterval(poll);

@@ -88,6 +88,9 @@ export function InterfaceSettings() {
       <Segmented label="文字大小" value={ui.fontSize} onChange={value => void updateSettings({ ui: { fontSize: value } })}
         options={[{ value: "sm", label: "小" }, { value: "md", label: "标准" }, { value: "lg", label: "大" }]} />
     </Field>
+    <Field label="桌面通知" description="工作台不在前台时，任务完成、待验收或需要接管会提醒你。">
+      <Toggle label="桌面通知" checked={settings.notifications.enabled} onChange={value => void updateSettings({ notifications: { enabled: value } })} />
+    </Field>
     <Field label="收起任务栏" description="Ctrl + B。窗口较窄时会自动收起。">
       <Toggle label="收起任务栏" checked={ui.sidebarCollapsed} onChange={value => void updateSettings({ ui: { sidebarCollapsed: value } })} />
     </Field>

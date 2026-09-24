@@ -2,10 +2,11 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, 
 import { X } from "lucide-react";
 import type { Settings } from "../api/types";
 import { PreviewPane } from "../components/PreviewPane";
+import { CommandPalette } from "../components/CommandPalette";
 import { Sidebar } from "../components/Sidebar";
 import { matchShortcut, stepScale } from "../state/shortcuts";
 import { useStore } from "../state/store";
-import { closePanel, dismissNotice, newTask, notify, openDetail, openSettings, previewLocked, startWorkbench, store, updateSettings } from "../state/workbench";
+import { closePalette, closePanel, dismissNotice, newTask, notify, openDetail, openPalette, openSettings, previewLocked, startWorkbench, store, updateSettings } from "../state/workbench";
 import { Thread } from "./Thread";
 import "./App.css";
 
@@ -90,6 +91,7 @@ export function App() {
       if (id) event.preventDefault();
       switch (id) {
         case "new-task": newTask(); break;
+        case "palette": openPalette(); break;
         case "settings": openSettings(); break;
         case "shortcuts": openSettings("shortcuts"); break;
         case "toggle-sidebar": current.toggleSidebar(); break;
@@ -100,7 +102,8 @@ export function App() {
         default:
           if (event.key === "Escape") {
             const state = store.get();
-            if (state.detail) openDetail(null);
+            if (state.paletteOpen) closePalette();
+            else if (state.detail) openDetail(null);
             else if (state.panel) closePanel();
           }
       }
@@ -138,6 +141,7 @@ export function App() {
     <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
     <main className="thread" aria-label="任务对话" data-testid="thread">
       <Thread />
+      <CommandPalette toggleSidebar={toggleSidebar} togglePreview={togglePreview} />
       <Toast />
     </main>
     {!ui.previewCollapsed && <div

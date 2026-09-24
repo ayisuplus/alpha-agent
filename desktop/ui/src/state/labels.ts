@@ -27,8 +27,8 @@ export function titleOf(objective: string): string {
   return title.length > 48 ? `${title.slice(0, 48)}…` : title;
 }
 
-export function taskTitle(task: Pick<TaskSummary, "objective" | "originalObjective">): string {
-  return titleOf(task.originalObjective ?? task.objective);
+export function taskTitle(task: Pick<TaskSummary, "objective" | "originalObjective" | "meta">): string {
+  return task.meta?.title ?? titleOf(task.originalObjective ?? task.objective);
 }
 
 export function taskStatus(task: Pick<TaskSummary, "running" | "status">): { label: string; tone: Tone } {

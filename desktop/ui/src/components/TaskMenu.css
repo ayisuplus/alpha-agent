@@ -1,0 +1,9 @@
+.task-menu { position: absolute; z-index: 30; right: 8px; top: calc(100% - 2px); width: 216px; padding: 6px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg-elevated); box-shadow: var(--shadow-pop); }
+.task-menu.up { top: auto; bottom: calc(100% - 2px); }
+.task-menu button[role="menuitem"] { display: block; width: 100%; padding: 8px 10px; text-align: left; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+.task-menu button[role="menuitem"]:hover:not(:disabled) { background: var(--bg-hover); }
+.task-menu button:disabled { opacity: .45; cursor: not-allowed; }
+.task-menu-divider { display: block; height: 1px; margin: 5px 2px; background: var(--border-subtle); }
+.task-menu-rename { display: flex; gap: 4px; padding: 3px; }
+.task-menu-rename input { min-width: 0; flex: 1; padding: 6px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--bg-inset); color: var(--text); }
+.task-menu-rename button { border: 0; border-radius: 5px; background: var(--accent); color: white; cursor: pointer; }

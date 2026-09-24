@@ -1,6 +1,7 @@
 export type TaskStatus = "active" | "stopped" | "complete";
 export type ControlHolder = "alpha" | "user";
 export type GuidanceStatus = "recorded" | "delivered" | "processed";
+export interface TaskMeta { title?: string; pinned?: boolean; archived?: boolean }
 
 export interface TaskSummary {
   id: string;
@@ -14,6 +15,7 @@ export interface TaskSummary {
   updatedAt: string;
   /** The task's own model; null means it follows the workbench default. */
   modelSelector?: string | null;
+  meta?: TaskMeta;
 }
 
 export interface Criterion {
@@ -186,6 +188,12 @@ declare global {
       loadPreview(url: string): void;
       clearPreview(): void;
       setPreviewBounds?(rect: PreviewRect): void;
+      openFolder?(path: string): Promise<string>;
+      openExternal?(url: string): Promise<boolean>;
+      saveText?(filename: string, content: string): Promise<boolean>;
+      notify?(title: string, body: string, taskId: string): void;
+      attention?(): void;
+      onOpenTask?(callback: (taskId: string) => void): () => void;
     };
   }
 }

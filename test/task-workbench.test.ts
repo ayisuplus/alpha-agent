@@ -139,6 +139,14 @@ test("workbench serves recorded evidence but refuses a ledger path outside its d
     const updated = await put({ budget: { maxToolCalls: 60 }, ui: { sidebarCollapsed: true } }).then(response => response.json()) as { settings: { budget: { maxToolCalls: number }; ui: { sidebarCollapsed: boolean } } };
     expect(updated.settings).toMatchObject({ budget: { maxToolCalls: 60 }, ui: { sidebarCollapsed: true } });
     expect(JSON.parse(await readFile(join(dataRoot, "settings.json"), "utf8")).budget.maxToolCalls).toBe(60);
+    const metaPath = `${base}/api/tasks/${ledger.state.id}/meta`;
+    expect((await fetch(metaPath, { method: "PATCH", headers: { "content-type": "application/json", origin: "http://evil.example" }, body: JSON.stringify({ pinned: true }) })).status).toBe(403);
+    const meta = await fetch(metaPath, { method: "PATCH", headers: { "content-type": "application/json", origin: base }, body: JSON.stringify({ title: "  食谱任务  ", pinned: true, archived: true }) }).then(response => response.json()) as { task: { meta: { title: string; pinned: boolean; archived: boolean } } };
+    expect(meta.task.meta).toEqual({ title: "食谱任务", pinned: true, archived: true });
+    const listed = await fetch(`${base}/api/tasks`).then(response => response.json()) as { tasks: Array<{ meta: unknown }> };
+    expect(listed.tasks[0].meta).toEqual(meta.task.meta);
+    expect(JSON.parse(await readFile(join(dataRoot, "workbench.json"), "utf8")).tasks[ledger.state.id]).toEqual(meta.task.meta);
+    expect((await TaskLedger.load(ledger.file)).state).not.toHaveProperty("meta");
   } finally {
     child?.kill();
     if (child) await child.exited;

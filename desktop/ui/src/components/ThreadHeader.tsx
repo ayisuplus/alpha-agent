@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { ChevronDown, CircleAlert, Info } from "lucide-react";
+import { ChevronDown, CircleAlert, Info, MoreHorizontal } from "lucide-react";
 import type { TaskView } from "../api/types";
 import { criterionState, describeStep, parseFailure } from "../state/evidence";
 import { criterionLabel, failureHeadline, formatDateTime, phaseInfo, reopenText, taskStatus, taskTitle } from "../state/labels";
 import { openDetail, openSettings, setTaskModel } from "../state/workbench";
 import { ModelPicker } from "./ModelPicker";
-import { Badge, Spinner, StateIcon } from "./ui";
+import { TaskMenu } from "./TaskMenu";
+import { Badge, IconButton, Spinner, StateIcon } from "./ui";
 import "./ThreadHeader.css";
 
 function FailureAlert({ reason }: { reason: string }) {
@@ -33,6 +34,7 @@ function FailureAlert({ reason }: { reason: string }) {
 export function ThreadHeader({ task, busy, phase, compact }: { task: TaskView; busy: boolean; phase: string | null; compact?: boolean }) {
   const [showObjective, setShowObjective] = useState(false);
   const [modelSaving, setModelSaving] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const status = taskStatus(task);
   const criteria = [...task.criteria.map(item => item.id).filter(id => id !== "local-preview"), "local-preview"];
   const history = [...(task.contractHistory ?? [])].sort((a, b) => b.version - a.version);
@@ -45,6 +47,10 @@ export function ThreadHeader({ task, busy, phase, compact }: { task: TaskView; b
           ? <Badge tone="accent"><Spinner size={12} />{phase ? `运行中 · ${phaseInfo(phase).label}` : "运行中"}</Badge>
           : <Badge tone={status.tone}>{status.label}</Badge>}
       </span>
+      <div className="task-menu-anchor">
+        <IconButton icon={MoreHorizontal} label="任务操作" onClick={() => setMenuOpen(value => !value)} />
+        <TaskMenu task={task} open={menuOpen} onClose={() => setMenuOpen(false)} />
+      </div>
     </div>
     <div className="thread-meta">
       <button className="objective-toggle" aria-expanded={showObjective} onClick={() => setShowObjective(value => !value)}>

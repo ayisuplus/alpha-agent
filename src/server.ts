@@ -30,6 +30,7 @@ for (const directory of [dataRoot, productsRoot]) {
 }
 const settingsStore = new SettingsStore(dataRoot);
 const workbenchMeta = new WorkbenchMeta(dataRoot);
+let taskMeta = await workbenchMeta.all();
 const clients = new Set<ServerWebSocket<unknown>>();
 const previews = new Map<string, PreviewInstance>();
 let active: { runId: string; controller: AbortController; ledger?: TaskLedger; steer?: (text: string) => Promise<void>; steeringIds: Set<string> } | null = null;
@@ -126,6 +127,7 @@ function taskView(ledger: TaskLedger) {
     revision: ledger.state.revision,
     projectRoot: ledger.state.projectRoot,
     modelSelector: ledger.state.modelSelector ?? null,
+    meta: taskMeta[ledger.state.id] ?? {},
     running: active?.ledger?.state.id === ledger.state.id,
     acceptsGuidance: active?.ledger?.state.id === ledger.state.id && !!active.steer,
     pending: ledger.completionGaps(),
@@ -158,6 +160,7 @@ function taskSummary(ledger: TaskLedger) {
     contractVersion: ledger.state.contractVersion ?? 1,
     status: ledger.state.status,
     modelSelector: ledger.state.modelSelector ?? null,
+    meta: taskMeta[ledger.state.id] ?? {},
     running: active?.ledger?.state.id === ledger.state.id,
     pendingCount: ledger.completionGaps().length,
     createdAt: ledger.state.createdAt,
@@ -549,6 +552,25 @@ const server = Bun.serve({
       await ledger.setModel(typeof body.model === "string" ? body.model : null);
       emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
       return Response.json({ task: taskView(ledger) });
+    }
+    const taskMetaRoute = /^\/api\/tasks\/([0-9a-f-]{36})\/meta$/.exec(url.pathname);
+    if (taskMetaRoute && request.method === "PATCH") {
+      const ledger = await loadLedger(taskMetaRoute[1]);
+      if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+      const patch = await request.json().catch(() => null) as { archived?: unknown } | null;
+      if (patch?.archived === true && (active?.ledger?.state.id === ledger.state.id || verification?.taskId === ledger.state.id)) {
+        return Response.json({ error: "运行中的任务不能归档" }, { status: 409 });
+      }
+      try {
+        await workbenchMeta.update(ledger.state.id, patch);
+        taskMeta = await workbenchMeta.all();
+        const task = taskView(ledger);
+        emit({ type: "task", taskId: ledger.state.id, task });
+        return Response.json({ task });
+      } catch (error) {
+        if (error instanceof SettingsError) return Response.json({ error: error.message }, { status: 400 });
+        throw error;
+      }
     }
     if (url.pathname === "/api/generation/check" && request.method === "POST") {
       const body = await request.json().catch(() => ({})) as { url?: unknown };

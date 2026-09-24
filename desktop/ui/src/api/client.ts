@@ -1,4 +1,4 @@
-import type { ActivityEntry, ControlHolder, EvidenceDetail, ModelCatalog, ReviewDetail, ReviewSummary, Settings, SettingsPatch, TaskList, TaskView } from "./types";
+import type { ActivityEntry, ControlHolder, EvidenceDetail, ModelCatalog, ReviewDetail, ReviewSummary, Settings, SettingsPatch, TaskList, TaskMeta, TaskView } from "./types";
 
 const SERVER_MESSAGES: Record<string, string> = {
   "A task is already running": "已有任务或操作正在进行，请等它结束",
@@ -62,6 +62,7 @@ export const api = {
   setApiKey: (provider: string, apiKey: string) => send<{ saved: boolean }>("PUT", `/api/providers/${encodeURIComponent(provider)}/key`, { apiKey }),
   removeApiKey: (provider: string) => send<{ removed: number }>("DELETE", `/api/providers/${encodeURIComponent(provider)}/key`),
   setTaskModel: (id: string, model: string | null) => post<{ task: TaskView }>(`${taskPath(id)}/model`, { model }).then(result => result.task),
+  updateTaskMeta: (id: string, patch: TaskMeta) => send<{ task: TaskView }>("PATCH", `${taskPath(id)}/meta`, patch).then(result => result.task),
   tasks: () => request<TaskList>("/api/tasks"),
   task: (id: string) => request<{ task: TaskView }>(taskPath(id)).then(result => result.task),
   activity: (id: string) => request<{ entries: ActivityEntry[] }>(`${taskPath(id)}/activity`).then(result => result.entries),

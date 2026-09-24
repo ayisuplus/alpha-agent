@@ -3,8 +3,9 @@ import { Check, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, Square, X
 import type { TaskSummary } from "../api/types";
 import { dayGroup, relativeTime, taskStatus, taskTitle } from "../state/labels";
 import { useStore } from "../state/store";
-import { newTask, openSettings, openTask, store } from "../state/workbench";
+import { newTask, openPalette, openSettings, openTask, store } from "../state/workbench";
 import { IconButton, Spinner, StatusDot } from "./ui";
+import { TaskMenu } from "./TaskMenu";
 import "./Sidebar.css";
 
 function TaskIcon({ task }: { task: TaskSummary }) {
@@ -15,19 +16,24 @@ function TaskIcon({ task }: { task: TaskSummary }) {
 }
 
 function TaskRow({ task, selected }: { task: TaskSummary; selected: boolean }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPlacement, setMenuPlacement] = useState<"up" | "down">("down");
   const status = taskStatus(task);
   const meta = [
     status.label,
     task.contractVersion > 1 ? `v${task.contractVersion}` : null,
     relativeTime(task.updatedAt),
   ].filter(Boolean).join(" · ");
-  return <button className="task-row" aria-current={selected ? "page" : undefined} onClick={() => void openTask(task.id)} title={task.originalObjective ?? task.objective}>
+  return <div className="task-row-wrap" onContextMenu={event => { event.preventDefault(); setMenuPlacement(event.clientY > window.innerHeight * 0.55 ? "up" : "down"); setMenuOpen(true); }}>
+    <button className="task-row" aria-current={selected ? "page" : undefined} onClick={() => void openTask(task.id)} title={task.originalObjective ?? task.objective}>
     <span className="task-row-icon"><TaskIcon task={task} /></span>
     <span className="task-row-body">
-      <span className="task-row-title">{taskTitle(task)}</span>
+      <span className="task-row-title">{task.meta?.pinned ? "📌 " : ""}{taskTitle(task)}</span>
       <span className="task-row-meta">{meta}</span>
     </span>
-  </button>;
+    </button>
+    <TaskMenu task={task} open={menuOpen} placement={menuPlacement} onClose={() => setMenuOpen(false)} />
+  </div>;
 }
 
 export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(): void }) {
@@ -37,17 +43,19 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
   const loaded = useStore(store, state => state.loaded);
   const settingsOpen = useStore(store, state => state.panel?.kind === "settings");
   const [query, setQuery] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
 
   const groups = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
-    const visible = needle ? tasks.filter(task => task.objective.toLocaleLowerCase().includes(needle) || (task.originalObjective ?? "").toLocaleLowerCase().includes(needle)) : tasks;
+    const visible = tasks.filter(task => (showArchived || !task.meta?.archived) && (!needle || `${taskTitle(task)} ${task.objective}`.toLocaleLowerCase().includes(needle)));
+    visible.sort((a, b) => Number(!!b.meta?.pinned) - Number(!!a.meta?.pinned) || b.updatedAt.localeCompare(a.updatedAt));
     const result = new Map<string, TaskSummary[]>();
     for (const task of visible) {
-      const key = task.running ? "运行中" : dayGroup(task.updatedAt);
+      const key = task.meta?.archived ? "已归档" : task.running ? "运行中" : task.meta?.pinned ? "置顶" : dayGroup(task.updatedAt);
       result.set(key, [...(result.get(key) ?? []), task]);
     }
-    return ["运行中", "今天", "昨天", "更早"].flatMap(key => result.has(key) ? [[key, result.get(key)!] as const] : []);
-  }, [tasks, query]);
+    return ["运行中", "置顶", "今天", "昨天", "更早", "已归档"].flatMap(key => result.has(key) ? [[key, result.get(key)!] as const] : []);
+  }, [tasks, query, showArchived]);
 
   const connectionLabel = connection === "open" ? "已连接本机服务" : connection === "connecting" ? "正在连接…" : "连接中断，正在重连";
 
@@ -57,6 +65,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
     return <nav className="sidebar collapsed" aria-label="任务">
       <IconButton icon={PanelLeftOpen} label="展开任务栏 (Ctrl+B)" onClick={onToggle} />
       <IconButton icon={Plus} label="新建任务 (Ctrl+N)" onClick={newTask} className={selectedId === null && !settingsOpen ? "active" : undefined} />
+      <IconButton icon={Search} label="搜索任务和命令 (Ctrl+K)" onClick={openPalette} />
       {running && <button className={`rail-running ${running.id === selectedId && !settingsOpen ? "active" : ""}`} onClick={() => void openTask(running.id)} title={`正在运行：${taskTitle(running)}`} aria-label={`打开正在运行的任务：${taskTitle(running)}`}>
         <Spinner size={16} />
       </button>}
@@ -86,6 +95,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
         {items.map(task => <TaskRow key={task.id} task={task} selected={task.id === selectedId && !settingsOpen} />)}
       </section>)}
       {loaded && !groups.length && <p className="sidebar-empty">{query ? "没有匹配的任务" : "还没有任务。新建一个，描述你想要的产品。"}</p>}
+      {tasks.some(task => task.meta?.archived) && <button className="sidebar-archived" onClick={() => setShowArchived(value => !value)}>{showArchived ? "隐藏已归档" : "显示已归档"}</button>}
     </div>
     <footer className="sidebar-footer">
       <span className="sidebar-status" title={connectionLabel}>

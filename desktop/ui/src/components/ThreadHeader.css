@@ -126,3 +126,4 @@
 }
 .link-button:hover { color: var(--accent-strong); text-decoration: underline; }
 .link-button:disabled { color: var(--text-faint); text-decoration: none; }
+.task-menu-anchor { position: relative; }

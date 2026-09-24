@@ -1,6 +1,6 @@
-const { app, BaseWindow, dialog, ipcMain, Menu, screen, WebContentsView } = require("electron");
+const { app, BaseWindow, dialog, ipcMain, Menu, Notification, screen, shell: electronShell, WebContentsView } = require("electron");
 const { spawn } = require("node:child_process");
-const { mkdirSync, readFileSync, writeFileSync } = require("node:fs");
+const { mkdirSync, readFileSync, realpathSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
@@ -108,6 +108,7 @@ if (!primary) {
 app.on("second-instance", () => window?.focus());
 app.whenReady().then(async () => {
   try {
+    app.setAppUserModelId("Alpha");
     const port = await startSidecar();
     installMenu();
     const saved = savedWindowState();
@@ -117,6 +118,7 @@ app.whenReady().then(async () => {
     const scheduleSave = () => { clearTimeout(saveTimer); saveTimer = setTimeout(saveWindowState, 600); };
     for (const event of ["resize", "move", "maximize", "unmaximize"]) window.on(event, scheduleSave);
     window.on("close", () => { clearTimeout(saveTimer); saveWindowState(); });
+    window.on("focus", () => window.flashFrame(false));
     shell = new WebContentsView({ webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     preview = new WebContentsView({ webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
     window.contentView.addChildView(shell);
@@ -159,6 +161,38 @@ app.whenReady().then(async () => {
       const w = Math.min(Math.max(Math.round(rect.width * zoom), 0), width - x);
       const h = Math.min(Math.max(Math.round(rect.height * zoom), 0), height - y);
       preview.setBounds(rect.visible ? { x, y, width: w, height: h } : { x: 0, y: 0, width: 0, height: 0 });
+    });
+    ipcMain.handle("alpha:open-folder", async (event, directory) => {
+      if (event.sender !== shell.webContents || typeof directory !== "string") return "不允许打开这个目录";
+      try {
+        const target = realpathSync(directory);
+        const relative = path.relative(realpathSync(path.join(workspaceRoot, "products")), target);
+        if (relative.startsWith("..") || path.isAbsolute(relative)) return "目录不在产品工作区内";
+        return await electronShell.openPath(target);
+      } catch { return "目录不存在"; }
+    });
+    ipcMain.handle("alpha:open-external", async (event, value) => {
+      if (event.sender !== shell.webContents || !localPreviewUrl(value)) return false;
+      await electronShell.openExternal(value);
+      return true;
+    });
+    ipcMain.handle("alpha:save-text", async (event, filename, content) => {
+      if (event.sender !== shell.webContents || typeof filename !== "string" || typeof content !== "string" || content.length > 5_000_000) return false;
+      const safeName = filename.replace(/[<>:"/\\|?*]/g, "_").slice(0, 100) || "alpha-report.md";
+      const choice = await dialog.showSaveDialog(window, { defaultPath: safeName, filters: [{ name: "Markdown", extensions: ["md"] }] });
+      if (choice.canceled || !choice.filePath) return false;
+      writeFileSync(choice.filePath, content, "utf8");
+      return true;
+    });
+    ipcMain.on("alpha:notify", (event, title, body, taskId) => {
+      if (event.sender !== shell.webContents || window.isFocused() || !Notification.isSupported() ||
+          typeof title !== "string" || typeof body !== "string" || !/^[0-9a-f-]{36}$/.test(taskId)) return;
+      const notice = new Notification({ title: title.slice(0, 100), body: body.slice(0, 250) });
+      notice.on("click", () => { window.show(); window.focus(); shell.webContents.send("alpha:open-task", taskId); });
+      notice.show();
+    });
+    ipcMain.on("alpha:attention", event => {
+      if (event.sender === shell.webContents && !window.isFocused()) window.flashFrame(true);
     });
     await preview.webContents.loadURL(emptyPreview);
     await shell.webContents.loadURL(`http://127.0.0.1:${port}/ui/`);
