@@ -48,6 +48,13 @@ function startSidecar() {
   });
 }
 
+function previewBounds(value) {
+  if (!value || typeof value !== "object") return null;
+  const numbers = ["x", "y", "width", "height"].map(key => value[key]);
+  if (!numbers.every(item => typeof item === "number" && Number.isFinite(item))) return null;
+  return { x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3], visible: value.visible === true };
+}
+
 function localPreviewUrl(value) {
   try {
     const url = new URL(value);
@@ -63,16 +70,17 @@ app.on("second-instance", () => window?.focus());
 app.whenReady().then(async () => {
   try {
     const port = await startSidecar();
-    window = new BaseWindow({ width: 1460, height: 900, minWidth: 1080, minHeight: 620, title: "Alpha" });
+    window = new BaseWindow({ width: 1460, height: 900, minWidth: 1080, minHeight: 620, title: "Alpha", backgroundColor: "#0e1014", autoHideMenuBar: true });
     shell = new WebContentsView({ webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true } });
     preview = new WebContentsView({ webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });
     window.contentView.addChildView(shell);
     window.contentView.addChildView(preview);
+    // The workbench owns the whole window; it reports where the preview slot is and the preview view is placed over it.
+    // A hidden preview gets empty bounds (View.setVisible(true) did not bring a hidden view back on Windows).
+    preview.setBounds({ x: 0, y: 0, width: 0, height: 0 });
     const layout = () => {
       const { width, height } = window.getContentBounds();
-      const left = Math.min(650, Math.max(500, Math.round(width * .44)));
-      shell.setBounds({ x: 0, y: 0, width: left, height });
-      preview.setBounds({ x: left, y: 0, width: Math.max(width - left, 0), height });
+      shell.setBounds({ x: 0, y: 0, width, height });
     };
     layout();
     window.on("resize", layout);
@@ -90,6 +98,18 @@ app.whenReady().then(async () => {
     });
     ipcMain.on("alpha:preview-clear", event => {
       if (event.sender === shell.webContents) void preview.webContents.loadURL(emptyPreview);
+    });
+    ipcMain.on("alpha:preview-bounds", (event, value) => {
+      if (event.sender !== shell.webContents || !window) return;
+      const rect = previewBounds(value);
+      if (!rect) return;
+      const zoom = shell.webContents.getZoomFactor();
+      const { width, height } = window.getContentBounds();
+      const x = Math.min(Math.max(Math.round(rect.x * zoom), 0), width);
+      const y = Math.min(Math.max(Math.round(rect.y * zoom), 0), height);
+      const w = Math.min(Math.max(Math.round(rect.width * zoom), 0), width - x);
+      const h = Math.min(Math.max(Math.round(rect.height * zoom), 0), height - y);
+      preview.setBounds(rect.visible ? { x, y, width: w, height: h } : { x: 0, y: 0, width: 0, height: 0 });
     });
     await preview.webContents.loadURL(emptyPreview);
     await shell.webContents.loadURL(`http://127.0.0.1:${port}/ui/`);

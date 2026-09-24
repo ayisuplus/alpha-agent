@@ -1,0 +1,89 @@
+import { useMemo, useState } from "react";
+import { Check, PanelLeftClose, PanelLeftOpen, Plus, Search, Square, X } from "lucide-react";
+import type { TaskSummary } from "../api/types";
+import { dayGroup, relativeTime, taskStatus, taskTitle } from "../state/labels";
+import { useStore } from "../state/store";
+import { newTask, openTask, store } from "../state/workbench";
+import { IconButton, Spinner, StatusDot } from "./ui";
+import "./Sidebar.css";
+
+function TaskIcon({ task }: { task: TaskSummary }) {
+  if (task.running) return <Spinner size={14} />;
+  if (task.status === "complete") return <Check className="tone-text-success" size={14} aria-hidden />;
+  if (task.status === "stopped") return <Square className="tone-text-muted" size={12} aria-hidden />;
+  return <StatusDot tone="warning" />;
+}
+
+function TaskRow({ task, selected }: { task: TaskSummary; selected: boolean }) {
+  const status = taskStatus(task);
+  const meta = [
+    status.label,
+    task.contractVersion > 1 ? `v${task.contractVersion}` : null,
+    relativeTime(task.updatedAt),
+  ].filter(Boolean).join(" · ");
+  return <button className="task-row" aria-current={selected ? "page" : undefined} onClick={() => void openTask(task.id)} title={task.originalObjective ?? task.objective}>
+    <span className="task-row-icon"><TaskIcon task={task} /></span>
+    <span className="task-row-body">
+      <span className="task-row-title">{taskTitle(task)}</span>
+      <span className="task-row-meta">{meta}</span>
+    </span>
+  </button>;
+}
+
+export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(): void }) {
+  const tasks = useStore(store, state => state.tasks);
+  const selectedId = useStore(store, state => state.selectedId);
+  const connection = useStore(store, state => state.connection);
+  const loaded = useStore(store, state => state.loaded);
+  const [query, setQuery] = useState("");
+
+  const groups = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    const visible = needle ? tasks.filter(task => task.objective.toLocaleLowerCase().includes(needle) || (task.originalObjective ?? "").toLocaleLowerCase().includes(needle)) : tasks;
+    const result = new Map<string, TaskSummary[]>();
+    for (const task of visible) {
+      const key = task.running ? "运行中" : dayGroup(task.updatedAt);
+      result.set(key, [...(result.get(key) ?? []), task]);
+    }
+    return ["运行中", "今天", "昨天", "更早"].flatMap(key => result.has(key) ? [[key, result.get(key)!] as const] : []);
+  }, [tasks, query]);
+
+  const connectionLabel = connection === "open" ? "已连接本机服务" : connection === "connecting" ? "正在连接…" : "连接中断，正在重连";
+
+  if (collapsed) {
+    return <nav className="sidebar collapsed" aria-label="任务">
+      <IconButton icon={PanelLeftOpen} label="展开任务栏" onClick={onToggle} />
+      <IconButton icon={Plus} label="新建任务 (Ctrl+N)" onClick={newTask} className={selectedId === null ? "active" : undefined} />
+      <span className="sidebar-rail-spacer" />
+      <span title={connectionLabel}><StatusDot tone={connection === "open" ? "success" : "warning"} /></span>
+    </nav>;
+  }
+
+  return <nav className="sidebar" aria-label="任务">
+    <header className="sidebar-brand">
+      <span className="brand-mark" aria-hidden>α</span>
+      <span className="brand-name">Alpha<small>构建工作台</small></span>
+      <IconButton icon={PanelLeftClose} label="收起任务栏" onClick={onToggle} />
+    </header>
+    <button className="new-task-button" onClick={newTask} aria-current={selectedId === null ? "page" : undefined}>
+      <Plus size={16} aria-hidden />新建任务<kbd>Ctrl N</kbd>
+    </button>
+    <label className="task-search">
+      <Search size={14} aria-hidden />
+      <input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索任务" aria-label="搜索任务" />
+      {query && <IconButton icon={X} label="清除搜索" size={14} onClick={() => setQuery("")} />}
+    </label>
+    <div className="task-groups">
+      {groups.map(([label, items]) => <section key={label} className="task-group">
+        <h2>{label}</h2>
+        {items.map(task => <TaskRow key={task.id} task={task} selected={task.id === selectedId} />)}
+      </section>)}
+      {loaded && !groups.length && <p className="sidebar-empty">{query ? "没有匹配的任务" : "还没有任务。新建一个，描述你想要的产品。"}</p>}
+    </div>
+    <footer className="sidebar-footer">
+      <StatusDot tone={connection === "open" ? "success" : "warning"} pulse={connection !== "open"} />
+      <span>{connectionLabel}</span>
+      <span className="sidebar-count">{tasks.length} 个任务</span>
+    </footer>
+  </nav>;
+}

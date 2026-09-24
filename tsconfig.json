@@ -10,6 +10,6 @@
     "allowImportingTsExtensions": true,
     "jsx": "react-jsx"
   },
-  "include": ["src/**/*.ts", "scripts/**/*.ts", "test/**/*.ts", "desktop/ui/src/**/*.tsx"],
+  "include": ["src/**/*.ts", "scripts/**/*.ts", "test/**/*.ts", "desktop/ui/src/**/*.ts", "desktop/ui/src/**/*.tsx"],
   "exclude": ["reference", "node_modules"]
 }

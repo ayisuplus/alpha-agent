@@ -1,0 +1,72 @@
+:root {
+  color-scheme: dark;
+
+  /* Surfaces, from the window background up to raised controls. */
+  --bg-app: #0e1014;
+  --bg-sidebar: #111318;
+  --bg-surface: #16191f;
+  --bg-elevated: #1c2027;
+  --bg-hover: #232833;
+  --bg-active: #28303d;
+  --bg-inset: #0a0c0f;
+
+  --border-subtle: #1e222a;
+  --border: #2a2f39;
+  --border-strong: #3a414d;
+
+  --text: #e7eaf0;
+  --text-secondary: #aab1bd;
+  --text-muted: #8a92a0;
+  --text-faint: #6b7380;
+
+  /* One cool accent for actions, focus and "running"; green/amber/red carry verification meaning only. */
+  --accent: #7c9cff;
+  --accent-strong: #a3b8ff;
+  --accent-bg: rgba(124, 156, 255, 0.13);
+  --accent-border: rgba(124, 156, 255, 0.42);
+  --on-accent: #0b1020;
+
+  --success: #5fd18f;
+  --success-bg: rgba(95, 209, 143, 0.12);
+  --success-border: rgba(95, 209, 143, 0.35);
+  --warning: #e9b65c;
+  --warning-bg: rgba(233, 182, 92, 0.12);
+  --warning-border: rgba(233, 182, 92, 0.38);
+  --danger: #f27b7b;
+  --danger-bg: rgba(242, 123, 123, 0.12);
+  --danger-border: rgba(242, 123, 123, 0.38);
+
+  --diff-add-bg: rgba(95, 209, 143, 0.12);
+  --diff-add-gutter: rgba(95, 209, 143, 0.2);
+  --diff-del-bg: rgba(242, 123, 123, 0.12);
+  --diff-del-gutter: rgba(242, 123, 123, 0.2);
+
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", Consolas, "Microsoft YaHei UI", monospace;
+
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+
+  --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --focus-ring: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent-border);
+
+  --sidebar-width: 256px;
+  --sidebar-rail: 56px;
+  --thread-min: 420px;
+  --preview-min: 360px;
+  --splitter: 6px;
+}

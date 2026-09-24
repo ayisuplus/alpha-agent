@@ -20,7 +20,7 @@ export interface RunOptions {
   objective: string;
   dataRoot: string;
   modelSelector?: string;
-  onEvent?: (event: { type: "text" | "tool-start" | "tool-end"; value: string; error?: boolean }) => void;
+  onEvent?: (event: RunEvent) => void;
   onLedger?: (ledger: TaskLedger) => void;
   onSessionReady?: (steer: (text: string) => Promise<void>) => Promise<void> | void;
   onSessionEnd?: (queuedSteering: readonly string[], completed: boolean) => Promise<void> | void;
@@ -30,6 +30,32 @@ export interface RunOptions {
   maxToolCalls?: number;
   wallTimeMs?: number;
   workOrder?: WorkOrder;
+}
+
+export interface RunEvent {
+  type: "text" | "tool-start" | "tool-end";
+  value: string;
+  error?: boolean;
+  callId?: string;
+  target?: string;
+  intent?: string;
+}
+
+/** A short, display-only description of what a tool call touches; bulky fields such as file content are never forwarded. */
+export function toolTarget(args: unknown, projectRoot: string): string | undefined {
+  if (!args || typeof args !== "object") return undefined;
+  const record = args as Record<string, unknown>;
+  const text = (value: unknown) => typeof value === "string" && value.trim() ? value.trim() : undefined;
+  let target: string | undefined;
+  const path = text(record.path) ?? text(record.file_path);
+  if (path) {
+    const normalized = path.replaceAll("\\", "/");
+    const root = resolve(projectRoot).replaceAll("\\", "/");
+    target = normalized.toLowerCase().startsWith(`${root.toLowerCase()}/`) ? normalized.slice(root.length + 1) : normalized;
+  } else if (text(record.pattern)) target = `/${text(record.pattern)}/`;
+  else if (text(record.prompt)) target = text(record.prompt)!.slice(0, 60);
+  else if (text(record.action)) target = [text(record.action), text(record.selector)].filter(Boolean).join(" ");
+  return target?.slice(0, 160);
 }
 
 export function taskPrompt(ledger: TaskLedger, correction: string): string {
@@ -150,9 +176,9 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
         budgetReason = `Model run exceeded ${maxToolCalls} tool calls`;
         void session.abort();
       }
-      options.onEvent?.({ type: "tool-start", value: event.toolName });
+      options.onEvent?.({ type: "tool-start", value: event.toolName, callId: event.toolCallId, target: toolTarget(event.args, projectRoot), intent: event.intent?.slice(0, 160) });
     } else if (event.type === "tool_execution_end") {
-      options.onEvent?.({ type: "tool-end", value: event.toolName, error: event.isError });
+      options.onEvent?.({ type: "tool-end", value: event.toolName, error: event.isError, callId: event.toolCallId });
     }
   });
   const onAbort = () => { clearTimeout(firstResponseTimer); void session.abort(); };

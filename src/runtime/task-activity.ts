@@ -14,7 +14,13 @@ export interface ActivityEntry {
   contractVersion: number;
   revision: string | null;
   previewId: string | null;
+  callId?: string;
+  target?: string;
+  intent?: string;
+  error?: boolean;
 }
+
+export type ActivityInput = Omit<ActivityEntry, "id" | "taskId" | "recordedAt">;
 
 export class TaskActivity {
   private pending: Promise<void> = Promise.resolve();
@@ -24,13 +30,20 @@ export class TaskActivity {
     this.file = join(dataRoot, "activity", `${taskId}.jsonl`);
   }
 
-  append(input: Omit<ActivityEntry, "id" | "taskId" | "recordedAt">): Promise<void> {
-    const entry: ActivityEntry = { ...input, id: randomUUID(), taskId: this.taskId, recordedAt: new Date().toISOString() };
+  create(input: ActivityInput): ActivityEntry {
+    return { ...input, id: randomUUID(), taskId: this.taskId, recordedAt: new Date().toISOString() };
+  }
+
+  write(entry: ActivityEntry): Promise<void> {
     this.pending = this.pending.then(async () => {
       await mkdir(dirname(this.file), { recursive: true });
       await appendFile(this.file, `${JSON.stringify(entry)}\n`);
     });
     return this.pending;
+  }
+
+  append(input: ActivityInput): Promise<void> {
+    return this.write(this.create(input));
   }
 
   async read(): Promise<ActivityEntry[]> {

@@ -12,9 +12,12 @@ test("task activity survives a new reader and stays attached to its task", async
     const first = new TaskActivity(root, "task-one");
     await first.append({ operationId: "run-one", kind: "status", value: "构建中", contractVersion: 1, revision: "revision-one", previewId: null });
     await first.append({ operationId: "run-one", kind: "tool", value: "build · 通过", contractVersion: 1, revision: "revision-one", previewId: "preview-one" });
+    const tool = first.create({ operationId: "run-one", kind: "tool", value: "edit · 开始", contractVersion: 1, revision: "revision-one", previewId: null, callId: "call-1", target: "src/app.js", intent: "Updating counter" });
+    await first.write(tool);
     const restored = await new TaskActivity(root, "task-one").read();
-    expect(restored.map(item => item.value)).toEqual(["构建中", "build · 通过"]);
+    expect(restored.map(item => item.value)).toEqual(["构建中", "build · 通过", "edit · 开始"]);
     expect(restored.every(item => item.operationId === "run-one" && item.taskId === "task-one")).toBe(true);
+    expect(restored.at(-1)).toEqual(tool);
     expect(await new TaskActivity(root, "task-two").read()).toEqual([]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -107,8 +110,26 @@ test("workbench serves recorded evidence but refuses a ledger path outside its d
     const imageResponse = await fetch(`${base}${browserDetail.screenshotUrl}`);
     expect(imageResponse.headers.get("content-type")).toBe("image/png");
     expect(new Uint8Array(await imageResponse.arrayBuffer())).toEqual(new Uint8Array([137, 80, 78, 71]));
+    const summary = await fetch(`${base}/api/tasks`).then(response => response.json()) as { tasks: Array<{ id: string; originalObjective: string; createdAt: string }> };
+    expect(summary.tasks[0]).toMatchObject({ id: ledger.state.id, originalObjective: "Review evidence", createdAt: ledger.state.createdAt });
+    // Bun's WebSocket accepts request headers (the server checks Origin); the DOM typing here only knows protocols.
+    const BunWebSocket = WebSocket as unknown as new (url: string, options: Bun.WebSocketOptions) => WebSocket;
+    const socket = new BunWebSocket(`ws://127.0.0.1:${port}/events`, { headers: { origin: base } });
+    const broadcast = new Promise<{ type: string; taskId: string; entry: { kind: string; value: string; id: string } }>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("No activity broadcast")), 5_000);
+      socket.onmessage = event => {
+        const message = JSON.parse(String(event.data)) as { type: string; taskId: string; entry: { kind: string; value: string; id: string } };
+        if (message.type === "activity") { clearTimeout(timer); resolve(message); }
+      };
+    });
+    await new Promise<void>((resolve, reject) => { socket.onopen = () => resolve(); socket.onerror = () => reject(new Error("WebSocket failed")); });
     const saved = await fetch(`${base}/api/tasks/${ledger.state.id}/guidance`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "Keep the screenshot visible on the next run" }) }).then(response => response.json()) as { status: string };
     expect(saved.status).toBe("recorded");
+    const pushed = await broadcast;
+    socket.close();
+    expect(pushed).toMatchObject({ taskId: ledger.state.id, entry: { kind: "guidance", value: "补充要求已记录：Keep the screenshot visible on the next run" } });
+    const persisted = await fetch(`${base}/api/tasks/${ledger.state.id}/activity`).then(response => response.json()) as { entries: Array<{ id: string }> };
+    expect(persisted.entries.map(item => item.id)).toContain(pushed.entry.id);
     expect((await TaskLedger.load(ledger.file)).state.guidanceHistory?.at(-1)?.instruction).toBe("Keep the screenshot visible on the next run");
   } finally {
     child?.kill();

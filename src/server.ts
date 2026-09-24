@@ -3,7 +3,7 @@ import type { ServerWebSocket } from "bun";
 import { cp, mkdir, readFile, readdir, realpath, unlink, writeFile } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { publishLocalPreview, type PreviewInstance } from "./runtime/local-preview";
-import { runTask } from "./runtime/omp-runner";
+import { runTask, type RunEvent } from "./runtime/omp-runner";
 import { TaskLedger, fingerprintSource } from "./runtime/task-ledger";
 import { assertGeneratedAssetsIntact } from "./runtime/media-integrity";
 import { verifyBrowserPlan } from "./runtime/browser-verifier";
@@ -54,13 +54,21 @@ function setContext(ledger: TaskLedger): void {
   });
 }
 
-function appendActivity(taskId: string, kind: ActivityKind, value: string, operationId?: string): void {
+type ActivityDetail = { callId?: string; target?: string; intent?: string; error?: boolean };
+
+function appendActivity(taskId: string, kind: ActivityKind, value: string, operationId?: string, detail: ActivityDetail = {}): void {
   const context = contexts.get(taskId);
-  void activityFor(taskId).append({
+  const activity = activityFor(taskId);
+  const optional = Object.fromEntries(Object.entries(detail).filter(([, item]) => item !== undefined && item !== false)) as ActivityDetail;
+  const entry = activity.create({
     operationId: operationId ?? operations.get(taskId) ?? null,
     kind, value, contractVersion: context?.contractVersion ?? 1,
     revision: context?.revision ?? null, previewId: context?.previewId ?? null,
-  }).catch(error => console.error("ALPHA_ACTIVITY_WRITE_FAILED", error));
+    ...optional,
+  });
+  // Broadcast before the write so the workbench timeline keeps the same order as the live event stream.
+  broadcast({ type: "activity", taskId, entry });
+  void activity.write(entry).catch(error => console.error("ALPHA_ACTIVITY_WRITE_FAILED", error));
 }
 
 function flushText(taskId: string): void {
@@ -107,6 +115,7 @@ function taskView(ledger: TaskLedger) {
   return {
     id: ledger.state.id,
     objective: ledger.state.objective,
+    originalObjective: ledger.state.contractHistory?.[0]?.objective ?? ledger.state.objective,
     contractVersion: ledger.state.contractVersion ?? 1,
     status: ledger.state.status,
     revision: ledger.state.revision,
@@ -123,6 +132,7 @@ function taskView(ledger: TaskLedger) {
     evidence: ledger.state.evidence.map(item => ({ id: item.id, criterionId: item.criterionId, kind: item.kind, passed: item.passed, source: item.source, recordedAt: item.recordedAt, contractVersion: item.contractVersion ?? 1, revision: item.revision, previewId: item.previewId ?? null, current: latestEvidence.has(item.id) })),
     screenshotUrl: preview && evidence.some(item => item.kind === "browser") ? `/api/tasks/${ledger.state.id}/screenshot` : null,
     preview: preview ? { ...preview, live: previews.has(preview.id) } : null,
+    createdAt: ledger.state.createdAt,
     updatedAt: ledger.state.updatedAt,
   };
 }
@@ -137,16 +147,23 @@ function taskSummary(ledger: TaskLedger) {
   return {
     id: ledger.state.id,
     objective: ledger.state.objective,
+    originalObjective: ledger.state.contractHistory?.[0]?.objective ?? ledger.state.objective,
     contractVersion: ledger.state.contractVersion ?? 1,
     status: ledger.state.status,
     running: active?.ledger?.state.id === ledger.state.id,
     pendingCount: ledger.completionGaps().length,
+    createdAt: ledger.state.createdAt,
     updatedAt: ledger.state.updatedAt,
   };
 }
 
+function broadcast(message: unknown): void {
+  const data = JSON.stringify(message);
+  for (const client of clients) client.send(data);
+}
+
 function emit(message: unknown): void {
-  const event = message as { type?: string; taskId?: string; runId?: string; value?: string; phase?: string; name?: string; state?: string; message?: string; url?: string; task?: { id: string; contractVersion: number; revision: string | null; preview: { id: string } | null } };
+  const event = message as { type?: string; taskId?: string; runId?: string; value?: string; phase?: string; name?: string; state?: string; message?: string; url?: string; error?: boolean; callId?: string; target?: string; intent?: string; task?: { id: string; contractVersion: number; revision: string | null; preview: { id: string } | null } };
   if (event.type === "task" && event.task) contexts.set(event.task.id, { contractVersion: event.task.contractVersion, revision: event.task.revision, previewId: event.task.preview?.id ?? null });
   if (event.taskId) {
     if (event.type === "text" && event.value) {
@@ -155,11 +172,11 @@ function emit(message: unknown): void {
     } else {
       flushText(event.taskId);
       const value = event.type === "status" ? event.phase : event.type === "tool" ? `${event.name} · ${event.state}` : event.type === "error" ? event.message : event.type === "guidance" ? event.value : event.type === "preview" ? `本机预览：${event.url}` : undefined;
-      if (value && ["status", "tool", "error", "guidance", "preview"].includes(event.type ?? "")) appendActivity(event.taskId, event.type === "preview" ? "status" : event.type as ActivityKind, value, event.runId);
+      const detail = event.type === "tool" ? { callId: event.callId, target: event.target, intent: event.intent, error: event.error } : undefined;
+      if (value && ["status", "tool", "error", "guidance", "preview"].includes(event.type ?? "")) appendActivity(event.taskId, event.type === "preview" ? "status" : event.type as ActivityKind, value, event.runId, detail);
     }
   }
-  const data = JSON.stringify(message);
-  for (const client of clients) client.send(data);
+  broadcast(message);
 }
 
 function serveUi(pathname: string): Response {
@@ -292,9 +309,9 @@ async function execute(runId: string, objective: string, projectRoot: string, co
   try {
     beforeSource = await snapshotSource(projectRoot);
     emitRun({ type: "status", phase: "构建中", runId });
-    const forwardEvent = (event: { type: "text" | "tool-start" | "tool-end"; value: string; error?: boolean }) => {
+    const forwardEvent = (event: RunEvent) => {
       if (event.type === "text") emitRun({ type: "text", value: event.value });
-      else emitRun({ type: "tool", name: event.value, state: event.type === "tool-start" ? "开始" : "结束", error: event.error });
+      else emitRun({ type: "tool", name: event.value, state: event.type === "tool-start" ? "开始" : "结束", error: event.error, callId: event.callId, target: event.target, intent: event.intent });
     };
     const ledger = await runTask({
       projectRoot, objective, dataRoot, signal: controller.signal, existingLedger,

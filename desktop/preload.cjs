@@ -7,4 +7,7 @@ contextBridge.exposeInMainWorld("alpha", {
   clearPreview() {
     ipcRenderer.send("alpha:preview-clear");
   },
+  setPreviewBounds(rect) {
+    ipcRenderer.send("alpha:preview-bounds", rect);
+  },
 });
