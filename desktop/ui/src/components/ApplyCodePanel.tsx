@@ -14,10 +14,10 @@ export function ApplyCodePanel({ task }: { task: TaskView }) {
   useEffect(() => {
     if (task.taskType !== "code-change") return;
     let live = true;
-    void api.applyReview(task.id).then(value => { if (live) { setReview(value); setError(null); } }).catch(reason => { if (live) setError(reason instanceof Error ? reason.message : String(reason)); });
+    if (task.workspaceOrigin?.kind !== "direct") void api.applyReview(task.id).then(value => { if (live) { setReview(value); setError(null); } }).catch(reason => { if (live) setError(reason instanceof Error ? reason.message : String(reason)); });
     void api.approvals(task.id).then(value => { if (live) setApprovals(value); }).catch(() => undefined);
     return () => { live = false; };
-  }, [task.id, task.revision, task.taskType]);
+  }, [task.id, task.revision, task.status, task.taskType]);
   if (task.taskType !== "code-change") return null;
   const apply = async () => {
     if (!review?.revision || review.conflicts.length || busy) return;
@@ -38,10 +38,14 @@ export function ApplyCodePanel({ task }: { task: TaskView }) {
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
   };
   return <section className="code-apply-panel" aria-label="应用代码变更">
-    <strong>原项目应用审阅</strong>
-    <p>原目录：{task.workspaceOrigin?.sourcePath ?? "未知"}</p>
-    {!!approvals.length && <div className="code-approvals"><strong>命令审批</strong>{approvals.map(request => <div key={request.id}>
-      <code>{JSON.stringify(request.argv)}</code><span> · {request.purpose === "check" ? "检查" : "其它命令"} · {request.status}</span>
+    <strong>{task.workspaceOrigin?.kind === "direct" ? "项目操作审批" : "原项目应用审阅"}</strong>
+    {task.workspaceOrigin?.kind !== "direct" && <p>原目录：{task.workspaceOrigin?.sourcePath ?? "未知"}</p>}
+    {!!approvals.length && <div className="code-approvals"><strong>操作审批</strong>{approvals.map(request => <div key={request.id}>
+      <code>{JSON.stringify(request.argv)}</code><span> · {request.exactAction ? "文件" : request.purpose === "check" ? "检查" : "命令"}{request.network ? " · 联网" : ""} · {request.risk ?? "normal"} · {request.status}</span>
+      {request.reason && <p>{request.reason}</p>}
+      {request.scriptCommand && <p>项目脚本：<code>{request.scriptCommand}</code></p>}
+      {request.review && <p>{request.review.reviewer}：{request.review.decision} · {request.review.reason}</p>}
+      {request.exactAction && <details><summary>查看精确动作</summary><pre>{JSON.stringify(request.exactAction, null, 2)}</pre></details>}
       {request.status === "pending" && <><button type="button" onClick={() => void decide(request, true)}>批准</button><button type="button" onClick={() => void decide(request, false)}>拒绝</button></>}
     </div>)}</div>}
     {review && <>

@@ -1,4 +1,4 @@
-import type { ActivityEntry, AgentPreset, AgentPresetSummary, ControlHolder, Diagnostics, EvidenceDetail, LocalSchedule, ModelCatalog, PromptRefinement, QueueItem, ReviewDetail, ReviewSummary, Settings, SettingsPatch, SkillPlugin, StorageReport, TaskList, TaskMeta, TaskView } from "./types";
+import type { ActivityEntry, AgentPreset, AgentPresetSummary, ControlHolder, Diagnostics, EvidenceDetail, LocalSchedule, ModelCatalog, PermissionMode, ProjectRecord, PromptRefinement, QueueItem, ReviewDetail, ReviewSummary, Settings, SettingsPatch, SkillPlugin, StorageReport, TaskList, TaskMeta, TaskView } from "./types";
 
 const SERVER_MESSAGES: Record<string, string> = {
   "A task is already running": "已有任务或操作正在进行，请等它结束",
@@ -87,6 +87,12 @@ export const api = {
   review: (id: string, operationId: string) => request<{ review: ReviewDetail }>(`${taskPath(id)}/reviews/${encodeURIComponent(operationId)}`).then(result => result.review),
   evidence: (id: string, evidenceId: string) => request<EvidenceDetail>(`${taskPath(id)}/evidence/${encodeURIComponent(evidenceId)}`),
   control: () => request<{ holder: ControlHolder }>("/api/browser/control").then(result => result.holder),
+  projects: () => request<{ projects: ProjectRecord[] }>("/api/projects").then(result => result.projects),
+  createProject: (name: string) => post<{ project: ProjectRecord }>("/api/projects", { name }).then(result => result.project),
+  mountProjectFolder: (projectId: string, path: string) => post<{ project: ProjectRecord }>(`/api/projects/${encodeURIComponent(projectId)}/mounts`, { path }).then(result => result.project),
+  unmountProjectFolder: (projectId: string, mountId: string) => send<{ project: ProjectRecord }>("DELETE", `/api/projects/${encodeURIComponent(projectId)}/mounts/${encodeURIComponent(mountId)}`).then(result => result.project),
+  checkProjectSandbox: (projectId: string, mountId: string) => post<{ ok: boolean }>(`/api/projects/${encodeURIComponent(projectId)}/sandbox/check`, { mountId }),
+  startProjectTask: (projectId: string, mountId: string, objective: string, permissionMode: PermissionMode, model?: string | null) => post<{ taskId: string; runId: string }>(`/api/projects/${encodeURIComponent(projectId)}/tasks`, { mountId, objective, permissionMode, model: model ?? null }),
   setControl: (holder: ControlHolder) => post<{ holder: ControlHolder }>("/api/browser/control", { holder }),
   start: (brief: string, model?: string | null) => post<{ runId: string }>("/api/tasks", { brief, model: model ?? null }),
   importWorkspace: (sourcePath: string, objective: string, model?: string | null) => post<{ taskId: string; runId: string }>("/api/workspaces/import", { sourcePath, objective, model: model ?? null }),

@@ -49,13 +49,14 @@ export async function checkFileToolCall(toolName: string, input: Record<string, 
 }
 
 /** OMP fires tool_call before scheduling and again for direct tool dispatches. Fail closed on missing edit targets. */
-export function fileToolGuard(projectRoot: string, order?: WorkOrder, protectedPaths: string[] = []): PreparedExtension {
+export function fileToolGuard(projectRoot: string, order?: WorkOrder, protectedPaths: string[] = [], direct = false): PreparedExtension {
   return {
     path: "alpha:file-tool-guard",
     resolvedPath: "alpha:file-tool-guard",
     error: null,
     factory: api => {
       api.on("tool_call", async event => {
+        if (direct && ["read", "grep", "edit", "write"].includes(event.toolName)) return;
         try { await checkFileToolCall(event.toolName, event.input as Record<string, unknown>, projectRoot, order, protectedPaths); }
         catch (error) { return { block: true, reason: error instanceof Error ? error.message : String(error) }; }
       });

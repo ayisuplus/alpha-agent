@@ -36,6 +36,7 @@ test("source review records text changes without bundling builds or binary media
     await writeFile(join(product, "src", "app.js"), "document.title = 'after';\n");
     await writeFile(join(product, "dist", "app.js"), "compiled");
     await writeFile(join(product, "src", "image.png"), new Uint8Array([0, 1, 2]));
+    await writeFile(join(product, "src", ".env.json"), '{"token":"private"}');
     const operationId = "11111111-1111-4111-8111-111111111111";
     await writeSourceReview(root, { taskId: "task-one", operationId, contractVersion: 2, revision: "revision-two", before, after: await snapshotSource(product) });
     const restored = await readSourceReviews(root, "task-one");

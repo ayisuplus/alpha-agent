@@ -4,6 +4,7 @@ import { extname, join, relative, resolve, sep } from "node:path";
 
 const TEXT_EXTENSIONS = new Set([".css", ".html", ".js", ".json", ".md", ".ts", ".tsx"]);
 const EXCLUDED = new Set([".alpha", ".git", "dist", "node_modules"]);
+const SENSITIVE = /^(?:\.ssh|\.aws|\.azure|\.codex|user data|\.env(?:\..*)?|credentials?(?:\..*)?|auth\.json|id_(?:rsa|ed25519)|\.npmrc|\.git-credentials)$/i;
 const MAX_FILE_BYTES = 256_000;
 
 export type SourceSnapshot = Record<string, string>;
@@ -28,8 +29,8 @@ export async function snapshotSource(root: string): Promise<SourceSnapshot> {
       if (entry.isSymbolicLink()) continue;
       const path = join(directory, entry.name);
       if (entry.isDirectory()) {
-        if (!EXCLUDED.has(entry.name)) await walk(path);
-      } else if (entry.isFile() && TEXT_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
+        if (!EXCLUDED.has(entry.name.toLowerCase()) && !SENSITIVE.test(entry.name)) await walk(path);
+      } else if (entry.isFile() && !SENSITIVE.test(entry.name) && TEXT_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
         const data = await readFile(path);
         if (!data.includes(0)) files[relative(root, path).split(sep).join("/")] = data.length <= MAX_FILE_BYTES
           ? data.toString("utf8")

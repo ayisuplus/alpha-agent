@@ -5,9 +5,10 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export type EvidenceKind = "build" | "test" | "browser" | "asset" | "preview" | "source" | "artifact";
 export type TaskType = "web-product" | "code-change" | "research" | "file-work";
+export type PermissionMode = "ask" | "auto" | "full";
 
 export interface WorkspaceOrigin {
-  kind: "generated" | "git" | "copy";
+  kind: "generated" | "git" | "copy" | "direct";
   sourcePath?: string;
   snapshotFile?: string;
   initialRevision?: string;
@@ -70,6 +71,9 @@ export interface GuidanceRecord {
 
 export interface TaskState {
   id: string;
+  projectId?: string;
+  projectVersion?: number;
+  permissionMode?: PermissionMode;
   taskType?: TaskType;
   workspaceOrigin?: WorkspaceOrigin;
   inputs?: Array<{ id: string; name: string; path: string; mimeType: string; sha256: string; uploadedAt: string }>;
@@ -102,7 +106,7 @@ async function listSourceFiles(root: string, directory = root): Promise<string[]
     if (entry.isSymbolicLink()) continue;
     const absolute = join(directory, entry.name);
     if (entry.isDirectory()) {
-      if (!EXCLUDED_DIRS.has(entry.name)) files.push(...await listSourceFiles(root, absolute));
+      if (!EXCLUDED_DIRS.has(entry.name.toLowerCase())) files.push(...await listSourceFiles(root, absolute));
     } else if (entry.isFile()) {
       files.push(relative(root, absolute).split(sep).join("/"));
     }
@@ -139,6 +143,9 @@ export class TaskLedger {
     taskType?: TaskType;
     workspaceOrigin?: WorkspaceOrigin;
     inputs?: TaskState["inputs"];
+    projectId?: string;
+    projectVersion?: number;
+    permissionMode?: PermissionMode;
   }): Promise<TaskLedger> {
     if (!input.objective.trim()) throw new Error("Task objective is required");
     if (input.criteria.length === 0 || new Set(input.criteria.map(item => item.id)).size !== input.criteria.length) {
@@ -151,6 +158,7 @@ export class TaskLedger {
     const file = join(resolve(dataRoot), "tasks", `${id}.json`);
     const state: TaskState = {
       id,
+      ...(input.projectId ? { projectId: input.projectId, projectVersion: input.projectVersion, permissionMode: input.permissionMode ?? "ask" } : {}),
       taskType: input.taskType ?? "web-product",
       workspaceOrigin: input.workspaceOrigin ?? { kind: "generated" },
       ...(input.inputs?.length ? { inputs: input.inputs } : {}),

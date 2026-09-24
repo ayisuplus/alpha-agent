@@ -11,7 +11,7 @@ import { TaskLedger, fingerprintSource } from "./runtime/task-ledger";
 import { assertGeneratedAssetsIntact } from "./runtime/media-integrity";
 import { verifyBrowserPlan } from "./runtime/browser-verifier";
 import { TaskActivity, type ActivityKind } from "./runtime/task-activity";
-import { readSourceReviews, snapshotSource, writeSourceReview } from "./runtime/source-review";
+import { readSourceReviews, snapshotSource, sourceChanges, writeSourceReview } from "./runtime/source-review";
 import { SettingsError, SettingsStore, WorkbenchMeta, isModelSelector, normalizeComfyUrl } from "./runtime/settings";
 import { ComfyClient } from "./runtime/comfy-client";
 import { SkillPluginError, SkillPluginStore } from "./plugins/third-party";
@@ -28,11 +28,15 @@ import { createGeneralWorkspace, verifyGeneralDeliverable } from "./runtime/gene
 import { MCPPermissionStore, type MCPPermission } from "./runtime/mcp-permissions";
 import { OperationJournal } from "./runtime/operation-journal";
 import { TaskQueueStore } from "./runtime/task-queue";
+import { ProjectStore } from "./runtime/projects";
+import { configuredChecks } from "./runtime/code-check";
+import { SandboxUnavailableError, verifySandbox } from "./runtime/sandbox-exec";
 
 const appRoot = resolve(import.meta.dir, "..");
 const workspaceRoot = resolve(process.env.ALPHA_WORKSPACE_ROOT ?? appRoot);
 const dataRoot = join(workspaceRoot, ".alpha");
 const productsRoot = join(workspaceRoot, "products");
+const directBaselineRoot = join(dataRoot, "direct-baselines");
 const uiRoot = join(appRoot, "desktop", "dist");
 for (const directory of [dataRoot, productsRoot]) {
   const probe = join(directory, `.alpha-write-probe-${randomUUID()}`);
@@ -54,6 +58,7 @@ const operationJournal = new OperationJournal(dataRoot);
 const startupReconciliation = await operationJournal.reconcile();
 for (const item of startupReconciliation) console.error("ALPHA_RECONCILED_OPERATION", item);
 const taskQueue = new TaskQueueStore(dataRoot);
+const projectStore = new ProjectStore(dataRoot);
 await taskQueue.reconcile();
 const queuedRuns = new Map<string, string>();
 let queueDraining = false;
@@ -121,6 +126,15 @@ async function loadLedger(id: string): Promise<TaskLedger | null> {
   return TaskLedger.load(join(dataRoot, "tasks", `${id}.json`)).catch(() => null);
 }
 
+async function taskRootAllowed(ledger: TaskLedger): Promise<boolean> {
+  const root = resolve(ledger.state.projectRoot);
+  if (ledger.state.projectId) {
+    const roots = await projectStore.roots(ledger.state.projectId, ledger.state.projectVersion ?? 0);
+    return roots.some(item => item.toLowerCase() === root.toLowerCase());
+  }
+  return root.startsWith(productsRoot + sep);
+}
+
 async function safeEvidencePath(path: string): Promise<string | null> {
   const root = await realpath(dataRoot);
   const file = await realpath(path).catch(() => null);
@@ -163,6 +177,9 @@ function taskView(ledger: TaskLedger) {
   const latestEvidence = new Set(ledger.state.criteria.map(criterion => evidence.findLast(item => item.criterionId === criterion.id)?.id));
   return {
     id: ledger.state.id,
+    projectId: ledger.state.projectId ?? null,
+    projectVersion: ledger.state.projectVersion ?? null,
+    permissionMode: ledger.state.permissionMode ?? null,
     taskType: ledger.state.taskType ?? "web-product",
     workspaceOrigin: ledger.state.workspaceOrigin ?? { kind: "generated" },
     objective: ledger.state.objective,
@@ -235,6 +252,11 @@ async function diagnostics() {
 function taskSummary(ledger: TaskLedger) {
   return {
     id: ledger.state.id,
+    projectId: ledger.state.projectId ?? null,
+    projectVersion: ledger.state.projectVersion ?? null,
+    permissionMode: ledger.state.permissionMode ?? null,
+    taskType: ledger.state.taskType ?? "web-product",
+    workspaceOrigin: ledger.state.workspaceOrigin ?? { kind: "generated" },
     objective: ledger.state.objective,
     originalObjective: ledger.state.contractHistory?.[0]?.objective ?? ledger.state.objective,
     contractVersion: ledger.state.contractVersion ?? 1,
@@ -424,7 +446,7 @@ async function execute(runId: string, objective: string, projectRoot: string, co
   const modelRun = async (options: RunOptions): Promise<TaskLedger> => {
     const preview = options.existingLedger?.state.preview;
     const port = process.env.ALPHA_CDP_PORT;
-    const browser = preview && previews.has(preview.id) && controlHolder === "alpha" && port && /^\d+$/.test(port)
+    const browser = !options.existingLedger?.state.projectId && preview && previews.has(preview.id) && controlHolder === "alpha" && port && /^\d+$/.test(port)
       ? await VisibleBrowser.connect(`http://127.0.0.1:${port}`, preview.url).catch(() => undefined)
       : undefined;
     if (browser) modelBrowser = browser;
@@ -438,6 +460,7 @@ async function execute(runId: string, objective: string, projectRoot: string, co
     }
   };
   try {
+    if (existingLedger?.state.projectId) await projectStore.roots(existingLedger.state.projectId, existingLedger.state.projectVersion ?? 0);
     const configured = await configuredRun(existingLedger?.state.modelSelector ?? newTaskModel);
     beforeSource = await snapshotSource(projectRoot);
     emitRun({ type: "status", phase: "构建中", runId });
@@ -470,7 +493,14 @@ async function execute(runId: string, objective: string, projectRoot: string, co
       return;
     }
     if (ledger.state.taskType === "code-change") {
-      const review = await reviewCodeApply(ledger, dataRoot);
+      const baselineFile = join(directBaselineRoot, `${ledger.state.id}.json`);
+      const baseline = ledger.state.workspaceOrigin?.kind === "direct"
+        ? await readFile(baselineFile, "utf8").then(value => JSON.parse(value) as Record<string, string>).catch(() => null)
+        : null;
+      const afterHashes = baseline ? Object.fromEntries(Object.entries(await snapshotSource(projectRoot)).map(([path, value]) => [path, createHash("sha256").update(value).digest("hex")])) : null;
+      const review = ledger.state.workspaceOrigin?.kind === "direct"
+        ? { changes: sourceChanges(baseline ?? beforeSource ?? {}, afterHashes ?? await snapshotSource(projectRoot)).map(change => ({ path: change.path, action: change.before === null ? "added" : change.after === null ? "removed" : "modified", conflict: false })) }
+        : await reviewCodeApply(ledger, dataRoot);
       const reviewPath = join(dataRoot, "evidence", `${ledger.state.id}-${runId}-code-review.json`);
       await mkdir(join(dataRoot, "evidence"), { recursive: true });
       await writeFile(reviewPath, JSON.stringify(review, null, 2), { flag: "wx" });
@@ -484,7 +514,10 @@ async function execute(runId: string, objective: string, projectRoot: string, co
       }
       for (const check of checks) {
         emitRun({ type: "status", phase: `检查 ${check.name}`, runId });
-        const result = await runCodeCheck(projectRoot, dataRoot, ledger.state.id, check.name, checks, controller.signal);
+        const permission = ledger.state.projectId
+          ? { mode: ledger.state.permissionMode ?? "ask", roots: await projectStore.roots(ledger.state.projectId, ledger.state.projectVersion ?? 0) }
+          : undefined;
+        const result = await runCodeCheck(projectRoot, dataRoot, ledger.state.id, check.name, checks, controller.signal, permission);
         checkResults.push({ name: check.name, passed: result.passed, logPath: result.logPath });
         if (!result.passed) break;
       }
@@ -498,6 +531,7 @@ async function execute(runId: string, objective: string, projectRoot: string, co
         emitRun({ type: "status", phase: "待验收", runId, pending: ledger.completionGaps() });
         return;
       }
+      if (ledger.state.projectId) await projectStore.roots(ledger.state.projectId, ledger.state.projectVersion ?? 0);
       await ledger.complete();
       emitRun({ type: "task", task: taskView(ledger) });
       emitRun({ type: "status", phase: "已验收", runId, pending: [] });
@@ -561,7 +595,10 @@ async function execute(runId: string, objective: string, projectRoot: string, co
     runError = error instanceof Error ? error.message : String(error);
     const current = active?.runId === runId && active.ledger ? await TaskLedger.load(active.ledger.file).catch(() => null) : null;
     if (current) {
-      if (current.state.status === "active") await current.recordFailure(error instanceof Error ? error.message : String(error));
+      if (current.state.status === "active") {
+        if (error instanceof SandboxUnavailableError) await current.needInput(error.message, "windows-sandbox");
+        else await current.recordFailure(error instanceof Error ? error.message : String(error));
+      }
       emitRun({ type: "task", task: taskView(current) });
     }
     emitRun({ type: "error", message: error instanceof Error ? error.message : String(error) });
@@ -605,7 +642,7 @@ async function drainQueue(): Promise<void> {
     const ledger = await loadLedger(item.taskId);
     if (!ledger) throw new Error("Queued task no longer exists");
     const projectRoot = resolve(ledger.state.projectRoot);
-    if (!projectRoot.startsWith(productsRoot + sep)) throw new Error("Queued task is outside products");
+    if (!await taskRootAllowed(ledger)) throw new Error("Queued task workspace is unavailable");
     if (ledger.state.status === "complete") await ledger.reviseObjective(item.instruction);
     else if (ledger.state.status === "stopped" || ledger.state.status === "needs-input") await ledger.resume(item.instruction);
     else await ledger.recordGuidance(item.instruction);
@@ -924,6 +961,76 @@ const server = Bun.serve({
         throw error;
       }
     }
+    if (url.pathname === "/api/projects" && request.method === "GET") return Response.json({ projects: await projectStore.list() });
+    if (url.pathname === "/api/projects" && request.method === "POST") {
+      const body = await request.json().catch(() => ({})) as { name?: unknown };
+      try { return Response.json({ project: await projectStore.create(body.name as string) }, { status: 201 }); }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
+    const projectMounts = /^\/api\/projects\/([0-9a-f-]{36})\/mounts$/.exec(url.pathname);
+    if (projectMounts && request.method === "POST") {
+      if (active || operationManager.snapshot()) return Response.json({ error: "Wait for the current operation before changing mounts" }, { status: 409 });
+      const body = await request.json().catch(() => ({})) as { path?: unknown };
+      try { return Response.json({ project: await projectStore.mount(projectMounts[1], body.path as string) }); }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
+    const projectUnmount = /^\/api\/projects\/([0-9a-f-]{36})\/mounts\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (projectUnmount && request.method === "DELETE") {
+      if (active || operationManager.snapshot()) return Response.json({ error: "Wait for the current operation before changing mounts" }, { status: 409 });
+      try { return Response.json({ project: await projectStore.unmount(projectUnmount[1], projectUnmount[2]) }); }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
+    const projectTask = /^\/api\/projects\/([0-9a-f-]{36})\/tasks$/.exec(url.pathname);
+    const sandboxCheck = /^\/api\/projects\/([0-9a-f-]{36})\/sandbox\/check$/.exec(url.pathname);
+    if (sandboxCheck && request.method === "POST") {
+      const lease = operationManager.claim("sandbox-check");
+      if (!lease) return Response.json({ error: "Another operation is running" }, { status: 409 });
+      try {
+        const body = await request.json().catch(() => ({})) as { mountId?: unknown };
+        const project = await projectStore.get(sandboxCheck[1]);
+        const mount = project?.mounts.find(item => item.id === body.mountId);
+        if (!project || !mount) return Response.json({ error: "Choose a mounted project folder" }, { status: 400 });
+        const roots = await projectStore.roots(project.id, project.version);
+        operationManager.update(lease, { phase: "验证 Windows 文件与网络边界" });
+        await verifySandbox({ cwd: mount.path, roots, dataRoot, signal: lease.controller.signal });
+        return Response.json({ ok: true });
+      } catch (error) { return Response.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 503 }); }
+      finally { operationManager.release(lease); }
+    }
+    if (projectTask && request.method === "POST") {
+      const lease = operationManager.claim("run");
+      if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
+      let launched = false;
+      try {
+        const body = await request.json().catch(() => ({})) as { mountId?: unknown; objective?: unknown; model?: unknown; permissionMode?: unknown };
+        const project = await projectStore.get(projectTask[1]);
+        if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
+        const mount = project.mounts.find(item => item.id === body.mountId);
+        const objective = typeof body.objective === "string" ? body.objective.trim() : "";
+        if (!mount || !objective || !["ask", "auto", "full"].includes(body.permissionMode as string)) return Response.json({ error: "Mount, objective and permission mode are required" }, { status: 400 });
+        await projectStore.roots(project.id, project.version);
+        if (body.model !== undefined && body.model !== null && !isModelSelector(body.model)) return Response.json({ error: "模型格式不正确" }, { status: 400 });
+        const model = typeof body.model === "string" ? body.model : undefined;
+        if (model && !(await isModelAvailable(model))) return Response.json({ error: "这个模型没有可用的认证" }, { status: 400 });
+        const ledger = await TaskLedger.create(dataRoot, { objective, projectRoot: mount.path, taskType: "code-change", projectId: project.id, projectVersion: project.version,
+          permissionMode: body.permissionMode as "ask" | "auto" | "full", workspaceOrigin: { kind: "direct", checks: await configuredChecks(mount.path) }, modelSelector: model,
+          criteria: [{ id: "change", description: "Source changes are reviewable", kind: "asset" }, { id: "check", description: "Configured project checks pass", kind: "test" }],
+        });
+        const baseline = Object.fromEntries(Object.entries(await snapshotSource(mount.path)).map(([path, value]) => [path, createHash("sha256").update(value).digest("hex")]));
+        await mkdir(directBaselineRoot, { recursive: true });
+        await writeFile(join(directBaselineRoot, `${ledger.state.id}.json`), JSON.stringify(baseline), { flag: "wx" });
+        operationManager.update(lease, { taskId: ledger.state.id });
+        if (lease.controller.signal.aborted) { await ledger.stop(); return Response.json({ error: "Task was cancelled", taskId: ledger.state.id }, { status: 409 }); }
+        const runId = randomUUID();
+        active = { runId, controller: lease.controller, ledger, steeringIds: new Set() };
+        setContext(ledger);
+        operations.set(ledger.state.id, runId);
+        emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+        launched = true;
+        void execute(runId, objective, mount.path, lease.controller, lease, ledger);
+        return Response.json({ taskId: ledger.state.id, runId });
+      } finally { if (!launched) operationManager.release(lease); }
+    }
     if (url.pathname === "/api/workspaces/import" && request.method === "POST") {
       const lease = operationManager.claim("run");
       if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
@@ -1095,7 +1202,7 @@ const server = Bun.serve({
       const ledger = await loadLedger(revise[1]);
       if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
       const projectRoot = resolve(ledger.state.projectRoot);
-      if (!projectRoot.startsWith(productsRoot + sep)) return Response.json({ error: "Task is outside products" }, { status: 403 });
+      if (!await taskRootAllowed(ledger)) return Response.json({ error: "Task workspace is unavailable" }, { status: 403 });
       const body = await request.json().catch(() => ({})) as { brief?: unknown };
       const brief = typeof body.brief === "string" ? body.brief.trim() : "";
       if (!brief || brief === ledger.state.objective) return Response.json({ error: "A changed task objective is required" }, { status: 400 });
@@ -1130,7 +1237,7 @@ const server = Bun.serve({
       if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
       if (ledger.state.status === "complete") return Response.json({ error: "Task is already complete" }, { status: 409 });
       const projectRoot = resolve(ledger.state.projectRoot);
-      if (!projectRoot.startsWith(productsRoot + sep)) return Response.json({ error: "Task is outside products" }, { status: 403 });
+      if (!await taskRootAllowed(ledger)) return Response.json({ error: "Task workspace is unavailable" }, { status: 403 });
       const body = await request.json().catch(() => ({})) as { brief?: unknown };
       const correction = typeof body.brief === "string" && body.brief.trim() ? body.brief.trim() : "Repair the pending acceptance checks while preserving the original objective.";
       if (ledger.state.status === "stopped" || ledger.state.status === "needs-input") await ledger.resume(correction);
@@ -1161,7 +1268,7 @@ const server = Bun.serve({
       operations.set(ledger.state.id, publishRunId);
       if (ledger.state.status === "stopped") return Response.json({ error: "Task is stopped" }, { status: 409 });
       const projectRoot = resolve(ledger.state.projectRoot);
-      if (!projectRoot.startsWith(productsRoot + sep)) return Response.json({ error: "Task is outside products" }, { status: 403 });
+      if (!await taskRootAllowed(ledger)) return Response.json({ error: "Task workspace is unavailable" }, { status: 403 });
       const currentPreview = ledger.state.preview;
       if (currentPreview && previews.has(currentPreview.id) && (await fingerprintSource(projectRoot)) === currentPreview.revision) {
         return Response.json(currentPreview);

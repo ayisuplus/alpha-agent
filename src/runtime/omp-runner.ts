@@ -11,6 +11,10 @@ import { guardMCPTools, MCPPermissionStore } from "./mcp-permissions";
 import { createResearchSourceTool } from "./research-source";
 import { createDocumentTool } from "./document-tool";
 import { assertFileToolGuardLoaded, fileToolGuard } from "./file-tool-guard";
+import { createDirectFileTools } from "./direct-file-tools";
+import { independentCommandReviewer } from "./auto-reviewer";
+import { ProjectStore } from "./projects";
+import { verifySandbox } from "./sandbox-exec";
 import { createWorkOrderTool } from "./work-order-tool";
 import { AgentPresetStore, verifyPresetSnapshot, type AgentPresetSnapshot } from "./agent-presets";
 import { loadBuiltinPlugins } from "../plugins";
@@ -113,9 +117,10 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   const model = available.find(item => `${item.provider}/${item.id}` === selector);
   if (!model) throw new Error(`Authenticated model is unavailable: ${selector}`);
   const pluginStore = new SkillPluginStore(dataRoot);
-  const agentPresets = options.workOrder ? [] : await new AgentPresetStore(dataRoot).enabled();
-  const skills = options.workOrder ? [] : await pluginStore.loadSkills();
-  const hooks = options.workOrder ? [] : await pluginStore.loadHooks();
+  const direct = !!options.existingLedger?.state.projectId;
+  const agentPresets = options.workOrder || direct ? [] : await new AgentPresetStore(dataRoot).enabled();
+  const skills = options.workOrder || direct ? [] : await pluginStore.loadSkills();
+  const hooks = options.workOrder || direct ? [] : await pluginStore.loadHooks();
   const ledger = options.existingLedger ?? await TaskLedger.create(dataRoot, {
     objective: options.objective,
     projectRoot,
@@ -163,11 +168,28 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   if (!Number.isInteger(maxToolCalls) || maxToolCalls < 1 || !Number.isInteger(wallTimeMs) || wallTimeMs < 1_000) throw new Error("Invalid task budget");
   await options.onLedger?.(ledger);
 
+  const permission = direct && ledger.state.projectId
+    ? { mode: ledger.state.permissionMode ?? "ask", roots: await new ProjectStore(dataRoot).roots(ledger.state.projectId, ledger.state.projectVersion ?? 0) }
+    : undefined;
+  if (permission && permission.mode !== "full") {
+    try { await verifySandbox({ cwd: projectRoot, roots: permission.roots, dataRoot, signal: options.signal }); }
+    catch (error) {
+      if (options.signal?.aborted) throw error;
+      const reason = `Windows sandbox is unavailable: ${error instanceof Error ? error.message : String(error)}`;
+      await ledger.needInput(reason, "windows-sandbox");
+      throw new NeedsInputError(reason);
+    }
+  }
+  const directFileTools = permission && ledger.state.projectId
+    ? await createDirectFileTools({ taskId: ledger.state.id, projectId: ledger.state.projectId, projectVersion: ledger.state.projectVersion ?? 0, projectRoot, dataRoot, mode: permission.mode, onNeedsInput: reason => pauseForInput(reason, "approval") })
+    : [];
+
   const plugins = options.workOrder
     ? { tools: [], instructions: [] }
+    : direct ? { tools: [], instructions: [] }
     : loadBuiltinPlugins({ projectRoot, dataRoot, url: options.comfyUrl, enabled: options.plugins, generation: options.generation });
   let mcp: Awaited<ReturnType<SkillPluginStore["loadMCP"]>> | null = null;
-  try { if (!options.workOrder) mcp = await pluginStore.loadMCP(projectRoot); }
+  try { if (!options.workOrder && !direct) mcp = await pluginStore.loadMCP(projectRoot); }
   catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     await ledger.needInput(`已指定的 MCP 工具无法加载：${reason}。请修复服务或说明如何继续。`, "MCP");
@@ -214,8 +236,9 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
         "For web research, use alpha_source for each cited public page; the tool archives URL, access date and source hash. If a specified source is unavailable, stop and ask the user. Do not silently replace it.",
         "Use alpha_document to create PDF, DOCX or XLSX when requested. Write alpha-deliverable.json with {\"outputs\":[{\"path\":\"outputs/name.ext\",\"sourceIds\":[\"archived-source-id\"]}]}. Research outputs must cite archived source IDs; file-work outputs must be PDF, DOCX or XLSX. Report what remains unverified.",
       ] : codeTask ? [
-        "This is an imported code-change task. Work only in the managed project copy; the original source is applied separately after user review.",
-        `Configured checks: ${(ledger.state.workspaceOrigin?.checks ?? []).map(item => item.name).join(", ") || "none"}. Use alpha_check to run these exact checks. Use alpha_command with purpose 'check' to request a missing test command, or 'other' for other work; both run only after exact-argv workbench approval.`,
+        direct ? "This task edits the selected project folder directly. Mounted folders are the writable roots; all changes are immediately visible there." : "This is an imported code-change task. Work only in the managed project copy; the original source is applied separately after user review.",
+        `Configured checks: ${(ledger.state.workspaceOrigin?.checks ?? []).map(item => item.name).join(", ") || "none"}. Use alpha_check to run these exact checks. Use alpha_command with purpose 'check' to request a missing test command, or 'other' for other work.`,
+        ...(direct ? [`This task's permission mode is ${permission?.mode}. Unconfigured commands and protected file actions follow the task's approval policy. Set alpha_command.network=true only when the command really needs network; it requires user approval in restricted modes. Do not try another path or service after denial.`] : ["Unconfigured commands require exact-argv workbench approval."]),
         "Technical completion requires a reviewable source change and passing configured checks. A web preview is not required for this task.",
       ] : ["Use alpha_build to build the assigned product. Alpha's runtime then publishes a local preview and runs the browser verification plan. Do not start servers, manage ports or processes, or run browser checks through the terminal. Report what is actually verified and what remains unverified."]),
       "Never claim the product is complete solely because code was written or a command exited successfully.",
@@ -224,7 +247,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       ...(mcpTools.length ? ["Third-party MCP tools are available only under their listed mcp__ names. Use them for the user's task; do not assume an unavailable service is running."] : []),
       ...(hooks.length ? ["Third-party Pi hooks may include tool guidance for other hosts. In Alpha, use only the tools listed in this session; do not invent bash, Skill, or subagent calls."] : []),
       `Available subagent role presets (choose presetId for each work order; omit it for general): ${agentPresets.map(item => `${item.id}=${item.name}: ${item.description}`).join(" | ")}. Choose a specialist only when its work matches the order.`,
-      ...(!generalTask ? ["If two substantial source changes are independent, you may use alpha_delegate with exactly two work orders, a presetId for each specialist, and non-overlapping owned paths and resources. You remain responsible for the integrated build and alpha-verification.json; re-read merged files before editing them."] : []),
+      ...(!generalTask && !direct ? ["If two substantial source changes are independent, you may use alpha_delegate with exactly two work orders, a presetId for each specialist, and non-overlapping owned paths and resources. You remain responsible for the integrated build and alpha-verification.json; re-read merged files before editing them."] : []),
       ...(ledger.state.contractVersion && ledger.state.contractVersion > 1 ? ["The user revised this task. Preserve earlier requirements unless explicitly superseded, and update alpha-verification.json so the browser checks the revised behavior, even if the existing app still builds."] : []),
       ...(!codeTask && !generalTask ? ["For a web product, write alpha-verification.json in the project root with a repeatable core user path. Use {\"steps\":[...]} with flat step objects: fill/select {action,selector,value}, click {action,selector}, expectText/expectAbsentText {action,text,selector?}, expectValue {action,selector,value} for an input/textarea/select value, video {action,selector} for a decoded video frame check, viewport {action,width,height}, contrast {action,selector,minRatio:4.5}, wait {action,ms<=3000}, or reload {action}. No comment-only steps or unsupported fields. Use {{nonce}} only in free-text fields, not numeric/date/select values. Include a click, two outcome assertions, a viewport at most 400px wide, a contrast check, a video step when video is required, and reload when persistence is required. Use fill/select only when the product has those controls. The runtime will execute the plan against the deployed preview; never mark it passed yourself."] : []),
       options.browser ? "The alpha_browser tool controls the visible local preview. Use it to check real user paths and inspect console/network failures." : "No visible browser is connected; report browser verification as pending.",
@@ -232,7 +255,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     toolNames: [
       "read", "grep", "edit", "write", ...(generalTask ? ["alpha_document", ...(ledger.state.taskType === "research" ? ["alpha_source"] : [])] : [codeTask ? "alpha_check" : "alpha_build"]),
       ...(codeTask ? ["alpha_command"] : []),
-      ...(!options.workOrder && !generalTask ? ["alpha_delegate"] : []),
+      ...(!options.workOrder && !generalTask && !direct ? ["alpha_delegate"] : []),
       ...plugins.tools.map(tool => tool.name),
       ...mcpTools.map(tool => tool.name),
       ...(options.browser ? ["alpha_browser"] : []),
@@ -240,16 +263,19 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     restrictToolNames: true,
     allowRestrictedCustomTools: true,
     customTools: [
-      ...(generalTask ? [createDocumentTool(projectRoot, dataRoot, ledger.state.id), ...(ledger.state.taskType === "research" ? [createResearchSourceTool(dataRoot, ledger.state.id, reason => pauseForInput(reason, "web-source"))] : [])] : [codeTask ? createCodeCheckTool(projectRoot, dataRoot, ledger.state.id, ledger.state.workspaceOrigin?.checks ?? []) : createBuildTool(projectRoot)]),
-      ...(codeTask ? [createCommandTool(commandApprovalStore(dataRoot), ledger.state.id, projectRoot)] : []),
-      ...(!options.workOrder && !generalTask ? [createWorkOrderTool(ledger, dataRoot, options.signal, selector, agentPresets, value => options.onEvent?.({ type: "status", value }))] : []),
+      ...directFileTools,
+      ...(generalTask ? [createDocumentTool(projectRoot, dataRoot, ledger.state.id), ...(ledger.state.taskType === "research" ? [createResearchSourceTool(dataRoot, ledger.state.id, reason => pauseForInput(reason, "web-source"))] : [])] : [codeTask ? createCodeCheckTool(projectRoot, dataRoot, ledger.state.id, ledger.state.workspaceOrigin?.checks ?? [], permission, reason => pauseForInput(reason, "windows-sandbox")) : createBuildTool(projectRoot)]),
+      ...(codeTask ? [createCommandTool(commandApprovalStore(dataRoot), ledger.state.id, projectRoot, permission,
+        permission?.mode === "auto" ? independentCommandReviewer(dataRoot, selector) : undefined,
+        reason => pauseForInput(reason, "approval"))] : []),
+      ...(!options.workOrder && !generalTask && !direct ? [createWorkOrderTool(ledger, dataRoot, options.signal, selector, agentPresets, value => options.onEvent?.({ type: "status", value }))] : []),
       ...plugins.tools,
       ...mcpTools,
       ...(options.browser ? [createBrowserTool(() => options.browserAccess?.() === false ? null : options.browser ?? null, dataRoot, options.browserUrl)] : []),
     ],
     autoApprove: true,
     disableExtensionDiscovery: true,
-    preloadedPreparedExtensions: [fileToolGuard(projectRoot, options.workOrder, generalTask ? ["inputs"] : []), ...hooks],
+    preloadedPreparedExtensions: [fileToolGuard(projectRoot, options.workOrder, generalTask ? ["inputs"] : [], direct), ...hooks],
     enableMCP: false,
     enableLsp: false,
     skipPythonPreflight: true,
@@ -264,7 +290,12 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     await ledger.stop();
     throw error;
   }
-  try { assertFileToolGuardLoaded(created.extensionsResult.extensions); }
+  try {
+    assertFileToolGuardLoaded(created.extensionsResult.extensions);
+    if (direct && ["read", "grep", "edit", "write"].some(name => !created.session.agent.state.tools.find(tool => tool.name === name)?.description.startsWith("Alpha sandbox proxy."))) {
+      throw new Error("A native file tool bypassed the sandbox proxy; refusing to start the model");
+    }
+  }
   catch (error) {
     await created.session.dispose();
     await mcp?.manager.disconnectAll();

@@ -17,7 +17,9 @@ test("an exact command waits for approval, runs once, and keeps its receipt", as
     const done = await store.execute(taskId, root, argv, "check");
     expect(done.status).toBe("complete");
     expect(await readFile(done.result!.logPath, "utf8")).toContain("approved");
-    expect((await store.execute(taskId, root, argv, "check")).result?.logPath).toBe(done.result?.logPath);
+    const repeated = await store.execute(taskId, root, argv, "check");
+    expect(repeated.status).toBe("pending");
+    expect(repeated.id).not.toBe(done.id);
     const denied = await store.request(taskId, root, [process.execPath, "-e", "console.log('other')"], "other");
     expect((await store.decide(taskId, denied.id, false)).status).toBe("denied");
     expect((await store.execute(taskId, root, denied.argv, "other")).status).toBe("denied");

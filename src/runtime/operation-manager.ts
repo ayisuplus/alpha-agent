@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-export type OperationKind = "run" | "publish" | "verify" | "cleanup" | "apply";
+export type OperationKind = "run" | "publish" | "verify" | "cleanup" | "apply" | "sandbox-check";
 
 export interface OperationSnapshot {
   id: string;

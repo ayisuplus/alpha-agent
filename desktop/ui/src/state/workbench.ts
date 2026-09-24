@@ -520,6 +520,19 @@ export async function importTask(sourcePath: string, objective: string, model: s
   } finally { store.set({ pending: null }); }
 }
 
+export async function startProjectTask(projectId: string, mountId: string, objective: string, permissionMode: import("../api/types").PermissionMode, model: string | null = null): Promise<void> {
+  const text = objective.trim();
+  if (!projectId || !mountId || !text || store.get().pending) return;
+  store.set({ pending: "start", starting: { brief: text, error: null } });
+  try {
+    const { taskId, runId } = await api.startProjectTask(projectId, mountId, text, permissionMode, model);
+    store.set({ activeRunId: runId, activeTaskId: taskId });
+    await Promise.all([refreshTasks(), openTask(taskId)]);
+  } catch (error) {
+    store.set({ starting: { brief: text, error: messageOf(error) } });
+  } finally { store.set({ pending: null }); }
+}
+
 export async function startWorkflow(taskType: "research" | "file-work", objective: string, files: File[], model: string | null = null): Promise<void> {
   const text = objective.trim();
   if (!text || store.get().pending) return;

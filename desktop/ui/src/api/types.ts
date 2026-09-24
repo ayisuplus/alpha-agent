@@ -1,12 +1,17 @@
 export type TaskStatus = "active" | "stopped" | "complete" | "needs-input";
 export type ControlHolder = "alpha" | "user";
+export type PermissionMode = "ask" | "auto" | "full";
+export interface ProjectRecord { id: string; name: string; version: number; mounts: Array<{ id: string; path: string }>; createdAt: string; updatedAt: string }
 export type GuidanceStatus = "recorded" | "delivered" | "processed";
 export interface TaskMeta { title?: string; pinned?: boolean; archived?: boolean }
 
 export interface TaskSummary {
   id: string;
+  projectId?: string | null;
+  projectVersion?: number | null;
+  permissionMode?: PermissionMode | null;
   taskType?: "web-product" | "code-change" | "research" | "file-work";
-  workspaceOrigin?: { kind: "generated" | "git" | "copy"; sourcePath?: string; initialRevision?: string };
+  workspaceOrigin?: { kind: "generated" | "git" | "copy" | "direct"; sourcePath?: string; initialRevision?: string };
   objective: string;
   originalObjective?: string;
   contractVersion: number;
@@ -48,8 +53,14 @@ export interface CommandApproval {
   argv: string[];
   purpose: "check" | "other";
   cwd: string;
+  network?: boolean;
+  scriptCommand?: string;
   status: "pending" | "approved" | "denied" | "running" | "complete" | "uncertain";
   createdAt: string;
+  reason?: string;
+  risk?: "normal" | "high";
+  review?: { reviewer: "user" | "independent-agent" | "policy"; decision: "approved" | "denied" | "escalated"; reason: string; at: string };
+  exactAction?: { tool: string; targets: string[]; arguments: Record<string, unknown>; digest: string };
   result?: { exitCode: number; logPath: string; revision: string };
 }
 export interface QueueItem { id: string; taskId: string; instruction: string; status: "pending" | "running" | "complete" | "failed"; createdAt: string; scheduledFor?: string; missedCount?: number; result?: string }
@@ -148,7 +159,7 @@ export interface TaskList {
 
 export interface OperationSnapshot {
   id: string;
-  kind: "run" | "publish" | "verify" | "cleanup" | "apply";
+  kind: "run" | "publish" | "verify" | "cleanup" | "apply" | "sandbox-check";
   taskId: string | null;
   phase: string;
   browserTaskId: string | null;
