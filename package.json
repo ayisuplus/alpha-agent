@@ -1,0 +1,33 @@
+{
+  "name": "alpha-agent",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "alpha": "bun run src/cli.ts",
+    "build:desktop-ui": "vite build",
+    "desktop": "bun run scripts/start-desktop.ts",
+    "package:portable": "bun run scripts/package-portable.ts",
+    "probe:desktop": "bun run scripts/probe-desktop.ts",
+    "probe:omp": "bun run scripts/probe-omp.ts",
+    "probe:model": "bun run scripts/probe-model.ts",
+    "probe:agent": "bun run scripts/probe-agent.ts",
+    "probe:browser": "bun run scripts/probe-browser.ts",
+    "probe:preview-browser": "bun run scripts/probe-preview-browser.ts",
+    "check": "tsc --noEmit",
+    "test": "bun test ./test/task-ledger.test.ts ./test/local-preview.test.ts ./test/comfy-client.test.ts ./test/browser-verifier.test.ts ./test/work-orders.test.ts ./test/workspace-preflight.test.ts"
+  },
+  "dependencies": {
+    "@oh-my-pi/omptype": "18.2.11",
+    "@oh-my-pi/pi-coding-agent": "18.2.11",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "electron": "41.2.2",
+    "typescript": "5.9.3",
+    "vite": "8.3.0"
+  }
+}

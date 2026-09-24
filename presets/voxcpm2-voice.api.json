@@ -1,0 +1,28 @@
+{
+  "24": {
+    "class_type": "VoxCPM_TTS",
+    "inputs": {
+      "model_name": "VoxCPM2",
+      "lora_name": "None",
+      "text": "你好，欢迎来到声音创作工作室。今天，让我们用自然流畅的中文，把文字变成有温度的声音。",
+      "voice_design": "年轻成年女性，温暖清晰的普通话，语速适中，语气亲切自然。",
+      "cfg": 2,
+      "steps": 10,
+      "normalize_text": false,
+      "seed": 20260917,
+      "force_offload": true,
+      "device": "cuda",
+      "dtype": "bf16"
+    }
+  },
+  "1": {
+    "class_type": "SaveAudio",
+    "inputs": {
+      "audio": [
+        "24",
+        0
+      ],
+      "filename_prefix": "Alpha/voice"
+    }
+  }
+}

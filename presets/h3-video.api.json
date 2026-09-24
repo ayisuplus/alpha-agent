@@ -1,0 +1,599 @@
+{
+  "1": {
+    "inputs": {
+      "unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "H3 Ref2VA 模型 · INT8 ConvRot"
+    }
+  },
+  "2": {
+    "inputs": {
+      "lora_name": "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
+      "strength_model": 1,
+      "model": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Ref2VA 8 步 LoRA · 1.0"
+    }
+  },
+  "3": {
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3MemoryEfficientSageAttentionPatch",
+    "_meta": {
+      "title": "H3 SageAttention"
+    }
+  },
+  "4": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "采样器"
+    }
+  },
+  "5": {
+    "inputs": {
+      "clip_name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+      "type": "minimax",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "H3 提示词编码器"
+    }
+  },
+  "6": {
+    "inputs": {
+      "model": [
+        "43",
+        0
+      ],
+      "conditioning": [
+        "16",
+        0
+      ]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "H3 引导"
+    }
+  },
+  "8": {
+    "inputs": {
+      "seed": 2026091708
+    },
+    "class_type": "Seed (rgthree)",
+    "_meta": {
+      "title": "随机种子"
+    }
+  },
+  "9": {
+    "inputs": {
+      "noise": [
+        "10",
+        0
+      ],
+      "guider": [
+        "6",
+        0
+      ],
+      "sampler": [
+        "4",
+        0
+      ],
+      "sigmas": [
+        "13",
+        0
+      ],
+      "latent_image": [
+        "16",
+        1
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "H3 视频与声音生成"
+    }
+  },
+  "10": {
+    "inputs": {
+      "noise_seed": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "采样噪声"
+    }
+  },
+  "11": {
+    "inputs": {
+      "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "H3 音频 VAE"
+    }
+  },
+  "12": {
+    "inputs": {
+      "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "H3 视频 VAE"
+    }
+  },
+  "13": {
+    "inputs": {
+      "scheduler": "simple",
+      "steps": 8,
+      "denoise": 1,
+      "model": [
+        "43",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "8 步调度 · 跟随视频 shift 6"
+    }
+  },
+  "14": {
+    "inputs": {
+      "image": "H3_DLSS5_OldTown.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "参考图 1 · Picture 1"
+    }
+  },
+  "17": {
+    "inputs": {
+      "aspect_ratio": "16:9 (Widescreen)",
+      "megapixels": 1,
+      "multiple": 32
+    },
+    "class_type": "ResolutionSelector",
+    "_meta": {
+      "title": "基础分辨率 · 超分前"
+    }
+  },
+  "20": {
+    "inputs": {
+      "samples": [
+        "9",
+        0
+      ],
+      "vae": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "VAEDecodeAudio",
+    "_meta": {
+      "title": "H3 声音解码"
+    }
+  },
+  "21": {
+    "inputs": {
+      "samples": [
+        "9",
+        0
+      ],
+      "vae": [
+        "12",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "H3 视频解码"
+    }
+  },
+  "24": {
+    "inputs": {
+      "value": 5
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "成片可用秒数（另生成首尾各至少12帧）"
+    }
+  },
+  "16": {
+    "inputs": {
+      "ref_image_size": "match",
+      "clip": [
+        "5",
+        0
+      ],
+      "prompt": "<Picture 1> is the sole reference. Make a short coherent shot that preserves its subject and composition. No text or scene cuts.",
+      "width": [
+        "17",
+        0
+      ],
+      "height": [
+        "17",
+        1
+      ],
+      "length": [
+        "25",
+        1
+      ],
+      "vae": [
+        "12",
+        0
+      ],
+      "audio_vae": [
+        "11",
+        0
+      ],
+      "ref_images.ref_image_0": [
+        "14",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3ReferenceToVideo",
+    "_meta": {
+      "title": "H3 全能参考 · 图片 / 视频 / 音频"
+    }
+  },
+  "25": {
+    "inputs": {
+      "expression": "max(5, round(a * 24) + 24) + (5 - (max(5, round(a * 24) + 24) % 17)) % 17",
+      "values.a": [
+        "24",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "秒数转 H3 帧数 · 自动对齐 17k+5"
+    }
+  },
+  "30": {
+    "inputs": {
+      "model": "FlashVSR-v1.1",
+      "mode": "tiny",
+      "precision": "bf16",
+      "device": "auto"
+    },
+    "class_type": "TEFlashVSRModelLoader",
+    "_meta": {
+      "title": "FlashVSR v1.1 · tiny / bf16"
+    }
+  },
+  "31": {
+    "inputs": {
+      "quality_profile": "balanced",
+      "intensity": 1,
+      "spatial_strategy": "auto",
+      "memory_policy": "staged",
+      "attention_budget": 2,
+      "kv_retention": 3,
+      "local_radius": 11,
+      "max_tile_edge": 256,
+      "blend_overlap": 24,
+      "preprocess_batch": 4,
+      "attention_backend": "sparse_sage2"
+    },
+    "class_type": "TEFlashVSRTuning",
+    "_meta": {
+      "title": "超分设置 · 分阶段释放显存"
+    }
+  },
+  "32": {
+    "inputs": {
+      "scale": 2,
+      "color_fix": true,
+      "seed": 6,
+      "model": [
+        "30",
+        0
+      ],
+      "frames": [
+        "35",
+        0
+      ],
+      "settings": [
+        "31",
+        0
+      ]
+    },
+    "class_type": "TEFlashVSRRestore",
+    "_meta": {
+      "title": "FlashVSR · 2 倍超分"
+    }
+  },
+  "33": {
+    "inputs": {
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "Alpha/video-final",
+      "format": "video/nvenc_h264-mp4",
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "41",
+        0
+      ],
+      "audio": [
+        "40",
+        0
+      ],
+      "pix_fmt": "yuv420p",
+      "bitrate": 20,
+      "megabit": true,
+      "save_metadata": false
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "交付候选 · 首尾裁切后 DLSS（须检查原生结构）"
+    }
+  },
+  "34": {
+    "inputs": {
+      "empty_cache": true,
+      "gc_collect": true,
+      "unload_all_models": true,
+      "any_input": [
+        "20",
+        0
+      ],
+      "image_pass": [
+        "21",
+        0
+      ]
+    },
+    "class_type": "VRAM_Debug",
+    "_meta": {
+      "title": "解码结束后卸载 H3 · 为超分释放显存"
+    }
+  },
+  "35": {
+    "inputs": {
+      "image": [
+        "34",
+        1
+      ]
+    },
+    "class_type": "GetImageSizeAndCount",
+    "_meta": {
+      "title": "记录原始尺寸与帧数"
+    }
+  },
+  "41": {
+    "inputs": {
+      "image": [
+        "53",
+        0
+      ]
+    },
+    "class_type": "GetImageSizeAndCount",
+    "_meta": {
+      "title": "最终尺寸与实际帧数"
+    }
+  },
+  "39": {
+    "inputs": {
+      "expression": "a / 24",
+      "values.a": [
+        "41",
+        3
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "实际视频时长 · 帧数 / 24"
+    }
+  },
+  "40": {
+    "inputs": {
+      "start_index": 0.5,
+      "audio": [
+        "34",
+        0
+      ],
+      "duration": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "TrimAudioDuration",
+    "_meta": {
+      "title": "声音按最终画面长度对齐"
+    }
+  },
+  "43": {
+    "inputs": {
+      "shift_video": 6,
+      "shift_audio": 3,
+      "model": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "MiniMaxH3SigmaShift",
+    "_meta": {
+      "title": "8 步 768p · 视频 / 音频 shift"
+    }
+  },
+  "44": {
+    "inputs": {
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "Alpha/video-native",
+      "format": "video/nvenc_h264-mp4",
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "56",
+        0
+      ],
+      "audio": [
+        "40",
+        0
+      ],
+      "pix_fmt": "yuv420p",
+      "bitrate": 20,
+      "megabit": true,
+      "save_metadata": false
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "H3 八步原片 · 保留对照"
+    }
+  },
+  "46": {
+    "inputs": {
+      "style": "natural",
+      "preset": 3,
+      "intensity": 1,
+      "tone": 1,
+      "structure": 1,
+      "skin": -1,
+      "auto_mask": false,
+      "batch_mode": "temporal",
+      "gpu_index": 0,
+      "channel_order": "auto",
+      "image": [
+        "32",
+        0
+      ]
+    },
+    "class_type": "DLSS5NeuralRendering",
+    "_meta": {
+      "title": "默认 · DLSS 5 后置时序增强（After）"
+    }
+  },
+  "55": {
+    "inputs": {
+      "expression": "max(1, round(a * 24))",
+      "values.a": [
+        "24",
+        0
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "交付帧数"
+    }
+  },
+  "52": {
+    "inputs": {
+      "batch_index": 12,
+      "image": [
+        "32",
+        0
+      ],
+      "length": [
+        "55",
+        1
+      ]
+    },
+    "class_type": "ImageFromBatch",
+    "_meta": {
+      "title": "FlashVSR 保留中间有效帧"
+    }
+  },
+  "53": {
+    "inputs": {
+      "batch_index": 12,
+      "image": [
+        "46",
+        0
+      ],
+      "length": [
+        "55",
+        1
+      ]
+    },
+    "class_type": "ImageFromBatch",
+    "_meta": {
+      "title": "DLSS5 保留中间有效帧"
+    }
+  },
+  "56": {
+    "inputs": {
+      "batch_index": 12,
+      "image": [
+        "35",
+        0
+      ],
+      "length": [
+        "55",
+        1
+      ]
+    },
+    "class_type": "ImageFromBatch",
+    "_meta": {
+      "title": "原生 保留中间有效帧"
+    }
+  },
+  "54": {
+    "inputs": {
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "Alpha/video-flashvsr",
+      "format": "video/nvenc_h264-mp4",
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "52",
+        0
+      ],
+      "audio": [
+        "40",
+        0
+      ],
+      "pix_fmt": "yuv420p",
+      "bitrate": 20,
+      "megabit": true,
+      "save_metadata": false
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "FlashVSR_only_handles"
+    }
+  },
+  "57": {
+    "inputs": {
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "Alpha/video-native-full",
+      "format": "video/nvenc_h264-mp4",
+      "pingpong": false,
+      "save_output": true,
+      "images": [
+        "35",
+        0
+      ],
+      "audio": [
+        "34",
+        0
+      ],
+      "pix_fmt": "yuv420p",
+      "bitrate": 20,
+      "megabit": true,
+      "save_metadata": false
+    },
+    "class_type": "VHS_VideoCombine",
+    "_meta": {
+      "title": "native_full_diagnostic"
+    }
+  }
+}

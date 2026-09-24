@@ -1,0 +1,6 @@
+[submodule "reference/oh-my-pi"]
+	path = reference/oh-my-pi
+	url = https://github.com/can1357/oh-my-pi.git
+[submodule "reference/Tianshu-harness"]
+	path = reference/Tianshu-harness
+	url = https://github.com/huiliyi37/Tianshu-harness.git

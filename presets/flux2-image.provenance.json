@@ -1,0 +1,6 @@
+{
+  "source": "G:\\comfyui\\ComfyUI\\ComfyUI\\user\\default\\workflows\\flux2文生图.json",
+  "sourceSha256": "983459de137242169f61683f1020632172d34c5146cd1a7d00f56279126697cd",
+  "transform": "Convert UI to API; bypass personal LoRA and cleanup nodes; retain saved-image dependency graph; neutralize prompt; use square Flux2 size.",
+  "nodeCount": 10
+}

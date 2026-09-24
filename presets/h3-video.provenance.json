@@ -1,0 +1,6 @@
+{
+  "source": "G:\\comfyui\\ComfyUI\\ComfyUI\\user\\default\\workflows\\默认视频-Minimax-H3全能参考-8步-FlashVSR.json",
+  "sourceSha256": "f36b8ce54010e3d756567185a390610b41129f93d085304890a8ef069969a036",
+  "transform": "Bypass external prompt enhancer and remove unreachable nodes; retain approved H3 and FlashVSR chain and four diagnostic outputs.",
+  "nodeCount": 37
+}

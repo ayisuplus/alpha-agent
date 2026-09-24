@@ -1,0 +1,5 @@
+{
+  "source": "G:\\comfyui\\ComfyUI\\ComfyUI\\user\\default\\workflows\\VoxCPM2\\01-VoxCPM2-中文配音与声音设计.json",
+  "sourceSha256": "dfde392bd4f1ab52048bf32359c2968d0925b53c4ab01e232e9112a6b3bda250",
+  "transform": "Map the saved UI workflow's duplicate model widget to the current VoxCPM_TTS API input schema; preserve audio settings; omit documentation node."
+}
