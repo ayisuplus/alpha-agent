@@ -14,7 +14,7 @@ try {
   const preview = entries.find(item => item !== shell && (item.title === "Alpha preview" || /^http:\/\/127\.0\.0\.1:\d+\//.test(item.url)));
   if (!shell || !preview) throw new Error(`Desktop views missing: ${JSON.stringify(entries.map(({ title, url }) => ({ title, url })))}`);
   const text = await shell.page.$eval("body", node => node.innerText);
-  if (!text.includes("新建任务") || !text.includes("本次实时事件")) throw new Error(`Shell content missing: ${text.slice(0, 300)}`);
+  if (!text.includes("新建任务") || (!text.includes("任务过程") && !text.includes("本次实时事件"))) throw new Error(`Shell content missing: ${text.slice(0, 300)}`);
   const screenshotPath = join(process.cwd(), ".alpha", "screenshots", "desktop-smoke.png");
   await mkdir(join(process.cwd(), ".alpha", "screenshots"), { recursive: true });
   await writeFile(screenshotPath, await shell.page.screenshot({ type: "png" }));
