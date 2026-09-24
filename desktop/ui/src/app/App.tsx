@@ -1,33 +1,23 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent } from "react";
 import { X } from "lucide-react";
+import type { Settings } from "../api/types";
 import { PreviewPane } from "../components/PreviewPane";
 import { Sidebar } from "../components/Sidebar";
+import { matchShortcut, stepScale } from "../state/shortcuts";
 import { useStore } from "../state/store";
-import { dismissNotice, newTask, openDetail, startWorkbench, store } from "../state/workbench";
+import { closePanel, dismissNotice, newTask, notify, openDetail, openSettings, previewLocked, startWorkbench, store, updateSettings } from "../state/workbench";
 import { Thread } from "./Thread";
 import "./App.css";
 
-const LAYOUT_KEY = "alpha.layout";
 const SIDEBAR = 256;
 const RAIL = 56;
+const PREVIEW_RAIL = 44;
 const SPLITTER = 6;
 const THREAD_MIN = 420;
 const PREVIEW_MIN = 360;
+const NARROW = 1200;
 const DEFAULT_RATIO = 0.46;
-
-interface Layout { sidebarCollapsed: boolean; previewRatio: number }
-
-function readLayout(): Layout {
-  try {
-    const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? "{}") as Partial<Layout>;
-    return {
-      sidebarCollapsed: saved.sidebarCollapsed === true,
-      previewRatio: typeof saved.previewRatio === "number" && saved.previewRatio > 0.15 && saved.previewRatio < 0.85 ? saved.previewRatio : DEFAULT_RATIO,
-    };
-  } catch {
-    return { sidebarCollapsed: false, previewRatio: DEFAULT_RATIO };
-  }
-}
+const FALLBACK_UI: Settings["ui"] = { scale: 1, fontSize: "md", sidebarCollapsed: false, previewCollapsed: false, previewRatio: DEFAULT_RATIO };
 
 function Toast() {
   const notice = useStore(store, state => state.notice);
@@ -44,64 +34,113 @@ function Toast() {
 }
 
 export function App() {
-  const [layout, setLayout] = useState(readLayout);
-  const [viewport, setViewport] = useState(() => window.innerWidth);
+  const settings = useStore(store, state => state.settings);
+  const loaded = useStore(store, state => state.loaded);
+  const locked = useStore(store, previewLocked);
+  const [innerWidth, setInnerWidth] = useState(() => window.innerWidth);
+  // On a narrow window the task list folds away; expanding it by hand holds for this session only.
+  const [expandedWhileNarrow, setExpandedWhileNarrow] = useState(false);
   const dragging = useRef(false);
 
   useEffect(() => startWorkbench(), []);
 
   useEffect(() => {
-    const onResize = () => setViewport(window.innerWidth);
+    const onResize = () => setInnerWidth(window.innerWidth);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  useEffect(() => {
-    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch { /* Layout memory is optional. */ }
-  }, [layout]);
+  const ui = settings?.ui ?? FALLBACK_UI;
+  const scale = ui.scale;
+  const viewport = innerWidth / scale;
+  const narrow = viewport < NARROW;
+  const sidebarCollapsed = ui.sidebarCollapsed || (narrow && !expandedWhileNarrow);
+  const sidebarWidth = sidebarCollapsed ? RAIL : SIDEBAR;
+  const available = Math.max(0, viewport - sidebarWidth - SPLITTER);
+  const previewWidth = Math.min(Math.max(Math.round(available * ui.previewRatio), PREVIEW_MIN), Math.max(PREVIEW_MIN, available - THREAD_MIN));
+
+  const toggleSidebar = () => {
+    if (sidebarCollapsed) {
+      if (ui.sidebarCollapsed) void updateSettings({ ui: { sidebarCollapsed: false } }, { debounce: true });
+      if (narrow) setExpandedWhileNarrow(true);
+    } else if (narrow && !ui.sidebarCollapsed) setExpandedWhileNarrow(false);
+    else void updateSettings({ ui: { sidebarCollapsed: true } }, { debounce: true });
+  };
+
+  const togglePreview = () => {
+    if (!ui.previewCollapsed && locked) {
+      notify("浏览器正在使用预览，操作结束后才能收起", "info");
+      return;
+    }
+    void updateSettings({ ui: { previewCollapsed: !ui.previewCollapsed } }, { debounce: true });
+  };
+
+  const setScale = (next: number) => {
+    if (next !== scale) void updateSettings({ ui: { scale: next } }, { debounce: true });
+  };
+
+  // Handlers change every render; the key listener reads the latest ones through a ref.
+  const actions = useRef({ toggleSidebar, togglePreview, setScale, scale });
+  actions.current = { toggleSidebar, togglePreview, setScale, scale };
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "n") {
-        event.preventDefault();
-        newTask();
-      } else if (event.key === "Escape" && store.get().detail) {
-        openDetail(null);
+      const id = matchShortcut(event);
+      const current = actions.current;
+      if (id) event.preventDefault();
+      switch (id) {
+        case "new-task": newTask(); break;
+        case "settings": openSettings(); break;
+        case "shortcuts": openSettings("shortcuts"); break;
+        case "toggle-sidebar": current.toggleSidebar(); break;
+        case "toggle-preview": current.togglePreview(); break;
+        case "zoom-in": current.setScale(stepScale(current.scale, 1)); break;
+        case "zoom-out": current.setScale(stepScale(current.scale, -1)); break;
+        case "zoom-reset": current.setScale(1); break;
+        default:
+          if (event.key === "Escape") {
+            const state = store.get();
+            if (state.detail) openDetail(null);
+            else if (state.panel) closePanel();
+          }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const sidebarWidth = layout.sidebarCollapsed ? RAIL : SIDEBAR;
-  const available = Math.max(0, viewport - sidebarWidth - SPLITTER);
-  const previewWidth = Math.min(Math.max(Math.round(available * layout.previewRatio), PREVIEW_MIN), Math.max(PREVIEW_MIN, available - THREAD_MIN));
+  if (!settings && !loaded) return <div className="workbench-loading" />;
 
-  const setRatio = (ratio: number) => setLayout(current => ({ ...current, previewRatio: Math.min(0.8, Math.max(0.2, ratio)) }));
+  const setRatio = (ratio: number) => void updateSettings({ ui: { previewRatio: Math.min(0.8, Math.max(0.2, ratio)) } }, { debounce: true });
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
     dragging.current = true;
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
     if (!dragging.current || !available) return;
-    setRatio((viewport - event.clientX - SPLITTER / 2) / available);
+    // Pointer coordinates are in window pixels; the layout is measured in zoomed CSS pixels.
+    setRatio(((innerWidth - event.clientX) / scale - SPLITTER / 2) / available);
   };
   const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
     dragging.current = false;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
   const onSplitterKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "ArrowLeft") setRatio(layout.previewRatio + 0.03);
-    else if (event.key === "ArrowRight") setRatio(layout.previewRatio - 0.03);
+    if (event.key === "ArrowLeft") setRatio(ui.previewRatio + 0.03);
+    else if (event.key === "ArrowRight") setRatio(ui.previewRatio - 0.03);
   };
 
-  return <div className="workbench" data-testid="workbench" style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr) ${SPLITTER}px ${previewWidth}px` }}>
-    <Sidebar collapsed={layout.sidebarCollapsed} onToggle={() => setLayout(current => ({ ...current, sidebarCollapsed: !current.sidebarCollapsed }))} />
+  const columns = ui.previewCollapsed
+    ? `${sidebarWidth}px minmax(0, 1fr) ${PREVIEW_RAIL}px`
+    : `${sidebarWidth}px minmax(0, 1fr) ${SPLITTER}px ${previewWidth}px`;
+
+  return <div className="workbench" data-testid="workbench" data-font={ui.fontSize} style={{ gridTemplateColumns: columns, zoom: scale }}>
+    <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
     <main className="thread" aria-label="任务对话" data-testid="thread">
       <Thread />
       <Toast />
     </main>
-    <div
+    {!ui.previewCollapsed && <div
       className="splitter"
       role="separator"
       aria-orientation="vertical"
@@ -113,7 +152,7 @@ export function App() {
       onPointerCancel={onPointerUp}
       onDoubleClick={() => setRatio(DEFAULT_RATIO)}
       onKeyDown={onSplitterKey}
-    />
-    <PreviewPane layoutKey={`${sidebarWidth}:${previewWidth}:${viewport}`} />
+    />}
+    <PreviewPane collapsed={ui.previewCollapsed} locked={locked} onToggle={togglePreview} layoutKey={`${sidebarWidth}:${previewWidth}:${innerWidth}:${scale}:${ui.previewCollapsed}`} />
   </div>;
 }

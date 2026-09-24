@@ -45,6 +45,7 @@ export function discoverBrowserWebSocket(cdpUrl: string): Promise<string> {
 
 export class VisibleBrowser {
   private holder: "alpha" | "user" = "alpha";
+  private emulatedViewport = false;
   private readonly consoleErrors: string[] = [];
   private readonly failedRequests: string[] = [];
 
@@ -160,6 +161,7 @@ export class VisibleBrowser {
     this.assertAlpha();
     if (width < 240 || height < 240 || width > 3000 || height > 3000) throw new Error("Viewport is out of range");
     await this.page.setViewport({ width, height, deviceScaleFactor: 1 });
+    this.emulatedViewport = true;
     return this.observe();
   }
 
@@ -255,6 +257,8 @@ export class VisibleBrowser {
   }
 
   async disconnect(): Promise<void> {
+    // The preview is also what the user sees; hand it back at the pane's real size rather than a narrow test viewport.
+    if (this.emulatedViewport) await this.page.setViewport(null).catch(() => undefined);
     await this.browser.disconnect();
   }
 

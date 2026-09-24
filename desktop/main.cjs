@@ -1,6 +1,6 @@
-const { app, BaseWindow, dialog, ipcMain, WebContentsView } = require("electron");
+const { app, BaseWindow, dialog, ipcMain, Menu, screen, WebContentsView } = require("electron");
 const { spawn } = require("node:child_process");
-const { mkdirSync } = require("node:fs");
+const { mkdirSync, readFileSync, writeFileSync } = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
@@ -13,6 +13,9 @@ const primary = app.requestSingleInstanceLock();
 const cdpPort = process.env.ALPHA_CDP_PORT;
 if (!cdpPort) throw new Error("ALPHA_CDP_PORT is required");
 app.commandLine.appendSwitch("remote-debugging-port", cdpPort);
+// Browser verification takes screenshots of the preview; without this, Windows occlusion tracking stops painting the
+// window whenever other windows cover it and the verifier's screenshot times out. (A minimized window still pauses.)
+app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 
 let sidecar;
 let window;
@@ -55,6 +58,42 @@ function previewBounds(value) {
   return { x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3], visible: value.visible === true };
 }
 
+const windowStateFile = path.join(workspaceRoot, ".alpha", "window-state.json");
+
+/** Restores the last window size and position, but only if it is still mostly on a connected display. */
+function savedWindowState() {
+  try {
+    const state = JSON.parse(readFileSync(windowStateFile, "utf8"));
+    const { x, y, width, height } = state;
+    if (![x, y, width, height].every(Number.isFinite) || width < 1080 || height < 620) return null;
+    const area = screen.getDisplayMatching({ x, y, width, height }).workArea;
+    const visibleWidth = Math.min(x + width, area.x + area.width) - Math.max(x, area.x);
+    const visibleHeight = Math.min(y + height, area.y + area.height) - Math.max(y, area.y);
+    if (visibleWidth < 200 || visibleHeight < 120) return null;
+    return { x, y, width, height, maximized: state.maximized === true };
+  } catch { return null; }
+}
+
+function saveWindowState() {
+  if (!window) return;
+  try {
+    writeFileSync(windowStateFile, JSON.stringify({ ...window.getNormalBounds(), maximized: window.isMaximized() }));
+  } catch (error) { console.error("ALPHA_WINDOW_STATE_FAILED", error); }
+}
+
+// Page zoom is shared per host name in Chromium, so the default zoom menu would also zoom the 127.0.0.1 product
+// preview under verification. The workbench scales itself instead; this menu keeps editing and developer entries only.
+function installMenu() {
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { role: "editMenu", label: "编辑" },
+    { label: "开发", submenu: [
+      { label: "重新载入工作台", accelerator: "CmdOrCtrl+R", click: () => shell?.webContents.reload() },
+      { label: "工作台开发者工具", accelerator: "CmdOrCtrl+Shift+I", click: () => shell?.webContents.toggleDevTools() },
+      { label: "预览开发者工具", click: () => preview?.webContents.toggleDevTools() },
+    ] },
+  ]));
+}
+
 function localPreviewUrl(value) {
   try {
     const url = new URL(value);
@@ -70,9 +109,16 @@ app.on("second-instance", () => window?.focus());
 app.whenReady().then(async () => {
   try {
     const port = await startSidecar();
-    window = new BaseWindow({ width: 1460, height: 900, minWidth: 1080, minHeight: 620, title: "Alpha", backgroundColor: "#0e1014", autoHideMenuBar: true });
+    installMenu();
+    const saved = savedWindowState();
+    window = new BaseWindow({ width: 1460, height: 900, ...(saved ? { x: saved.x, y: saved.y, width: saved.width, height: saved.height } : {}), minWidth: 1080, minHeight: 620, title: "Alpha", backgroundColor: "#0e1014", autoHideMenuBar: true });
+    if (saved?.maximized) window.maximize();
+    let saveTimer;
+    const scheduleSave = () => { clearTimeout(saveTimer); saveTimer = setTimeout(saveWindowState, 600); };
+    for (const event of ["resize", "move", "maximize", "unmaximize"]) window.on(event, scheduleSave);
+    window.on("close", () => { clearTimeout(saveTimer); saveWindowState(); });
     shell = new WebContentsView({ webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true } });
-    preview = new WebContentsView({ webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    preview = new WebContentsView({ webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
     window.contentView.addChildView(shell);
     window.contentView.addChildView(preview);
     // The workbench owns the whole window; it reports where the preview slot is and the preview view is placed over it.
@@ -91,6 +137,9 @@ app.whenReady().then(async () => {
     });
     shell.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     preview.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    // Pinch zoom would change the page scale the verifier measures against.
+    void shell.webContents.setVisualZoomLevelLimits(1, 1);
+    void preview.webContents.setVisualZoomLevelLimits(1, 1);
     ipcMain.on("alpha:preview", (event, url) => {
       if (event.sender !== shell.webContents) return;
       const allowed = localPreviewUrl(url);

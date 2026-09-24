@@ -117,7 +117,21 @@ export interface TaskList {
   activeRunId: string | null;
 }
 
+export type FontSize = "sm" | "md" | "lg";
+
+export interface Settings {
+  version: 1;
+  model: { default: string | null };
+  budget: { maxToolCalls: number; wallTimeMinutes: number };
+  generation: { comfyUrl: string; image: boolean; voice: boolean; video: boolean };
+  notifications: { enabled: boolean };
+  ui: { scale: number; fontSize: FontSize; sidebarCollapsed: boolean; previewCollapsed: boolean; previewRatio: number };
+}
+
+export type SettingsPatch = { [K in keyof Omit<Settings, "version">]?: Partial<Settings[K]> };
+
 export type ServerMessage =
+  | { type: "settings"; settings: Settings }
   | { type: "status"; taskId?: string; phase: string; runId?: string; pending?: string[] }
   | { type: "text"; taskId?: string; value: string }
   | { type: "tool"; taskId?: string; name: string; state: string; error?: boolean }

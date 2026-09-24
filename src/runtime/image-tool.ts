@@ -105,7 +105,7 @@ export async function generateImageAsset(projectRoot: string, dataRoot: string, 
   throw new Error(`Image job ${job.promptId} is still running; Alpha can resume tracking it`);
 }
 
-export function createImageTool(projectRoot: string, dataRoot: string, presetPath: string): CustomTool<typeof parameters> {
+export function createImageTool(projectRoot: string, dataRoot: string, presetPath: string, comfyUrl?: string): CustomTool<typeof parameters> {
   return {
     name: "alpha_generate_image",
     label: "Generate local product image",
@@ -114,7 +114,7 @@ export function createImageTool(projectRoot: string, dataRoot: string, presetPat
     loadMode: "essential",
     async execute(_toolCallId, args, _onUpdate, _ctx, signal) {
       try {
-        const job = await generateImageAsset(projectRoot, dataRoot, presetPath, args.prompt, new ComfyClient(), signal, args.aspect ?? "square");
+        const job = await generateImageAsset(projectRoot, dataRoot, presetPath, args.prompt, new ComfyClient(comfyUrl), signal, args.aspect ?? "square");
         return { content: [{ type: "text", text: JSON.stringify({ asset: job.asset, promptId: job.promptId, sha256: job.imageSha256, seed: job.seed }) }] };
       } catch (error) {
         return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };

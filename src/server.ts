@@ -9,6 +9,8 @@ import { assertGeneratedAssetsIntact } from "./runtime/media-integrity";
 import { verifyBrowserPlan } from "./runtime/browser-verifier";
 import { TaskActivity, type ActivityKind } from "./runtime/task-activity";
 import { readSourceReviews, snapshotSource, writeSourceReview } from "./runtime/source-review";
+import { SettingsError, SettingsStore, WorkbenchMeta, normalizeComfyUrl } from "./runtime/settings";
+import { ComfyClient } from "./runtime/comfy-client";
 
 const appRoot = resolve(import.meta.dir, "..");
 const workspaceRoot = resolve(process.env.ALPHA_WORKSPACE_ROOT ?? appRoot);
@@ -25,6 +27,8 @@ for (const directory of [dataRoot, productsRoot]) {
     throw new Error(`Alpha local workspace is not writable: ${directory}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
+const settingsStore = new SettingsStore(dataRoot);
+const workbenchMeta = new WorkbenchMeta(dataRoot);
 const clients = new Set<ServerWebSocket<unknown>>();
 const previews = new Map<string, PreviewInstance>();
 let active: { runId: string; controller: AbortController; ledger?: TaskLedger; steer?: (text: string) => Promise<void>; steeringIds: Set<string> } | null = null;
@@ -303,10 +307,22 @@ function sessionHooks(runId: string) {
   };
 }
 
+/** Run options taken from the workbench settings; read when each operation starts, so changes apply to the next run. */
+async function configuredRun() {
+  const settings = await settingsStore.get();
+  return {
+    maxToolCalls: settings.budget.maxToolCalls,
+    wallTimeMs: settings.budget.wallTimeMinutes * 60_000,
+    comfyUrl: settings.generation.comfyUrl,
+    generation: { image: settings.generation.image, voice: settings.generation.voice, video: settings.generation.video },
+  };
+}
+
 async function execute(runId: string, objective: string, projectRoot: string, controller: AbortController, existingLedger?: TaskLedger): Promise<void> {
   let beforeSource: Awaited<ReturnType<typeof snapshotSource>> | null = null;
   const emitRun = (message: Record<string, unknown>) => emit({ ...message, taskId: active?.runId === runId ? active.ledger?.state.id : existingLedger?.state.id });
   try {
+    const configured = await configuredRun();
     beforeSource = await snapshotSource(projectRoot);
     emitRun({ type: "status", phase: "构建中", runId });
     const forwardEvent = (event: RunEvent) => {
@@ -314,6 +330,7 @@ async function execute(runId: string, objective: string, projectRoot: string, co
       else emitRun({ type: "tool", name: event.value, state: event.type === "tool-start" ? "开始" : "结束", error: event.error, callId: event.callId, target: event.target, intent: event.intent });
     };
     const ledger = await runTask({
+      ...configured,
       projectRoot, objective, dataRoot, signal: controller.signal, existingLedger,
       onEvent: forwardEvent,
       onLedger(created) {
@@ -362,6 +379,7 @@ async function execute(runId: string, objective: string, projectRoot: string, co
           emitRun({ type: "status", phase: "修复中", runId, pending: current.completionGaps() });
           const failedRevision = current.state.revision;
           const repaired = await runTask({
+            ...configured,
             projectRoot, dataRoot, signal: controller.signal, existingLedger: current,
             objective: `Visible browser acceptance failed: ${reason}. Read the failure evidence and inspect the exact failing step. Decide whether the product or the verification plan is wrong; preserve the original requirements and do not change product code to fix an invalid test selector. Then rebuild.`,
             onEvent: forwardEvent,
@@ -474,7 +492,29 @@ const server = Bun.serve({
       const image = await current.exists() ? current : await fallback.exists() ? fallback : await legacy.exists() ? legacy : null;
       return image ? new Response(image, { headers: { "content-type": "image/png" } }) : new Response("Not found", { status: 404 });
     }
-    if (request.method === "POST" && request.headers.get("origin") && request.headers.get("origin") !== `http://127.0.0.1:${server.port}`) return new Response("Forbidden", { status: 403 });
+    if (url.pathname === "/api/settings" && request.method === "GET") return Response.json({ settings: await settingsStore.get() });
+    // Every state-changing request must come from the workbench page itself.
+    if (request.method !== "GET" && request.method !== "HEAD" && request.headers.get("origin") && request.headers.get("origin") !== `http://127.0.0.1:${server.port}`) return new Response("Forbidden", { status: 403 });
+    if (url.pathname === "/api/settings" && request.method === "PUT") {
+      try {
+        const settings = await settingsStore.update(await request.json().catch(() => null));
+        broadcast({ type: "settings", settings });
+        return Response.json({ settings });
+      } catch (error) {
+        if (error instanceof SettingsError) return Response.json({ error: error.message }, { status: 400 });
+        throw error;
+      }
+    }
+    if (url.pathname === "/api/generation/check" && request.method === "POST") {
+      const body = await request.json().catch(() => ({})) as { url?: unknown };
+      try {
+        const comfyUrl = normalizeComfyUrl(typeof body.url === "string" ? body.url : (await settingsStore.get()).generation.comfyUrl);
+        return Response.json({ url: comfyUrl, online: await new ComfyClient(comfyUrl).health() });
+      } catch (error) {
+        if (error instanceof SettingsError) return Response.json({ error: error.message }, { status: 400 });
+        throw error;
+      }
+    }
     if (url.pathname === "/api/tasks" && request.method === "POST") {
       if (active || verification || publishing) return Response.json({ error: "A task is already running" }, { status: 409 });
       const body = await request.json().catch(() => ({})) as { brief?: unknown };

@@ -1,10 +1,17 @@
+/* Fixed to the window so CSS zoom scales the content without changing the frame it fills. */
 .workbench {
+  position: fixed;
+  inset: 0;
   display: grid;
   grid-template-rows: 100%;
-  height: 100vh;
   min-width: 0;
   overflow: hidden;
+  font-size: var(--text-md);
 }
+.workbench-loading { position: fixed; inset: 0; background: var(--bg-app); }
+
+.workbench[data-font="sm"] { --text-xs: 11px; --text-sm: 12px; --text-md: 13px; --text-lg: 15px; --text-xl: 18px; }
+.workbench[data-font="lg"] { --text-xs: 13px; --text-sm: 14px; --text-md: 15.5px; --text-lg: 17px; --text-xl: 22px; }
 
 .thread {
   position: relative;

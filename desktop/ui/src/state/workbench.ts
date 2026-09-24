@@ -1,12 +1,14 @@
 import { api } from "../api/client";
 import { connectEvents, type ConnectionState } from "../api/events";
-import type { ActivityEntry, ControlHolder, ReviewSummary, ServerMessage, TaskList, TaskSummary, TaskView } from "../api/types";
+import type { ActivityEntry, ControlHolder, ReviewSummary, ServerMessage, Settings, SettingsPatch, TaskList, TaskSummary, TaskView } from "../api/types";
 import { TERMINAL_PHASES } from "./labels";
 import { createStore } from "./store";
 import { mergeActivity } from "./timeline";
 
 export type Detail = { kind: "diff"; operationId: string } | { kind: "evidence"; criterionId?: string; evidenceId?: string };
 export type PendingAction = "start" | "resume" | "revise" | "guidance" | "stop" | "publish" | "verify" | "control";
+export type SettingsSection = "model" | "run" | "generation" | "interface" | "workspace" | "diagnostics" | "shortcuts";
+export type Panel = { kind: "settings"; section: SettingsSection };
 
 export interface AppState {
   loaded: boolean;
@@ -29,6 +31,9 @@ export interface AppState {
   starting: { brief: string; error: string | null } | null;
   notice: { id: number; tone: "error" | "info"; text: string } | null;
   detail: Detail | null;
+  /** A workbench-level page shown in the middle column instead of the task (currently only settings). */
+  panel: Panel | null;
+  settings: Settings | null;
 }
 
 export const store = createStore<AppState>({
@@ -49,6 +54,8 @@ export const store = createStore<AppState>({
   starting: null,
   notice: null,
   detail: null,
+  panel: null,
+  settings: null,
 });
 
 export function isOccupied(state: AppState): boolean {
@@ -132,19 +139,83 @@ export async function syncSelected(id: string): Promise<void> {
 export async function openTask(id: string): Promise<void> {
   const state = store.get();
   if (state.selectedId !== id) {
-    store.set({ selectedId: id, task: null, activity: [], reviews: [], liveText: "", detail: null, starting: null });
-  } else if (state.starting) store.set({ starting: null });
+    store.set({ selectedId: id, task: null, activity: [], reviews: [], liveText: "", detail: null, starting: null, panel: null });
+  } else store.set({ starting: null, panel: null });
   remember(id);
   await syncSelected(id);
 }
 
 export function newTask(): void {
-  store.set({ selectedId: null, task: null, activity: [], reviews: [], liveText: "", detail: null, starting: null });
+  store.set({ selectedId: null, task: null, activity: [], reviews: [], liveText: "", detail: null, starting: null, panel: null });
   remember(null);
 }
 
 export function openDetail(detail: AppState["detail"]): void {
   store.set({ detail });
+}
+
+export function openSettings(section: SettingsSection = "model"): void {
+  store.set({ panel: { kind: "settings", section } });
+}
+
+export function closePanel(): void {
+  store.set({ panel: null });
+}
+
+function applyPatch(settings: Settings, patch: SettingsPatch): Settings {
+  const next = { ...settings };
+  for (const key of Object.keys(patch) as Array<keyof SettingsPatch>) {
+    (next as Record<string, unknown>)[key] = { ...settings[key], ...patch[key] };
+  }
+  return next;
+}
+
+function combinePatches(first: SettingsPatch, second: SettingsPatch): SettingsPatch {
+  const next: Record<string, unknown> = { ...first };
+  for (const key of Object.keys(second) as Array<keyof SettingsPatch>) next[key] = { ...first[key], ...second[key] };
+  return next as SettingsPatch;
+}
+
+let unsentSettings: SettingsPatch = {};
+let settingsTimer: ReturnType<typeof setTimeout> | undefined;
+
+async function flushSettings(): Promise<boolean> {
+  clearTimeout(settingsTimer);
+  const patch = unsentSettings;
+  unsentSettings = {};
+  if (!Object.keys(patch).length) return true;
+  try {
+    const saved = await api.updateSettings(patch);
+    store.set({ settings: applyPatch(saved, unsentSettings) });
+    return true;
+  } catch (error) {
+    notify(messageOf(error));
+    const current = await api.settings().catch(() => null);
+    if (current) store.set({ settings: applyPatch(current, unsentSettings) });
+    return false;
+  }
+}
+
+/**
+ * Applies a settings change immediately and saves it. Layout changes (dragging, toggling) pass `debounce` so a burst
+ * of updates becomes one write; a newer local change is never overwritten by an older server reply.
+ */
+export function updateSettings(patch: SettingsPatch, options: { debounce?: boolean } = {}): Promise<boolean> {
+  store.set(state => ({ settings: state.settings ? applyPatch(state.settings, patch) : state.settings }));
+  unsentSettings = combinePatches(unsentSettings, patch);
+  if (!options.debounce) return flushSettings();
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(() => void flushSettings(), 400);
+  return Promise.resolve(true);
+}
+
+/** Publication and verification need the visible preview, so a collapsed preview pane opens itself for them. */
+function revealPreviewForBrowserWork(): void {
+  if (store.get().settings?.ui.previewCollapsed) void updateSettings({ ui: { previewCollapsed: false } }, { debounce: true });
+}
+
+export function previewLocked(state: AppState): boolean {
+  return state.controlHolder === "user" || state.operation !== null;
 }
 
 function handleMessage(message: ServerMessage): void {
@@ -172,9 +243,13 @@ function handleMessage(message: ServerMessage): void {
       scheduleTasksRefresh();
       break;
     }
+    case "settings":
+      store.set({ settings: applyPatch(message.settings, unsentSettings) });
+      break;
     case "status": {
       const terminal = TERMINAL_PHASES.has(message.phase);
       store.set({ operation: terminal ? null : { taskId: message.taskId ?? null, phase: message.phase } });
+      if (message.phase === "发布本机预览" || message.phase === "浏览器验收") revealPreviewForBrowserWork();
       if (!terminal) break;
       if (!message.taskId && state.starting && !state.starting.error) {
         store.set({ starting: { ...state.starting, error: "任务未能启动" } });
@@ -187,6 +262,7 @@ function handleMessage(message: ServerMessage): void {
       break;
     }
     case "preview":
+      revealPreviewForBrowserWork();
       if (message.taskId) {
         store.set({ runningPreview: { taskId: message.taskId, url: message.url } });
         if (message.taskId === state.selectedId) void syncSelected(message.taskId);
@@ -201,8 +277,13 @@ function handleMessage(message: ServerMessage): void {
   }
 }
 
+async function loadSettings(): Promise<void> {
+  const settings = await api.settings().catch(() => null);
+  if (settings) store.set({ settings: applyPatch(settings, unsentSettings) });
+}
+
 async function resync(): Promise<void> {
-  await refreshTasks();
+  await Promise.all([refreshTasks(), loadSettings()]);
   const id = store.get().selectedId;
   if (id) await syncSelected(id);
   const holder = await api.control().catch(() => null);
@@ -220,7 +301,7 @@ export function startWorkbench(): () => void {
     },
   });
   void (async () => {
-    const list = await refreshTasks();
+    const [list] = await Promise.all([refreshTasks(), loadSettings()]);
     const saved = recalled();
     const id = list?.tasks.find(task => task.id === saved)?.id ?? list?.activeTaskId ?? list?.tasks[0]?.id;
     if (id) void openTask(id);
@@ -238,7 +319,10 @@ export function startWorkbench(): () => void {
     void resync();
   };
   window.addEventListener("focus", onFocus);
+  const onUnload = () => void flushSettings();
+  window.addEventListener("beforeunload", onUnload);
   return () => {
+    window.removeEventListener("beforeunload", onUnload);
     disconnect();
     clearInterval(poll);
     window.removeEventListener("focus", onFocus);

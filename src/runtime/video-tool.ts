@@ -134,7 +134,7 @@ export async function generateVideoCandidate(projectRoot: string, dataRoot: stri
   throw new Error(`Video job ${job.promptId} is still running; Alpha can resume tracking it`);
 }
 
-export function createVideoTool(projectRoot: string, dataRoot: string, presetPath: string): CustomTool<typeof parameters> {
+export function createVideoTool(projectRoot: string, dataRoot: string, presetPath: string, comfyUrl?: string): CustomTool<typeof parameters> {
   return {
     name: "alpha_generate_video",
     label: "Generate local video candidate",
@@ -143,7 +143,7 @@ export function createVideoTool(projectRoot: string, dataRoot: string, presetPat
     loadMode: "essential",
     async execute(_toolCallId, args, _onUpdate, _ctx, signal) {
       try {
-        const job = await generateVideoCandidate(projectRoot, dataRoot, presetPath, args.referenceAsset, args.prompt, new ComfyClient(), signal);
+        const job = await generateVideoCandidate(projectRoot, dataRoot, presetPath, args.referenceAsset, args.prompt, new ComfyClient(comfyUrl), signal);
         return { content: [{ type: "text", text: JSON.stringify({ candidateAsset: job.candidateAsset, promptId: job.promptId, sha256: job.videoSha256, referenceSha256: job.referenceSha256, seed: job.seed, visualReview: job.visualReview }) }] };
       } catch (error) {
         return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Copy, Hand, MonitorOff, MonitorPlay, RotateCw, Undo2 } from "lucide-react";
+import { Copy, Hand, MonitorOff, MonitorPlay, PanelRightClose, PanelRightOpen, RotateCw, Undo2 } from "lucide-react";
 import { taskTitle } from "../state/labels";
 import { useStore } from "../state/store";
 import { isOccupied, notify, republish, store, toggleControl, verifyTask } from "../state/workbench";
@@ -26,7 +26,7 @@ function usePreviewTarget(): Shown | "keep" {
   return task.preview?.live ? { taskId: task.id, url: task.preview.url } : null;
 }
 
-export function PreviewPane({ layoutKey }: { layoutKey: string }) {
+export function PreviewPane({ layoutKey, collapsed, locked, onToggle }: { layoutKey: string; collapsed: boolean; locked: boolean; onToggle(): void }) {
   const target = usePreviewTarget();
   const [shown, setShown] = useState<Shown>(null);
   const slot = useRef<HTMLDivElement>(null);
@@ -56,16 +56,23 @@ export function PreviewPane({ layoutKey }: { layoutKey: string }) {
   }, [targetKey]); // Keyed by the target's identity rather than its object reference.
 
   // The native preview view is positioned by the Electron main process over this slot.
-  const visible = !!shown && !!bridge;
+  const visible = !!shown && !!bridge && !collapsed;
   useLayoutEffect(() => {
     const element = slot.current;
-    if (!element || !bridge?.setPreviewBounds) return;
+    if (!bridge?.setPreviewBounds) return;
+    if (!element) {
+      bridge.setPreviewBounds({ x: 0, y: 0, width: 0, height: 0, visible: false });
+      return;
+    }
     let frame = 0;
     const report = () => {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         const rect = element.getBoundingClientRect();
-        bridge.setPreviewBounds!({ x: rect.left, y: rect.top, width: rect.width, height: rect.height, visible });
+        // Under CSS zoom, compare the zoomed root with the window to get window pixels whichever way rects are reported.
+        const root = element.closest(".workbench")?.getBoundingClientRect();
+        const factor = root && root.width > 0 ? window.innerWidth / root.width : 1;
+        bridge.setPreviewBounds!({ x: rect.left * factor, y: rect.top * factor, width: rect.width * factor, height: rect.height * factor, visible });
       });
     };
     report();
@@ -116,9 +123,17 @@ export function PreviewPane({ layoutKey }: { layoutKey: string }) {
     emptyDetail = task.status === "stopped" ? "任务已停止。继续修复后会重新构建和发布。" : null;
   } else if (selectedId) emptyTitle = "正在加载…";
 
+  const tone = shown ? (userControls ? "warning" : "success") : "neutral";
+  if (collapsed) {
+    return <aside className="preview-rail" aria-label="产品预览（已收起）">
+      <IconButton icon={PanelRightOpen} label="展开预览栏 (Ctrl+Shift+B)" onClick={onToggle} />
+      <span className="preview-rail-state" title={label}><StatusDot tone={tone} /></span>
+    </aside>;
+  }
+
   return <section className="preview-pane" aria-label="产品预览">
     <header className={["preview-toolbar", userControls && shown ? "controlled" : ""].filter(Boolean).join(" ")}>
-      <StatusDot tone={shown ? (userControls ? "warning" : "success") : "neutral"} />
+      <StatusDot tone={tone} />
       <span className="preview-label">{label}</span>
       {shown && <code className="preview-url" title={shown.url}>{shown.url.replace(/^http:\/\//, "")}</code>}
       {shown && <IconButton icon={Copy} label="复制预览地址" size={14} onClick={() => void copy()} />}
@@ -127,6 +142,7 @@ export function PreviewPane({ layoutKey }: { layoutKey: string }) {
         {shown && (userControls
           ? <Button size="sm" variant="primary" icon={Undo2} onClick={() => void toggleControl()} busy={pending === "control"}>交回 Alpha</Button>
           : <Button size="sm" icon={Hand} onClick={() => void toggleControl()} busy={pending === "control"} title="暂停 Alpha 的浏览器操作，由你直接操作预览">接管操作</Button>)}
+        <IconButton icon={PanelRightClose} label={locked ? "浏览器正在使用预览，暂时不能收起" : "收起预览栏 (Ctrl+Shift+B)"} onClick={onToggle} disabled={locked} />
       </span>
     </header>
     <div className="preview-slot" ref={slot} data-testid="preview-slot">

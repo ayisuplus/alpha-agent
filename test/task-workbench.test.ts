@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskActivity } from "../src/runtime/task-activity";
@@ -131,6 +131,14 @@ test("workbench serves recorded evidence but refuses a ledger path outside its d
     const persisted = await fetch(`${base}/api/tasks/${ledger.state.id}/activity`).then(response => response.json()) as { entries: Array<{ id: string }> };
     expect(persisted.entries.map(item => item.id)).toContain(pushed.entry.id);
     expect((await TaskLedger.load(ledger.file)).state.guidanceHistory?.at(-1)?.instruction).toBe("Keep the screenshot visible on the next run");
+
+    const put = (body: unknown, origin = base) => fetch(`${base}/api/settings`, { method: "PUT", headers: { "content-type": "application/json", origin }, body: JSON.stringify(body) });
+    expect((await fetch(`${base}/api/settings`).then(response => response.json()) as { settings: { budget: { maxToolCalls: number } } }).settings.budget.maxToolCalls).toBe(120);
+    expect((await put({ budget: { maxToolCalls: 60 } }, "http://evil.example")).status).toBe(403);
+    expect((await put({ generation: { comfyUrl: "http://example.com" } })).status).toBe(400);
+    const updated = await put({ budget: { maxToolCalls: 60 }, ui: { sidebarCollapsed: true } }).then(response => response.json()) as { settings: { budget: { maxToolCalls: number }; ui: { sidebarCollapsed: boolean } } };
+    expect(updated.settings).toMatchObject({ budget: { maxToolCalls: 60 }, ui: { sidebarCollapsed: true } });
+    expect(JSON.parse(await readFile(join(dataRoot, "settings.json"), "utf8")).budget.maxToolCalls).toBe(60);
   } finally {
     child?.kill();
     if (child) await child.exited;

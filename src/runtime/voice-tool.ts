@@ -101,7 +101,7 @@ export async function generateVoiceAsset(projectRoot: string, dataRoot: string, 
   throw new Error(`Voice job ${job.promptId} is still running; Alpha can resume tracking it`);
 }
 
-export function createVoiceTool(projectRoot: string, dataRoot: string, presetPath: string): CustomTool<typeof parameters> {
+export function createVoiceTool(projectRoot: string, dataRoot: string, presetPath: string, comfyUrl?: string): CustomTool<typeof parameters> {
   return {
     name: "alpha_generate_voice",
     label: "Generate local voice audio",
@@ -110,7 +110,7 @@ export function createVoiceTool(projectRoot: string, dataRoot: string, presetPat
     loadMode: "essential",
     async execute(_toolCallId, args, _onUpdate, _ctx, signal) {
       try {
-        const job = await generateVoiceAsset(projectRoot, dataRoot, presetPath, args.text, args.voiceDesign, new ComfyClient(), signal);
+        const job = await generateVoiceAsset(projectRoot, dataRoot, presetPath, args.text, args.voiceDesign, new ComfyClient(comfyUrl), signal);
         return { content: [{ type: "text", text: JSON.stringify({ asset: job.asset, promptId: job.promptId, sha256: job.audioSha256, seed: job.seed, listeningReview: "pending" }) }] };
       } catch (error) {
         return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };

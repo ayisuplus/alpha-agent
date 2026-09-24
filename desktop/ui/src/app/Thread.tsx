@@ -4,6 +4,7 @@ import { Composer } from "../components/Composer";
 import { DiffView } from "../components/DiffView";
 import { EvidenceView } from "../components/EvidenceView";
 import { NewTask } from "../components/NewTask";
+import { SettingsView } from "../components/settings/SettingsView";
 import { ThreadHeader } from "../components/ThreadHeader";
 import { Timeline } from "../components/Timeline";
 import { Spinner } from "../components/ui";
@@ -38,6 +39,8 @@ function TaskThread({ task }: { task: TaskView }) {
 export function Thread() {
   const selectedId = useStore(store, state => state.selectedId);
   const task = useStore(store, state => state.task);
+  const panel = useStore(store, state => state.panel);
+  if (panel?.kind === "settings") return <SettingsView section={panel.section} />;
   if (selectedId === null) return <NewTask />;
   if (!task || task.id !== selectedId) return <p className="thread-loading"><Spinner size={16} />正在加载任务…</p>;
   return <TaskThread task={task} />;

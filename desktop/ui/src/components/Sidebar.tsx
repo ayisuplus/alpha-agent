@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
-import { Check, PanelLeftClose, PanelLeftOpen, Plus, Search, Square, X } from "lucide-react";
+import { Check, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, Square, X } from "lucide-react";
 import type { TaskSummary } from "../api/types";
 import { dayGroup, relativeTime, taskStatus, taskTitle } from "../state/labels";
 import { useStore } from "../state/store";
-import { newTask, openTask, store } from "../state/workbench";
+import { newTask, openSettings, openTask, store } from "../state/workbench";
 import { IconButton, Spinner, StatusDot } from "./ui";
 import "./Sidebar.css";
 
@@ -35,6 +35,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
   const selectedId = useStore(store, state => state.selectedId);
   const connection = useStore(store, state => state.connection);
   const loaded = useStore(store, state => state.loaded);
+  const settingsOpen = useStore(store, state => state.panel?.kind === "settings");
   const [query, setQuery] = useState("");
 
   const groups = useMemo(() => {
@@ -50,11 +51,17 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
 
   const connectionLabel = connection === "open" ? "已连接本机服务" : connection === "connecting" ? "正在连接…" : "连接中断，正在重连";
 
+  const running = tasks.find(task => task.running);
+
   if (collapsed) {
     return <nav className="sidebar collapsed" aria-label="任务">
-      <IconButton icon={PanelLeftOpen} label="展开任务栏" onClick={onToggle} />
-      <IconButton icon={Plus} label="新建任务 (Ctrl+N)" onClick={newTask} className={selectedId === null ? "active" : undefined} />
+      <IconButton icon={PanelLeftOpen} label="展开任务栏 (Ctrl+B)" onClick={onToggle} />
+      <IconButton icon={Plus} label="新建任务 (Ctrl+N)" onClick={newTask} className={selectedId === null && !settingsOpen ? "active" : undefined} />
+      {running && <button className={`rail-running ${running.id === selectedId && !settingsOpen ? "active" : ""}`} onClick={() => void openTask(running.id)} title={`正在运行：${taskTitle(running)}`} aria-label={`打开正在运行的任务：${taskTitle(running)}`}>
+        <Spinner size={16} />
+      </button>}
       <span className="sidebar-rail-spacer" />
+      <IconButton icon={Settings} label="设置 (Ctrl+,)" onClick={() => openSettings()} className={settingsOpen ? "active" : undefined} />
       <span title={connectionLabel}><StatusDot tone={connection === "open" ? "success" : "warning"} /></span>
     </nav>;
   }
@@ -63,9 +70,9 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
     <header className="sidebar-brand">
       <span className="brand-mark" aria-hidden>α</span>
       <span className="brand-name">Alpha<small>构建工作台</small></span>
-      <IconButton icon={PanelLeftClose} label="收起任务栏" onClick={onToggle} />
+      <IconButton icon={PanelLeftClose} label="收起任务栏 (Ctrl+B)" onClick={onToggle} />
     </header>
-    <button className="new-task-button" onClick={newTask} aria-current={selectedId === null ? "page" : undefined}>
+    <button className="new-task-button" onClick={newTask} aria-current={selectedId === null && !settingsOpen ? "page" : undefined}>
       <Plus size={16} aria-hidden />新建任务<kbd>Ctrl N</kbd>
     </button>
     <label className="task-search">
@@ -76,14 +83,16 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
     <div className="task-groups">
       {groups.map(([label, items]) => <section key={label} className="task-group">
         <h2>{label}</h2>
-        {items.map(task => <TaskRow key={task.id} task={task} selected={task.id === selectedId} />)}
+        {items.map(task => <TaskRow key={task.id} task={task} selected={task.id === selectedId && !settingsOpen} />)}
       </section>)}
       {loaded && !groups.length && <p className="sidebar-empty">{query ? "没有匹配的任务" : "还没有任务。新建一个，描述你想要的产品。"}</p>}
     </div>
     <footer className="sidebar-footer">
-      <StatusDot tone={connection === "open" ? "success" : "warning"} pulse={connection !== "open"} />
-      <span>{connectionLabel}</span>
-      <span className="sidebar-count">{tasks.length} 个任务</span>
+      <span className="sidebar-status" title={connectionLabel}>
+        <StatusDot tone={connection === "open" ? "success" : "warning"} pulse={connection !== "open"} />
+        <span>{connection === "open" ? `${tasks.length} 个任务` : connectionLabel}</span>
+      </span>
+      <IconButton icon={Settings} label="设置 (Ctrl+,)" onClick={() => openSettings()} className={settingsOpen ? "active" : undefined} />
     </footer>
   </nav>;
 }

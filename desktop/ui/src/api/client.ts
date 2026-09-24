@@ -1,4 +1,4 @@
-import type { ActivityEntry, ControlHolder, EvidenceDetail, ReviewDetail, ReviewSummary, TaskList, TaskView } from "./types";
+import type { ActivityEntry, ControlHolder, EvidenceDetail, ReviewDetail, ReviewSummary, Settings, SettingsPatch, TaskList, TaskView } from "./types";
 
 const SERVER_MESSAGES: Record<string, string> = {
   "A task is already running": "已有任务或操作正在进行，请等它结束",
@@ -43,15 +43,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-function post<T>(path: string, body?: unknown): Promise<T> {
+function send<T>(method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
   return request<T>(path, body === undefined
-    ? { method: "POST" }
-    : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    ? { method }
+    : { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 }
+
+const post = <T>(path: string, body?: unknown) => send<T>("POST", path, body);
 
 const taskPath = (id: string) => `/api/tasks/${encodeURIComponent(id)}`;
 
 export const api = {
+  settings: () => request<{ settings: Settings }>("/api/settings").then(result => result.settings),
+  updateSettings: (patch: SettingsPatch) => send<{ settings: Settings }>("PUT", "/api/settings", patch).then(result => result.settings),
+  checkGeneration: (url: string) => post<{ url: string; online: boolean }>("/api/generation/check", { url }),
   tasks: () => request<TaskList>("/api/tasks"),
   task: (id: string) => request<{ task: TaskView }>(taskPath(id)).then(result => result.task),
   activity: (id: string) => request<{ entries: ActivityEntry[] }>(`${taskPath(id)}/activity`).then(result => result.entries),
