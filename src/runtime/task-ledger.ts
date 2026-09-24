@@ -1,8 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
-export type EvidenceKind = "build" | "test" | "browser" | "asset" | "preview";
+export type EvidenceKind = "build" | "test" | "browser" | "asset" | "preview" | "source" | "artifact";
+export type TaskType = "web-product" | "code-change" | "research" | "file-work";
+
+export interface WorkspaceOrigin {
+  kind: "generated" | "git" | "copy";
+  sourcePath?: string;
+  snapshotFile?: string;
+  initialRevision?: string;
+  checks?: Array<{ name: string; command: string }>;
+}
 
 export interface AcceptanceCriterion {
   id: string;
@@ -12,6 +22,7 @@ export interface AcceptanceCriterion {
 
 export interface Evidence {
   id: string;
+  attemptId?: string;
   criterionId: string;
   kind: EvidenceKind;
   revision: string;
@@ -19,6 +30,8 @@ export interface Evidence {
   previewId?: string;
   passed: boolean;
   source: string;
+  contentHash?: string;
+  referenceIds?: string[];
   recordedAt: string;
 }
 
@@ -42,7 +55,8 @@ export interface RunRecord {
   maxToolCalls: number;
   wallTimeMs: number;
   elapsedMs: number;
-  outcome: "returned" | "cancelled" | "budget" | "error";
+  usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number };
+  outcome: "returned" | "cancelled" | "budget" | "error" | "needs-input";
   failureReason?: string;
   recordedAt: string;
 }
@@ -56,13 +70,18 @@ export interface GuidanceRecord {
 
 export interface TaskState {
   id: string;
+  taskType?: TaskType;
+  workspaceOrigin?: WorkspaceOrigin;
+  inputs?: Array<{ id: string; name: string; path: string; mimeType: string; sha256: string; uploadedAt: string }>;
   objective: string;
   contractVersion?: number;
   contractHistory?: Array<{ version: number; objective: string; revisedAt: string }>;
   guidanceHistory?: GuidanceRecord[];
   projectRoot: string;
   criteria: AcceptanceCriterion[];
-  status: "active" | "stopped" | "complete";
+  status: "active" | "stopped" | "complete" | "needs-input";
+  pendingQuestion?: string;
+  blockedService?: string;
   revision: string | null;
   evidence: Evidence[];
   runs?: RunRecord[];
@@ -109,6 +128,7 @@ export async function fingerprintSource(projectRoot: string): Promise<string> {
 
 export class TaskLedger {
   private saveQueue: Promise<void> = Promise.resolve();
+  private legacyBackupPending = false;
   private constructor(readonly file: string, readonly state: TaskState) {}
 
   static async create(dataRoot: string, input: {
@@ -116,6 +136,9 @@ export class TaskLedger {
     projectRoot: string;
     criteria: AcceptanceCriterion[];
     modelSelector?: string;
+    taskType?: TaskType;
+    workspaceOrigin?: WorkspaceOrigin;
+    inputs?: TaskState["inputs"];
   }): Promise<TaskLedger> {
     if (!input.objective.trim()) throw new Error("Task objective is required");
     if (input.criteria.length === 0 || new Set(input.criteria.map(item => item.id)).size !== input.criteria.length) {
@@ -128,6 +151,9 @@ export class TaskLedger {
     const file = join(resolve(dataRoot), "tasks", `${id}.json`);
     const state: TaskState = {
       id,
+      taskType: input.taskType ?? "web-product",
+      workspaceOrigin: input.workspaceOrigin ?? { kind: "generated" },
+      ...(input.inputs?.length ? { inputs: input.inputs } : {}),
       objective: input.objective.trim(),
       contractVersion: 1,
       contractHistory: [],
@@ -150,7 +176,9 @@ export class TaskLedger {
 
   static async load(file: string): Promise<TaskLedger> {
     const state = JSON.parse(await readFile(file, "utf8")) as TaskState;
-    return new TaskLedger(resolve(file), state);
+    const ledger = new TaskLedger(resolve(file), state);
+    ledger.legacyBackupPending = !state.taskType || !state.contractVersion;
+    return ledger;
   }
 
   async refreshRevision(): Promise<boolean> {
@@ -172,6 +200,7 @@ export class TaskLedger {
       throw new Error("Browser evidence must match the current preview");
     }
     if (!input.source.trim()) throw new Error("Evidence source is required");
+    if ((input.kind === "source" || input.kind === "artifact") && !/^[0-9a-f]{64}$/.test(input.contentHash ?? "")) throw new Error("Versioned source or artifact evidence needs a SHA-256 hash");
     const evidence = { ...input, contractVersion: this.state.contractVersion ?? 1, id: randomUUID(), recordedAt: new Date().toISOString() };
     this.state.evidence.push(evidence);
     await this.save();
@@ -193,12 +222,13 @@ export class TaskLedger {
       const latest = this.state.evidence.findLast(item => item.criterionId === criterion.id && (item.contractVersion ?? 1) === (this.state.contractVersion ?? 1) && item.revision === this.state.revision && (criterion.kind !== "browser" || item.previewId === this.state.preview?.id));
       return !latest?.passed;
     }).map(criterion => criterion.id);
-    if (!this.state.preview || this.state.preview.revision !== this.state.revision) gaps.push("local-preview");
+    if ((this.state.taskType ?? "web-product") === "web-product" && (!this.state.preview || this.state.preview.revision !== this.state.revision)) gaps.push("local-preview");
     return gaps;
   }
 
   async complete(): Promise<void> {
     this.assertActive();
+    if (await fingerprintSource(this.state.projectRoot) !== this.state.revision) throw new Error("Task source changed before completion");
     const gaps = this.completionGaps();
     if (gaps.length > 0) throw new Error(`Task cannot complete: ${gaps.join(", ")}`);
     this.state.status = "complete";
@@ -231,9 +261,11 @@ export class TaskLedger {
   }
 
   async resume(reason: string): Promise<void> {
-    if (this.state.status !== "stopped") throw new Error("Only a stopped task can be resumed");
+    if (this.state.status !== "stopped" && this.state.status !== "needs-input") throw new Error("Only a stopped or waiting task can be resumed");
     if (!reason.trim()) throw new Error("Resume reason is required");
     this.state.status = "active";
+    delete this.state.pendingQuestion;
+    delete this.state.blockedService;
     this.state.reopenReason = reason.trim();
     this.state.guidanceHistory ??= [];
     this.state.guidanceHistory.push({ instruction: reason.trim(), recordedAt: new Date().toISOString() });
@@ -289,6 +321,15 @@ export class TaskLedger {
     await this.save();
   }
 
+  async needInput(question: string, service?: string): Promise<void> {
+    this.assertActive();
+    if (!question.trim()) throw new Error("A user question is required");
+    this.state.status = "needs-input";
+    this.state.pendingQuestion = question.trim();
+    if (service) this.state.blockedService = service;
+    await this.save();
+  }
+
   private assertActive(): void {
     if (this.state.status !== "active") throw new Error(`Task is ${this.state.status}`);
   }
@@ -298,6 +339,11 @@ export class TaskLedger {
     const contents = JSON.stringify(this.state, null, 2);
     this.saveQueue = this.saveQueue.then(async () => {
       await mkdir(resolve(this.file, ".."), { recursive: true });
+      if (this.legacyBackupPending) {
+        try { await copyFile(this.file, `${this.file}.pre-contract-extension.bak`, constants.COPYFILE_EXCL); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+        this.legacyBackupPending = false;
+      }
       const temporary = `${this.file}.${randomUUID()}.tmp`;
       await writeFile(temporary, contents);
       await rename(temporary, this.file);

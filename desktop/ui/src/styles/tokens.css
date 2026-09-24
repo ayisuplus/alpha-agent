@@ -1,45 +1,46 @@
 :root {
   color-scheme: dark;
 
-  /* Surfaces, from the window background up to raised controls. */
-  --bg-app: #0e1014;
-  --bg-sidebar: #111318;
-  --bg-surface: #16191f;
-  --bg-elevated: #1c2027;
-  --bg-hover: #232833;
-  --bg-active: #28303d;
-  --bg-inset: #0a0c0f;
+  /* OMP titanium: neutral metal surfaces, electric blue, and a small warm-gold detail. */
+  --bg-app: #151820;
+  --bg-sidebar: #11151b;
+  --bg-surface: #1a1e26;
+  --bg-elevated: #222832;
+  --bg-hover: #2a3038;
+  --bg-active: #20313d;
+  --bg-inset: #0f1216;
 
-  --border-subtle: #1e222a;
-  --border: #2a2f39;
-  --border-strong: #3a414d;
+  --border-subtle: #1f252d;
+  --border: #2a3038;
+  --border-strong: #46505c;
 
-  --text: #e7eaf0;
-  --text-secondary: #aab1bd;
-  --text-muted: #8a92a0;
-  --text-faint: #6b7380;
+  --text: #e8ecf4;
+  --text-secondary: #c0c7d2;
+  --text-muted: #9ca3b0;
+  --text-faint: #858e9c;
 
-  /* One cool accent for actions, focus and "running"; green/amber/red carry verification meaning only. */
-  --accent: #7c9cff;
-  --accent-strong: #a3b8ff;
-  --accent-bg: rgba(124, 156, 255, 0.13);
-  --accent-border: rgba(124, 156, 255, 0.42);
-  --on-accent: #0b1020;
+  --accent: #00b4ff;
+  --accent-strong: #5acbff;
+  --accent-deep: #0082b3;
+  --accent-gold: #d4c090;
+  --accent-bg: rgba(0, 180, 255, 0.1);
+  --accent-border: rgba(0, 180, 255, 0.38);
+  --on-accent: #0f1216;
 
-  --success: #5fd18f;
-  --success-bg: rgba(95, 209, 143, 0.12);
-  --success-border: rgba(95, 209, 143, 0.35);
-  --warning: #e9b65c;
-  --warning-bg: rgba(233, 182, 92, 0.12);
-  --warning-border: rgba(233, 182, 92, 0.38);
-  --danger: #f27b7b;
-  --danger-bg: rgba(242, 123, 123, 0.12);
-  --danger-border: rgba(242, 123, 123, 0.38);
+  --success: #4ddc98;
+  --success-bg: rgba(0, 255, 136, 0.1);
+  --success-border: rgba(0, 255, 136, 0.3);
+  --warning: #e9b366;
+  --warning-bg: rgba(255, 179, 71, 0.1);
+  --warning-border: rgba(255, 179, 71, 0.32);
+  --danger: #f16b78;
+  --danger-bg: rgba(255, 71, 87, 0.1);
+  --danger-border: rgba(255, 71, 87, 0.32);
 
-  --diff-add-bg: rgba(95, 209, 143, 0.12);
-  --diff-add-gutter: rgba(95, 209, 143, 0.2);
-  --diff-del-bg: rgba(242, 123, 123, 0.12);
-  --diff-del-gutter: rgba(242, 123, 123, 0.2);
+  --diff-add-bg: rgba(0, 255, 136, 0.1);
+  --diff-add-gutter: rgba(0, 255, 136, 0.18);
+  --diff-del-bg: rgba(255, 71, 87, 0.1);
+  --diff-del-gutter: rgba(255, 71, 87, 0.18);
 
   --font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
   --font-mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", Consolas, "Microsoft YaHei UI", monospace;
@@ -57,9 +58,9 @@
   --space-5: 24px;
   --space-6: 32px;
 
-  --radius-sm: 6px;
-  --radius: 8px;
-  --radius-lg: 12px;
+  --radius-sm: 3px;
+  --radius: 4px;
+  --radius-lg: 6px;
 
   --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.45);
   --focus-ring: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent-border);

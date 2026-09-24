@@ -2,12 +2,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { copyFile, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { fingerprintSource } from "./task-ledger";
+import type { AgentPresetSnapshot } from "./agent-presets";
 
 export interface WorkOrder {
   id: string;
   objective: string;
   ownedPaths: string[];
   resources: string[];
+  presetId?: string;
+  /** Resolved once when the parent run starts; never supplied by the model. */
+  preset?: AgentPresetSnapshot;
 }
 
 export interface WorkerResult {
@@ -28,6 +32,7 @@ export interface WorkBatchReport {
   rolledBack?: string[];
   inFlight?: { file: string; temporary: string };
   results: Record<string, WorkerResult>;
+  presets?: Record<string, Pick<AgentPresetSnapshot, "id" | "name" | "hash" | "source">>;
   reason?: string;
 }
 
@@ -180,7 +185,7 @@ export async function executeWorkOrders(input: {
   const projectRoot = resolve(input.projectRoot);
   const workRoot = join(resolve(input.dataRoot), "workers", input.taskId, randomUUID());
   const reportFile = join(workRoot, "merge.json");
-  const report: WorkBatchReport = { status: "rejected", elapsedMs: 0, baseRevision: input.baseRevision, workRoot, changes: {}, committed: [], results: {} };
+  const report: WorkBatchReport = { status: "rejected", elapsedMs: 0, baseRevision: input.baseRevision, workRoot, changes: {}, committed: [], results: {}, presets: Object.fromEntries(input.orders.filter(order => order.preset).map(order => [order.id, { id: order.preset!.id, name: order.preset!.name, hash: order.preset!.hash, source: order.preset!.source }])) };
   const save = async () => {
     const temporary = `${reportFile}.${randomUUID()}.tmp`;
     await writeFile(temporary, JSON.stringify(report, null, 2));

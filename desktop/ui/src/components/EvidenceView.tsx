@@ -37,6 +37,7 @@ function EvidenceBody({ taskId, record }: { taskId: string; record: EvidenceItem
         <strong>{record.passed ? "记录为通过" : "记录为未通过"}</strong>
       </div>
       <pre className="evidence-log">{parsed.text || "（空日志）"}</pre>
+      {state.detail.artifactUrl && <p><a href={state.detail.artifactUrl} download>下载此版本产物</a></p>}
     </div>;
   }
 
@@ -91,7 +92,7 @@ function LocalPreviewInfo({ task }: { task: TaskView }) {
 }
 
 export function EvidenceView({ task, criterionId, evidenceId, onBack }: { task: TaskView; criterionId?: string; evidenceId?: string; onBack(): void }) {
-  const criteria = [...task.criteria.map(item => item.id).filter(id => id !== "local-preview"), "local-preview"];
+  const criteria = [...task.criteria.map(item => item.id).filter(id => id !== "local-preview"), ...(!task.taskType || task.taskType === "web-product" ? ["local-preview"] : [])];
   const [criterion, setCriterion] = useState(() => criterionId && criteria.includes(criterionId)
     ? criterionId
     : criteria.find(id => criterionState(id, task.pending, task.evidence) === "fail") ?? criteria[0]);

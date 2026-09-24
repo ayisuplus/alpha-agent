@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "source": "https://github.com/msitarzewski/agency-agents",
+  "revision": "053ddbbf392a1688fc7043d81529f47ef2cf86c8",
+  "presets": [
+    { "id": "general", "name": "通用 worker", "description": "没有更合适的专业角色时，完成独立源码工单。", "file": "general.md" },
+    { "id": "frontend", "name": "前端开发", "description": "页面逻辑、组件、状态和交互实现。", "file": "frontend.md", "sourcePath": "engineering/engineering-frontend-developer.md" },
+    { "id": "backend", "name": "后端开发", "description": "接口、数据流与服务端代码实现。", "file": "backend.md", "sourcePath": "engineering/engineering-backend-architect.md" },
+    { "id": "ui-designer", "name": "UI 设计实现", "description": "样式、布局、响应式与可访问性实现。", "file": "ui-designer.md", "sourcePath": "design/design-ui-designer.md" },
+    { "id": "test-automation", "name": "测试自动化", "description": "编写和维护针对实际行为的自动化测试代码。", "file": "test-automation.md", "sourcePath": "testing/testing-test-automation-engineer.md" }
+  ]
+}

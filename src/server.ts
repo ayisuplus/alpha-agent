@@ -1,11 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ServerWebSocket } from "bun";
 import { access, cp, mkdir, readFile, readdir, realpath, unlink, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
 import { publishLocalPreview, type PreviewInstance } from "./runtime/local-preview";
-import { DEFAULT_MODEL, runTask, type RunEvent } from "./runtime/omp-runner";
+import { DEFAULT_MODEL, runTask, type RunEvent, type RunOptions } from "./runtime/omp-runner";
 import { ModelServiceError, isModelAvailable, listModels, removeApiKey, setApiKey, testModel } from "./runtime/models";
+import { PromptRefinementError, refinePrompt } from "./runtime/prompt-refinement";
 import { TaskLedger, fingerprintSource } from "./runtime/task-ledger";
 import { assertGeneratedAssetsIntact } from "./runtime/media-integrity";
 import { verifyBrowserPlan } from "./runtime/browser-verifier";
@@ -13,7 +14,20 @@ import { TaskActivity, type ActivityKind } from "./runtime/task-activity";
 import { readSourceReviews, snapshotSource, writeSourceReview } from "./runtime/source-review";
 import { SettingsError, SettingsStore, WorkbenchMeta, isModelSelector, normalizeComfyUrl } from "./runtime/settings";
 import { ComfyClient } from "./runtime/comfy-client";
+import { SkillPluginError, SkillPluginStore } from "./plugins/third-party";
+import { AgentPresetStore } from "./runtime/agent-presets";
 import { cleanupStalePreviews, storageReport } from "./runtime/storage";
+import { OperationManager, type OperationLease } from "./runtime/operation-manager";
+import { buildChildEnv } from "./runtime/child-env";
+import { importCodeWorkspace } from "./runtime/workspace-import";
+import { applyCodeChanges, reviewCodeApply } from "./runtime/workspace-apply";
+import { runCodeCheck } from "./runtime/code-check";
+import { VisibleBrowser } from "./runtime/visible-browser";
+import { commandApprovalStore } from "./runtime/command-approval";
+import { createGeneralWorkspace, verifyGeneralDeliverable } from "./runtime/general-work";
+import { MCPPermissionStore, type MCPPermission } from "./runtime/mcp-permissions";
+import { OperationJournal } from "./runtime/operation-journal";
+import { TaskQueueStore } from "./runtime/task-queue";
 
 const appRoot = resolve(import.meta.dir, "..");
 const workspaceRoot = resolve(process.env.ALPHA_WORKSPACE_ROOT ?? appRoot);
@@ -31,13 +45,25 @@ for (const directory of [dataRoot, productsRoot]) {
   }
 }
 const settingsStore = new SettingsStore(dataRoot);
+const skillPluginStore = new SkillPluginStore(dataRoot);
+const agentPresetStore = new AgentPresetStore(dataRoot);
 const workbenchMeta = new WorkbenchMeta(dataRoot);
+const commandApprovals = commandApprovalStore(dataRoot);
+const mcpPermissions = new MCPPermissionStore(dataRoot);
+const operationJournal = new OperationJournal(dataRoot);
+const startupReconciliation = await operationJournal.reconcile();
+for (const item of startupReconciliation) console.error("ALPHA_RECONCILED_OPERATION", item);
+const taskQueue = new TaskQueueStore(dataRoot);
+await taskQueue.reconcile();
+const queuedRuns = new Map<string, string>();
+let queueDraining = false;
 let taskMeta = await workbenchMeta.all();
 const clients = new Set<ServerWebSocket<unknown>>();
 const previews = new Map<string, PreviewInstance>();
 let active: { runId: string; controller: AbortController; ledger?: TaskLedger; steer?: (text: string) => Promise<void>; steeringIds: Set<string> } | null = null;
 let controlHolder: "alpha" | "user" = "alpha";
 let verification: { taskId: string; controller: AbortController } | null = null;
+let modelBrowser: VisibleBrowser | null = null;
 let publishing = false;
 let cleaning = false;
 const activities = new Map<string, TaskActivity>();
@@ -45,6 +71,7 @@ const operations = new Map<string, string>();
 const contexts = new Map<string, { contractVersion: number; revision: string | null; previewId: string | null }>();
 const textBuffers = new Map<string, string>();
 const textTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const operationManager = new OperationManager(operation => broadcast({ type: "operation", operation }));
 
 function activityFor(taskId: string): TaskActivity {
   let activity = activities.get(taskId);
@@ -100,9 +127,22 @@ async function safeEvidencePath(path: string): Promise<string | null> {
   return file && file.startsWith(root + sep) ? file : null;
 }
 
-async function evidenceDetail(ledger: TaskLedger, evidenceId: string): Promise<{ content: string; screenshotUrl: string | null } | null> {
+async function safeArtifactPath(ledger: TaskLedger, evidenceId: string): Promise<string | null> {
+  const item = ledger.state.evidence.find(candidate => candidate.id === evidenceId && candidate.kind === "artifact");
+  if (!item?.contentHash) return null;
+  const root = await realpath(join(dataRoot, "artifacts", ledger.state.id)).catch(() => null);
+  const file = await realpath(item.source).catch(() => null);
+  if (!root || !file || !file.startsWith(root + sep)) return null;
+  return createHash("sha256").update(await readFile(file)).digest("hex") === item.contentHash ? file : null;
+}
+
+async function evidenceDetail(ledger: TaskLedger, evidenceId: string): Promise<{ content: string; screenshotUrl: string | null; artifactUrl?: string } | null> {
   const item = ledger.state.evidence.find(candidate => candidate.id === evidenceId);
   if (!item) return null;
+  if (item.kind === "artifact") {
+    const file = await safeArtifactPath(ledger, item.id);
+    return file ? { content: JSON.stringify({ file, sha256: item.contentHash, sourceIds: item.referenceIds ?? [] }, null, 2), screenshotUrl: null, artifactUrl: `/api/tasks/${ledger.state.id}/artifacts/${item.id}` } : null;
+  }
   const file = await safeEvidencePath(item.source);
   if (!file || ![".json", ".log", ".txt"].includes(extname(file).toLowerCase())) return null;
   const fullContent = await readFile(file, "utf8");
@@ -123,12 +163,15 @@ function taskView(ledger: TaskLedger) {
   const latestEvidence = new Set(ledger.state.criteria.map(criterion => evidence.findLast(item => item.criterionId === criterion.id)?.id));
   return {
     id: ledger.state.id,
+    taskType: ledger.state.taskType ?? "web-product",
+    workspaceOrigin: ledger.state.workspaceOrigin ?? { kind: "generated" },
     objective: ledger.state.objective,
     originalObjective: ledger.state.contractHistory?.[0]?.objective ?? ledger.state.objective,
     contractVersion: ledger.state.contractVersion ?? 1,
     status: ledger.state.status,
     revision: ledger.state.revision,
     projectRoot: ledger.state.projectRoot,
+    inputs: (ledger.state.inputs ?? []).map(item => ({ id: item.id, name: item.name, mimeType: item.mimeType, sha256: item.sha256, uploadedAt: item.uploadedAt, url: `/api/tasks/${ledger.state.id}/inputs/${item.id}` })),
     modelSelector: ledger.state.modelSelector ?? null,
     meta: taskMeta[ledger.state.id] ?? {},
     running: active?.ledger?.state.id === ledger.state.id,
@@ -140,8 +183,10 @@ function taskView(ledger: TaskLedger) {
     runs: ledger.state.runs ?? [],
     lastFailure: ledger.state.lastFailure ?? null,
     reopenReason: ledger.state.reopenReason ?? null,
+    pendingQuestion: ledger.state.pendingQuestion ?? null,
+    blockedService: ledger.state.blockedService ?? null,
     latestRun: ledger.state.runs?.at(-1) ?? null,
-    evidence: ledger.state.evidence.map(item => ({ id: item.id, criterionId: item.criterionId, kind: item.kind, passed: item.passed, source: item.source, recordedAt: item.recordedAt, contractVersion: item.contractVersion ?? 1, revision: item.revision, previewId: item.previewId ?? null, current: latestEvidence.has(item.id) })),
+    evidence: ledger.state.evidence.map(item => ({ id: item.id, attemptId: item.attemptId ?? null, criterionId: item.criterionId, kind: item.kind, passed: item.passed, source: item.source, contentHash: item.contentHash ?? null, referenceIds: item.referenceIds ?? [], recordedAt: item.recordedAt, contractVersion: item.contractVersion ?? 1, revision: item.revision, previewId: item.previewId ?? null, current: latestEvidence.has(item.id) })),
     screenshotUrl: preview && evidence.some(item => item.kind === "browser") ? `/api/tasks/${ledger.state.id}/screenshot` : null,
     preview: preview ? { ...preview, live: previews.has(preview.id) } : null,
     createdAt: ledger.state.createdAt,
@@ -210,6 +255,10 @@ function broadcast(message: unknown): void {
 
 function emit(message: unknown): void {
   const event = message as { type?: string; taskId?: string; runId?: string; value?: string; phase?: string; name?: string; state?: string; message?: string; url?: string; error?: boolean; callId?: string; target?: string; intent?: string; task?: { id: string; contractVersion: number; revision: string | null; preview: { id: string } | null } };
+  const operation = operationManager.snapshot();
+  if (event.type === "status" && event.phase && operation && (!event.taskId || operation.taskId === event.taskId)) {
+    operationManager.update({ id: operation.id }, { phase: event.phase });
+  }
   if (event.type === "task" && event.task) contexts.set(event.task.id, { contractVersion: event.task.contractVersion, revision: event.task.revision, previewId: event.task.preview?.id ?? null });
   if (event.taskId) {
     if (event.type === "text" && event.value) {
@@ -235,8 +284,9 @@ function serveUi(pathname: string): Response {
 }
 
 async function build(projectRoot: string, ledger: TaskLedger, signal: AbortSignal): Promise<boolean> {
+  signal.throwIfAborted();
   await assertGeneratedAssetsIntact(projectRoot, dataRoot);
-  const child = Bun.spawn([process.execPath, "run", "build"], { cwd: projectRoot, stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn([process.execPath, "run", "build"], { cwd: projectRoot, env: buildChildEnv(), stdout: "pipe", stderr: "pipe" });
   const abort = () => child.kill();
   signal.addEventListener("abort", abort, { once: true });
   const timeout = setTimeout(abort, 60_000);
@@ -246,7 +296,7 @@ async function build(projectRoot: string, ledger: TaskLedger, signal: AbortSigna
       new Response(child.stderr).text(),
       child.exited,
     ]);
-    const log = `${stdout}\n${stderr}`;
+    const log = `command=${process.execPath} run build\ncwd=${projectRoot}\nexit=${exitCode}\n${stdout}\n${stderr}`;
     const logPath = join(dataRoot, "build-logs", `${ledger.state.id}-${randomUUID()}.log`);
     await mkdir(join(dataRoot, "build-logs"), { recursive: true });
     await writeFile(logPath, log);
@@ -302,15 +352,17 @@ async function verifyTaskBrowser(ledger: TaskLedger, signal: AbortSignal): Promi
   }
 }
 
-async function controlledVerification(ledger: TaskLedger, signal: AbortSignal): Promise<void> {
+async function controlledVerification(ledger: TaskLedger, signal: AbortSignal, lease: OperationLease): Promise<void> {
   if (controlHolder !== "alpha") throw new Error("User controls the visible browser");
   if (verification) throw new Error("Another browser verification is running");
   const controller = new AbortController();
   verification = { taskId: ledger.state.id, controller };
+  operationManager.update(lease, { browserTaskId: ledger.state.id, phase: "浏览器验收" });
   try {
     await verifyTaskBrowser(ledger, AbortSignal.any([signal, controller.signal]));
   } finally {
     if (verification?.controller === controller) verification = null;
+    operationManager.update(lease, { browserTaskId: null });
   }
 }
 
@@ -357,29 +409,53 @@ async function configuredRun(taskModel?: string) {
     modelSelector: taskModel ?? settings.model.default ?? DEFAULT_MODEL,
     maxToolCalls: settings.budget.maxToolCalls,
     wallTimeMs: settings.budget.wallTimeMinutes * 60_000,
+    maxTotalToolCalls: settings.budget.maxTotalToolCalls,
+    totalWallTimeMs: settings.budget.totalWallTimeMinutes * 60_000,
     comfyUrl: settings.generation.comfyUrl,
     generation: { image: settings.generation.image, voice: settings.generation.voice, video: settings.generation.video },
+    plugins: settings.plugins,
   };
 }
 
-async function execute(runId: string, objective: string, projectRoot: string, controller: AbortController, existingLedger?: TaskLedger, newTaskModel?: string): Promise<void> {
+async function execute(runId: string, objective: string, projectRoot: string, controller: AbortController, lease: OperationLease, existingLedger?: TaskLedger, newTaskModel?: string): Promise<void> {
   let beforeSource: Awaited<ReturnType<typeof snapshotSource>> | null = null;
+  let runError: string | null = null;
   const emitRun = (message: Record<string, unknown>) => emit({ ...message, taskId: active?.runId === runId ? active.ledger?.state.id : existingLedger?.state.id });
+  const modelRun = async (options: RunOptions): Promise<TaskLedger> => {
+    const preview = options.existingLedger?.state.preview;
+    const port = process.env.ALPHA_CDP_PORT;
+    const browser = preview && previews.has(preview.id) && controlHolder === "alpha" && port && /^\d+$/.test(port)
+      ? await VisibleBrowser.connect(`http://127.0.0.1:${port}`, preview.url).catch(() => undefined)
+      : undefined;
+    if (browser) modelBrowser = browser;
+    if (browser && options.existingLedger) operationManager.update(lease, { browserTaskId: options.existingLedger.state.id });
+    try {
+      return await runTask({ ...options, browser, browserUrl: preview?.url, browserAccess: () => controlHolder === "alpha" && operationManager.snapshot()?.id === lease.id });
+    } finally {
+      await browser?.disconnect();
+      if (modelBrowser === browser) modelBrowser = null;
+      operationManager.update(lease, { browserTaskId: null });
+    }
+  };
   try {
     const configured = await configuredRun(existingLedger?.state.modelSelector ?? newTaskModel);
     beforeSource = await snapshotSource(projectRoot);
     emitRun({ type: "status", phase: "构建中", runId });
     const forwardEvent = (event: RunEvent) => {
       if (event.type === "text") emitRun({ type: "text", value: event.value });
+      else if (event.type === "status") emitRun({ type: "status", phase: event.value, runId });
       else emitRun({ type: "tool", name: event.value, state: event.type === "tool-start" ? "开始" : "结束", error: event.error, callId: event.callId, target: event.target, intent: event.intent });
     };
-    const ledger = await runTask({
+    const ledger = await modelRun({
       ...configured,
       taskModel: newTaskModel,
       projectRoot, objective, dataRoot, signal: controller.signal, existingLedger,
+      onNeedsInput: reason => controller.abort(new Error(reason)),
       onEvent: forwardEvent,
-      onLedger(created) {
+      async onLedger(created) {
+        await operationJournal.start(created.state.id, runId);
         if (active?.runId === runId) active.ledger = created;
+        operationManager.update(lease, { taskId: created.state.id });
         setContext(created);
         operations.set(created.state.id, runId);
         if (!existingLedger) appendActivity(created.state.id, "status", "任务已创建", runId);
@@ -393,6 +469,46 @@ async function execute(runId: string, objective: string, projectRoot: string, co
       emitRun({ type: "status", phase: "已停止", runId, pending: ledger.completionGaps() });
       return;
     }
+    if (ledger.state.taskType === "code-change") {
+      const review = await reviewCodeApply(ledger, dataRoot);
+      const reviewPath = join(dataRoot, "evidence", `${ledger.state.id}-${runId}-code-review.json`);
+      await mkdir(join(dataRoot, "evidence"), { recursive: true });
+      await writeFile(reviewPath, JSON.stringify(review, null, 2), { flag: "wx" });
+      if (review.changes.length) await ledger.recordEvidence({ criterionId: "change", kind: "asset", revision: ledger.state.revision!, passed: true, source: reviewPath });
+      const checks = ledger.state.workspaceOrigin?.checks ?? [];
+      const checkResults: Array<{ name: string; passed: boolean; logPath: string }> = [];
+      if (!checks.length) {
+        const approved = (await commandApprovals.list(ledger.state.id)).findLast(item => item.purpose === "check" && item.status === "complete" && item.result?.exitCode === 0 && item.result.revision === ledger.state.revision);
+        if (!approved?.result) throw new Error("No configured project check; approve and run a check command before technical completion");
+        checkResults.push({ name: approved.argv.join(" "), passed: true, logPath: approved.result.logPath });
+      }
+      for (const check of checks) {
+        emitRun({ type: "status", phase: `检查 ${check.name}`, runId });
+        const result = await runCodeCheck(projectRoot, dataRoot, ledger.state.id, check.name, checks, controller.signal);
+        checkResults.push({ name: check.name, passed: result.passed, logPath: result.logPath });
+        if (!result.passed) break;
+      }
+      if (await fingerprintSource(projectRoot) !== ledger.state.revision) throw new Error("Project source changed during checks; review and rerun");
+      const checkPath = join(dataRoot, "evidence", `${ledger.state.id}-${runId}-checks.json`);
+      await writeFile(checkPath, JSON.stringify({ checks: checkResults }, null, 2), { flag: "wx" });
+      const passed = checkResults.length === Math.max(1, checks.length) && checkResults.every(item => item.passed);
+      await ledger.recordEvidence({ criterionId: "check", kind: "test", revision: ledger.state.revision!, passed, source: checkPath });
+      if (!passed) throw new Error(`Configured check failed: ${checkResults.find(item => !item.passed)?.name}`);
+      if (ledger.completionGaps().length) {
+        emitRun({ type: "status", phase: "待验收", runId, pending: ledger.completionGaps() });
+        return;
+      }
+      await ledger.complete();
+      emitRun({ type: "task", task: taskView(ledger) });
+      emitRun({ type: "status", phase: "已验收", runId, pending: [] });
+      return;
+    }
+    if (ledger.state.taskType === "research" || ledger.state.taskType === "file-work") {
+      await verifyGeneralDeliverable(ledger, dataRoot);
+      emitRun({ type: "task", task: taskView(ledger) });
+      emitRun({ type: "status", phase: "已验收", runId, pending: [] });
+      return;
+    }
     emitRun({ type: "status", phase: "验证构建", runId });
     if (!(await build(projectRoot, ledger, controller.signal))) {
       emitRun({ type: "status", phase: controller.signal.aborted ? "已停止" : "失败", runId, pending: ledger.completionGaps() });
@@ -404,7 +520,7 @@ async function execute(runId: string, objective: string, projectRoot: string, co
       for (let attempt = 0; attempt < 2; attempt++) {
         emitRun({ type: "status", phase: "浏览器验收", runId });
         try {
-          await controlledVerification(await TaskLedger.load(ledger.file), controller.signal);
+          await controlledVerification(await TaskLedger.load(ledger.file), controller.signal, lease);
           const verified = await TaskLedger.load(ledger.file);
           emitRun({ type: "task", task: taskView(verified) });
           emitRun({ type: "tool", name: "browser", state: "通过" });
@@ -423,12 +539,12 @@ async function execute(runId: string, objective: string, projectRoot: string, co
           if (controller.signal.aborted || attempt === 1 || (latestBrowser?.passed !== false && !reason.includes("Verification plan"))) break;
           emitRun({ type: "status", phase: "修复中", runId, pending: current.completionGaps() });
           const failedRevision = current.state.revision;
-          const repaired = await runTask({
+          const repaired = await modelRun({
             ...await configuredRun(current.state.modelSelector),
             projectRoot, dataRoot, signal: controller.signal, existingLedger: current,
             objective: `Visible browser acceptance failed: ${reason}. Read the failure evidence and inspect the exact failing step. Decide whether the product or the verification plan is wrong; preserve the original requirements and do not change product code to fix an invalid test selector. Then rebuild.`,
             onEvent: forwardEvent,
-            onLedger(created) { if (active?.runId === runId) active.ledger = created; setContext(created); },
+            async onLedger(created) { await operationJournal.start(created.state.id, runId); if (active?.runId === runId) active.ledger = created; setContext(created); },
             ...sessionHooks(runId),
           });
           if (controller.signal.aborted || repaired.state.revision === failedRevision) break;
@@ -442,13 +558,14 @@ async function execute(runId: string, objective: string, projectRoot: string, co
     const current = await TaskLedger.load(ledger.file);
     emitRun({ type: "status", phase: "待验收", runId, pending: current.completionGaps() });
   } catch (error) {
+    runError = error instanceof Error ? error.message : String(error);
     const current = active?.runId === runId && active.ledger ? await TaskLedger.load(active.ledger.file).catch(() => null) : null;
     if (current) {
       if (current.state.status === "active") await current.recordFailure(error instanceof Error ? error.message : String(error));
       emitRun({ type: "task", task: taskView(current) });
     }
     emitRun({ type: "error", message: error instanceof Error ? error.message : String(error) });
-    emitRun({ type: "status", phase: controller.signal.aborted ? "已停止" : "失败", runId });
+    emitRun({ type: "status", phase: current?.state.status === "needs-input" ? "需要回答" : controller.signal.aborted ? "已停止" : "失败", runId });
   } finally {
     const ledger = active?.runId === runId ? active.ledger : existingLedger;
     if (beforeSource && ledger) {
@@ -461,13 +578,58 @@ async function execute(runId: string, objective: string, projectRoot: string, co
       const current = await TaskLedger.load(active.ledger.file).catch(() => null);
       if (current?.state.status === "active") await current.stop();
     }
+    if (ledger) await operationJournal.finish(ledger.state.id, runId);
+    const queueItemId = queuedRuns.get(runId);
+    if (queueItemId) {
+      queuedRuns.delete(runId);
+      await taskQueue.finish(queueItemId, runError ?? (controller.signal.aborted ? "cancelled" : ledger ? `task ${ledger.state.status}; pending ${ledger.completionGaps().join(", ") || "none"}` : "no task ledger"), !runError && !controller.signal.aborted);
+    }
     if (active?.runId === runId) active = null;
+    operationManager.release(lease);
+    void drainQueue();
+  }
+}
+
+async function drainQueue(): Promise<void> {
+  if (queueDraining || operationManager.snapshot()) return;
+  queueDraining = true;
+  let lease: OperationLease | null = null;
+  let itemId: string | null = null;
+  let launched = false;
+  try {
+    const item = await taskQueue.next();
+    if (!item) return;
+    itemId = item.id;
+    lease = operationManager.claim("run", item.taskId);
+    if (!lease) return;
+    const ledger = await loadLedger(item.taskId);
+    if (!ledger) throw new Error("Queued task no longer exists");
+    const projectRoot = resolve(ledger.state.projectRoot);
+    if (!projectRoot.startsWith(productsRoot + sep)) throw new Error("Queued task is outside products");
+    if (ledger.state.status === "complete") await ledger.reviseObjective(item.instruction);
+    else if (ledger.state.status === "stopped" || ledger.state.status === "needs-input") await ledger.resume(item.instruction);
+    else await ledger.recordGuidance(item.instruction);
+    const runId = randomUUID();
+    await taskQueue.start(item.id, runId);
+    queuedRuns.set(runId, item.id);
+    active = { runId, controller: lease.controller, ledger, steeringIds: new Set() };
+    setContext(ledger);
+    operations.set(ledger.state.id, runId);
+    emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+    launched = true;
+    void execute(runId, item.instruction, projectRoot, lease.controller, lease, ledger);
+  } catch (error) {
+    if (itemId) await taskQueue.finish(itemId, error instanceof Error ? error.message : String(error), false);
+  } finally {
+    if (!launched && lease) operationManager.release(lease);
+    queueDraining = false;
   }
 }
 
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
+  idleTimeout: 120,
   async fetch(request, server) {
     const url = new URL(request.url);
     if (url.pathname === "/events") {
@@ -478,8 +640,27 @@ const server = Bun.serve({
     if (url.pathname.startsWith("/ui")) return serveUi(url.pathname);
     if (url.pathname === "/api/browser/control" && request.method === "GET") return Response.json({ holder: controlHolder });
     if (url.pathname === "/api/tasks" && request.method === "GET") {
-      return Response.json({ tasks: (await listTasks()).map(taskSummary), activeTaskId: active?.ledger?.state.id ?? null, activeRunId: active?.runId ?? null });
+      return Response.json({ tasks: (await listTasks()).map(taskSummary), activeTaskId: active?.ledger?.state.id ?? null, activeRunId: active?.runId ?? null, operation: operationManager.snapshot() });
     }
+    if (url.pathname === "/api/queue" && request.method === "GET") return Response.json(await taskQueue.all());
+    if (url.pathname === "/api/queue" && request.method === "POST") {
+      const body = await request.json().catch(() => ({})) as { taskId?: unknown; instruction?: unknown };
+      if (typeof body.taskId !== "string" || !await loadLedger(body.taskId) || typeof body.instruction !== "string") return Response.json({ error: "Queue task or instruction is invalid" }, { status: 400 });
+      const item = await taskQueue.enqueue(body.taskId, body.instruction);
+      void drainQueue();
+      return Response.json({ item });
+    }
+    const queueCancel = /^\/api\/queue\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (queueCancel && request.method === "DELETE") { await taskQueue.cancel(queueCancel[1]); return Response.json({ cancelled: true }); }
+    if (url.pathname === "/api/schedules" && request.method === "GET") return Response.json(await taskQueue.all());
+    if (url.pathname === "/api/schedules" && request.method === "POST") {
+      const body = await request.json().catch(() => ({})) as { taskId?: unknown; instruction?: unknown; nextRunAt?: unknown; intervalMinutes?: unknown };
+      if (typeof body.taskId !== "string" || !await loadLedger(body.taskId) || typeof body.instruction !== "string" || typeof body.nextRunAt !== "string" || body.intervalMinutes !== null && typeof body.intervalMinutes !== "number") return Response.json({ error: "Schedule fields are invalid" }, { status: 400 });
+      const schedule = await taskQueue.schedule(body.taskId, body.instruction, body.nextRunAt, body.intervalMinutes as number | null);
+      return Response.json({ schedule });
+    }
+    const scheduleDelete = /^\/api\/schedules\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (scheduleDelete && request.method === "DELETE") { await taskQueue.disable(scheduleDelete[1]); return Response.json({ disabled: true }); }
     if (url.pathname === "/api/tasks/latest" && request.method === "GET") {
       const ledgers = await listTasks();
       return Response.json({ task: ledgers[0] ? taskView(ledgers[0]) : null });
@@ -527,10 +708,36 @@ const server = Bun.serve({
       const screenshot = typeof detail.screenshot === "string" ? await safeEvidencePath(detail.screenshot) : null;
       return screenshot && extname(screenshot).toLowerCase() === ".png" ? new Response(Bun.file(screenshot), { headers: { "content-type": "image/png" } }) : new Response("Not found", { status: 404 });
     }
+    const artifact = /^\/api\/tasks\/([0-9a-f-]{36})\/artifacts\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (artifact && request.method === "GET") {
+      const ledger = await loadLedger(artifact[1]);
+      const file = ledger ? await safeArtifactPath(ledger, artifact[2]) : null;
+      if (!file) return new Response("Not found", { status: 404 });
+      const type = { ".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".md": "text/markdown; charset=utf-8" }[extname(file).toLowerCase()] ?? "application/octet-stream";
+      return new Response(Bun.file(file), { headers: { "content-type": type, "content-disposition": `attachment; filename="${encodeURIComponent(file.split(sep).at(-1) ?? "artifact")}"` } });
+    }
+    const taskInput = /^\/api\/tasks\/([0-9a-f-]{36})\/inputs\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (taskInput && request.method === "GET") {
+      const ledger = await loadLedger(taskInput[1]);
+      const input = ledger?.state.inputs?.find(item => item.id === taskInput[2]);
+      const root = ledger ? await realpath(join(ledger.state.projectRoot, "inputs")).catch(() => null) : null;
+      const file = input ? await realpath(input.path).catch(() => null) : null;
+      if (!input || !root || !file || !file.startsWith(root + sep) || createHash("sha256").update(await readFile(file)).digest("hex") !== input.sha256) return new Response("Not found", { status: 404 });
+      return new Response(Bun.file(file), { headers: { "content-type": input.mimeType || "application/octet-stream", "content-disposition": `attachment; filename="${encodeURIComponent(input.name)}"` } });
+    }
     const screenshot = /^\/api\/tasks\/([0-9a-f-]{36})\/screenshot$/.exec(url.pathname);
     if (screenshot && request.method === "GET") {
       const ledger = await loadLedger(screenshot[1]);
       if (!ledger?.state.preview) return new Response("Not found", { status: 404 });
+      const latest = ledger.state.evidence.findLast(item => item.kind === "browser" && item.previewId === ledger.state.preview?.id);
+      if (latest) {
+        const file = await safeEvidencePath(latest.source);
+        if (file) {
+          const detail = JSON.parse(await readFile(file, "utf8")) as { screenshot?: unknown };
+          const imagePath = typeof detail.screenshot === "string" ? await safeEvidencePath(detail.screenshot) : null;
+          if (imagePath && extname(imagePath).toLowerCase() === ".png") return new Response(Bun.file(imagePath), { headers: { "content-type": "image/png" } });
+        }
+      }
       const current = Bun.file(join(dataRoot, "evidence", `${ledger.state.id}-${ledger.state.preview.id}-plan.png`));
       const fallback = Bun.file(join(dataRoot, "evidence", `${ledger.state.id}-${ledger.state.preview.id}-narrow.png`));
       const legacy = Bun.file(join(dataRoot, "evidence", `${ledger.state.id}-narrow.png`));
@@ -538,6 +745,16 @@ const server = Bun.serve({
       return image ? new Response(image, { headers: { "content-type": "image/png" } }) : new Response("Not found", { status: 404 });
     }
     if (url.pathname === "/api/settings" && request.method === "GET") return Response.json({ settings: await settingsStore.get() });
+    if (url.pathname === "/api/agent-presets" && request.method === "GET") {
+      const presets = (await agentPresetStore.list()).map(({ instructions: _instructions, ...item }) => item);
+      return Response.json({ presets });
+    }
+    const presetDetail = /^\/api\/agent-presets\/([a-z][a-z0-9-]{0,63})$/.exec(url.pathname);
+    if (presetDetail && request.method === "GET") {
+      try { return Response.json({ preset: await agentPresetStore.get(presetDetail[1]) }); }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 404 }); }
+    }
+    if (url.pathname === "/api/plugins" && request.method === "GET") return Response.json({ plugins: await skillPluginStore.list() });
     if (url.pathname === "/api/models" && request.method === "GET") {
       const settings = await settingsStore.get();
       return Response.json({ ...await listModels(), default: settings.model.default, builtin: DEFAULT_MODEL });
@@ -546,18 +763,40 @@ const server = Bun.serve({
     if (url.pathname === "/api/storage" && request.method === "GET") return Response.json(await storageReport(dataRoot, productsRoot, await protectedPreviewIds()));
     // Every state-changing request must come from the workbench page itself.
     if (request.method !== "GET" && request.method !== "HEAD" && request.headers.get("origin") && request.headers.get("origin") !== `http://127.0.0.1:${server.port}`) return new Response("Forbidden", { status: 403 });
+    const presetCopy = /^\/api\/agent-presets\/([a-z][a-z0-9-]{0,63})\/copy$/.exec(url.pathname);
+    if (presetCopy && request.method === "POST") {
+      try { return Response.json({ preset: await agentPresetStore.copy(presetCopy[1]) }); }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
+    if (presetDetail && request.method === "PATCH") {
+      try {
+        const body = await request.json() as { enabled?: unknown };
+        return Response.json({ preset: await agentPresetStore.setEnabled(presetDetail[1], body.enabled as boolean) });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
+    if (presetDetail && request.method === "PUT") {
+      try {
+        const body = await request.json() as { name?: unknown; description?: unknown; instructions?: unknown };
+        return Response.json({ preset: await agentPresetStore.update(presetDetail[1], body) });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
     if (url.pathname === "/api/storage/cleanup-previews" && request.method === "POST") {
-      if (active || verification || publishing || cleaning) return Response.json({ error: "请等当前操作结束后再清理预览" }, { status: 409 });
+      const lease = operationManager.claim("cleanup");
+      if (!lease) return Response.json({ error: "请等当前操作结束后再清理预览" }, { status: 409 });
       cleaning = true;
       try { return Response.json(await cleanupStalePreviews(dataRoot, await protectedPreviewIds())); }
-      finally { cleaning = false; }
+      finally { cleaning = false; operationManager.release(lease); }
     }
     if (url.pathname === "/api/settings" && request.method === "PUT") {
       try {
-        const patch = await request.json().catch(() => null) as { model?: { default?: unknown } } | null;
+        const patch = await request.json().catch(() => null) as { model?: { default?: unknown; translation?: unknown } } | null;
         const nextDefault = patch?.model?.default;
         if (typeof nextDefault === "string" && isModelSelector(nextDefault) && !(await isModelAvailable(nextDefault))) {
           return Response.json({ error: "这个模型没有可用的认证，不能设为默认" }, { status: 400 });
+        }
+        const nextTranslation = patch?.model?.translation;
+        if (typeof nextTranslation === "string" && isModelSelector(nextTranslation) && !(await isModelAvailable(nextTranslation))) {
+          return Response.json({ error: "这个模型没有可用的认证，不能用于翻译" }, { status: 400 });
         }
         const settings = await settingsStore.update(patch);
         broadcast({ type: "settings", settings });
@@ -567,10 +806,70 @@ const server = Bun.serve({
         throw error;
       }
     }
+    if (url.pathname === "/api/plugins/install" && request.method === "POST") {
+      try {
+        const body = await request.json().catch(() => ({})) as { source?: unknown };
+        if (typeof body.source !== "string") throw new SkillPluginError("请输入插件仓库地址");
+        return Response.json({ plugin: await skillPluginStore.install(body.source) });
+      } catch (error) {
+        if (error instanceof SkillPluginError) return Response.json({ error: error.message }, { status: 400 });
+        throw error;
+      }
+    }
+    const skillPlugin = /^\/api\/plugins\/([a-z][a-z0-9-]{0,63})$/.exec(url.pathname);
+    if (skillPlugin && request.method === "PATCH") {
+      try {
+        const body = await request.json().catch(() => ({})) as { enabled?: unknown; hooksEnabled?: unknown; mcpEnabled?: unknown };
+        if ("hooksEnabled" in body) {
+          if (typeof body.hooksEnabled !== "boolean") throw new SkillPluginError("Hook 启用状态必须是布尔值");
+          return Response.json({ plugin: await skillPluginStore.setHooksEnabled(skillPlugin[1], body.hooksEnabled) });
+        }
+        if ("mcpEnabled" in body) {
+          if (typeof body.mcpEnabled !== "boolean") throw new SkillPluginError("MCP 启用状态必须是布尔值");
+          return Response.json({ plugin: await skillPluginStore.setMCPEnabled(skillPlugin[1], body.mcpEnabled) });
+        }
+        if (typeof body.enabled !== "boolean") throw new SkillPluginError("启用状态必须是布尔值");
+        return Response.json({ plugin: await skillPluginStore.setEnabled(skillPlugin[1], body.enabled) });
+      } catch (error) {
+        if (error instanceof SkillPluginError) return Response.json({ error: error.message }, { status: 400 });
+        throw error;
+      }
+    }
+    const mcpCheck = /^\/api\/plugins\/([a-z][a-z0-9-]{0,63})\/mcp\/check$/.exec(url.pathname);
+    if (mcpCheck && request.method === "POST") {
+      const plugin = (await skillPluginStore.list()).find(item => item.id === mcpCheck[1]);
+      if (!plugin || !plugin.enabled || !plugin.mcpEnabled) return Response.json({ error: "请先启用插件和 MCP" }, { status: 400 });
+      const result = await skillPluginStore.loadMCP(productsRoot, plugin.id);
+      try { return Response.json({ tools: result.tools.map(tool => tool.name), errors: result.errors }); }
+      finally { await result.manager.disconnectAll(); }
+    }
+    const mcpPolicy = /^\/api\/plugins\/([a-z][a-z0-9-]{0,63})\/mcp\/permissions$/.exec(url.pathname);
+    if (mcpPolicy && request.method === "GET") return Response.json({ permissions: await mcpPermissions.list() });
+    if (mcpPolicy && request.method === "PUT") {
+      const plugin = (await skillPluginStore.list()).find(item => item.id === mcpPolicy[1]);
+      if (!plugin?.enabled || !plugin.mcpEnabled) return Response.json({ error: "请先启用插件和 MCP" }, { status: 400 });
+      const body = await request.json().catch(() => ({})) as { tool?: unknown; permission?: unknown };
+      if (typeof body.tool !== "string" || !body.tool.startsWith(`mcp__alpha_${plugin.id}_`) || !["deny", "read", "write"].includes(body.permission as string)) return Response.json({ error: "MCP 工具或权限无效" }, { status: 400 });
+      await mcpPermissions.set(body.tool, body.permission as MCPPermission);
+      return Response.json({ permissions: await mcpPermissions.list() });
+    }
     if (url.pathname === "/api/models/test" && request.method === "POST") {
       const body = await request.json().catch(() => ({})) as { model?: unknown };
       if (!isModelSelector(body.model)) return Response.json({ error: "请选择要测试的模型" }, { status: 400 });
       return Response.json(await testModel(body.model, dataRoot));
+    }
+    if (url.pathname === "/api/prompts/refine" && request.method === "POST") {
+      const body = await request.json().catch(() => ({})) as { prompt?: unknown; model?: unknown };
+      if (typeof body.prompt !== "string" || !body.prompt.trim() || body.prompt.length > 12_000) return Response.json({ error: "请输入 1–12000 字的提示词" }, { status: 400 });
+      if (body.model !== undefined && !isModelSelector(body.model)) return Response.json({ error: "优化模型格式不正确" }, { status: 400 });
+      const settings = await settingsStore.get();
+      const optimizationModel = typeof body.model === "string" ? body.model : settings.model.default ?? DEFAULT_MODEL;
+      const translationModel = settings.model.translation ?? optimizationModel;
+      try { return Response.json({ result: await refinePrompt(body.prompt, optimizationModel, translationModel, dataRoot, undefined, request.signal) }); }
+      catch (error) {
+        if (error instanceof PromptRefinementError) return Response.json({ error: error.message }, { status: 400 });
+        throw error;
+      }
     }
     const providerKey = /^\/api\/providers\/([A-Za-z0-9._-]{1,80})\/key$/.exec(url.pathname);
     if (providerKey && (request.method === "PUT" || request.method === "DELETE")) {
@@ -625,8 +924,105 @@ const server = Bun.serve({
         throw error;
       }
     }
+    if (url.pathname === "/api/workspaces/import" && request.method === "POST") {
+      const lease = operationManager.claim("run");
+      if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
+      let launched = false;
+      try {
+        const body = await request.json().catch(() => ({})) as { sourcePath?: unknown; objective?: unknown; model?: unknown };
+        const sourcePath = typeof body.sourcePath === "string" ? body.sourcePath.trim() : "";
+        const objective = typeof body.objective === "string" ? body.objective.trim() : "";
+        if (!sourcePath || !objective) return Response.json({ error: "Source path and objective are required" }, { status: 400 });
+        if (body.model !== undefined && body.model !== null && !isModelSelector(body.model)) return Response.json({ error: "模型格式不正确" }, { status: 400 });
+        const model = typeof body.model === "string" ? body.model : undefined;
+        if (model && !(await isModelAvailable(model))) return Response.json({ error: "这个模型没有可用的认证" }, { status: 400 });
+        const ledger = await importCodeWorkspace({ sourcePath, productsRoot, dataRoot, objective, modelSelector: model });
+        operationManager.update(lease, { taskId: ledger.state.id });
+        if (lease.controller.signal.aborted) { await ledger.stop(); return Response.json({ error: "Import was cancelled", taskId: ledger.state.id }, { status: 409 }); }
+        const runId = randomUUID();
+        active = { runId, controller: lease.controller, ledger, steeringIds: new Set() };
+        setContext(ledger);
+        operations.set(ledger.state.id, runId);
+        emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+        launched = true;
+        void execute(runId, objective, ledger.state.projectRoot, lease.controller, lease, ledger);
+        return Response.json({ taskId: ledger.state.id, runId });
+      } finally { if (!launched) operationManager.release(lease); }
+    }
+    if (url.pathname === "/api/workflows" && request.method === "POST") {
+      const lease = operationManager.claim("run");
+      if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
+      let launched = false;
+      try {
+        const form = await request.formData();
+        const taskType = form.get("taskType");
+        const objective = form.get("objective");
+        const modelValue = form.get("model");
+        if (taskType !== "research" && taskType !== "file-work" || typeof objective !== "string" || !objective.trim()) return Response.json({ error: "Task type and objective are required" }, { status: 400 });
+        const model = typeof modelValue === "string" && modelValue ? modelValue : undefined;
+        if (model && (!isModelSelector(model) || !(await isModelAvailable(model)))) return Response.json({ error: "Model is unavailable" }, { status: 400 });
+        const files = await Promise.all(form.getAll("files").map(async item => {
+          if (!(item instanceof File)) throw new Error("Input must be a file");
+          return { name: item.name, mimeType: item.type, bytes: new Uint8Array(await item.arrayBuffer()) };
+        }));
+        const ledger = await createGeneralWorkspace({ taskType, objective, productsRoot, dataRoot, modelSelector: model, files });
+        operationManager.update(lease, { taskId: ledger.state.id });
+        if (lease.controller.signal.aborted) { await ledger.stop(); return Response.json({ error: "Task was cancelled", taskId: ledger.state.id }, { status: 409 }); }
+        const runId = randomUUID();
+        active = { runId, controller: lease.controller, ledger, steeringIds: new Set() };
+        setContext(ledger);
+        operations.set(ledger.state.id, runId);
+        emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+        launched = true;
+        void execute(runId, objective, ledger.state.projectRoot, lease.controller, lease, ledger);
+        return Response.json({ taskId: ledger.state.id, runId });
+      } finally { if (!launched) operationManager.release(lease); }
+    }
+    const approvals = /^\/api\/tasks\/([0-9a-f-]{36})\/approvals$/.exec(url.pathname);
+    if (approvals && request.method === "GET") {
+      const ledger = await loadLedger(approvals[1]);
+      if (!ledger || ledger.state.taskType !== "code-change") return Response.json({ error: "Code task not found" }, { status: 404 });
+      return Response.json({ approvals: await commandApprovals.list(ledger.state.id) });
+    }
+    const approvalDecision = /^\/api\/tasks\/([0-9a-f-]{36})\/approvals\/([0-9a-f-]{36})\/decision$/.exec(url.pathname);
+    if (approvalDecision && request.method === "POST") {
+      const ledger = await loadLedger(approvalDecision[1]);
+      if (!ledger || ledger.state.taskType !== "code-change") return Response.json({ error: "Code task not found" }, { status: 404 });
+      const body = await request.json().catch(() => ({})) as { approved?: unknown };
+      if (typeof body.approved !== "boolean") return Response.json({ error: "Approval decision is required" }, { status: 400 });
+      try {
+        const approval = await commandApprovals.decide(ledger.state.id, approvalDecision[2], body.approved);
+        appendActivity(ledger.state.id, "status", `命令${body.approved ? "已批准" : "已拒绝"}：${approval.argv.join(" ")}`);
+        return Response.json({ approval });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 }); }
+    }
+    const applyReview = /^\/api\/tasks\/([0-9a-f-]{36})\/apply-review$/.exec(url.pathname);
+    if (applyReview && request.method === "GET") {
+      const ledger = await loadLedger(applyReview[1]);
+      if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+      try { return Response.json(await reviewCodeApply(ledger, dataRoot)); }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 }); }
+    }
+    const applyTask = /^\/api\/tasks\/([0-9a-f-]{36})\/apply$/.exec(url.pathname);
+    if (applyTask && request.method === "POST") {
+      const lease = operationManager.claim("apply", applyTask[1]);
+      if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
+      try {
+        const ledger = await loadLedger(applyTask[1]);
+        if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+        const body = await request.json().catch(() => ({})) as { revision?: unknown };
+        if (typeof body.revision !== "string") return Response.json({ error: "Reviewed revision is required" }, { status: 400 });
+        const changes = await applyCodeChanges(ledger, dataRoot, body.revision);
+        appendActivity(ledger.state.id, "status", `隔离成果已应用回原项目：${changes.length} 个文件`);
+        return Response.json({ applied: changes });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 }); }
+      finally { operationManager.release(lease); }
+    }
     if (url.pathname === "/api/tasks" && request.method === "POST") {
-      if (active || verification || publishing || cleaning) return Response.json({ error: "A task is already running" }, { status: 409 });
+      const lease = operationManager.claim("run");
+      if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
+      let launched = false;
+      try {
       const body = await request.json().catch(() => ({})) as { brief?: unknown; model?: unknown };
       const brief = typeof body.brief === "string" ? body.brief.trim() : "";
       if (!brief) return Response.json({ error: "Brief is required" }, { status: 400 });
@@ -637,10 +1033,15 @@ const server = Bun.serve({
       const projectRoot = join(productsRoot, runId);
       await mkdir(productsRoot, { recursive: true });
       await cp(join(appRoot, "templates", "web-minimal"), projectRoot, { recursive: true });
-      const controller = new AbortController();
+      const controller = lease.controller;
+      controller.signal.throwIfAborted();
       active = { runId, controller, steeringIds: new Set() };
-      void execute(runId, brief, projectRoot, controller, undefined, chosenModel);
+      launched = true;
+      void execute(runId, brief, projectRoot, controller, lease, undefined, chosenModel);
       return Response.json({ runId, projectRoot });
+      } finally {
+        if (!launched) operationManager.release(lease);
+      }
     }
     const cancel = /^\/api\/tasks\/([^/]+)\/cancel$/.exec(url.pathname);
     if (cancel && request.method === "POST") {
@@ -648,11 +1049,20 @@ const server = Bun.serve({
       active.controller.abort();
       return Response.json({ stopping: true });
     }
+    const cancelOperation = /^\/api\/operations\/([0-9a-f-]{36})\/cancel$/.exec(url.pathname);
+    if (cancelOperation && request.method === "POST") {
+      return operationManager.cancel(cancelOperation[1])
+        ? Response.json({ stopping: true })
+        : Response.json({ error: "Operation is not cancellable" }, { status: 404 });
+    }
     if (url.pathname === "/api/browser/control" && request.method === "POST") {
       const body = await request.json().catch(() => ({})) as { holder?: unknown };
       if (body.holder !== "alpha" && body.holder !== "user") return Response.json({ error: "Invalid browser holder" }, { status: 400 });
       controlHolder = body.holder;
-      if (controlHolder === "user") verification?.controller.abort(new Error("User took over the browser"));
+      if (controlHolder === "user") {
+        verification?.controller.abort(new Error("User took over the browser"));
+        if (modelBrowser) void modelBrowser.disconnect();
+      }
       emit({ type: "control", holder: controlHolder });
       return Response.json({ holder: controlHolder });
     }
@@ -678,7 +1088,10 @@ const server = Bun.serve({
     }
     const revise = /^\/api\/tasks\/([0-9a-f-]{36})\/revise$/.exec(url.pathname);
     if (revise && request.method === "POST") {
-      if (active || verification || publishing || cleaning) return Response.json({ error: "A task is already running" }, { status: 409 });
+      const lease = operationManager.claim("run", revise[1]);
+      if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
+      let launched = false;
+      try {
       const ledger = await loadLedger(revise[1]);
       if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
       const projectRoot = resolve(ledger.state.projectRoot);
@@ -688,23 +1101,31 @@ const server = Bun.serve({
       if (!brief || brief === ledger.state.objective) return Response.json({ error: "A changed task objective is required" }, { status: 400 });
       const previousPreviewId = ledger.state.preview?.id;
       await ledger.reviseObjective(brief);
+      lease.controller.signal.throwIfAborted();
       if (previousPreviewId) {
         previews.get(previousPreviewId)?.stop();
         previews.delete(previousPreviewId);
       }
-      const controller = new AbortController();
+      const controller = lease.controller;
       const runId = randomUUID();
       active = { runId, controller, ledger, steeringIds: new Set() };
       setContext(ledger);
       operations.set(ledger.state.id, runId);
       appendActivity(ledger.state.id, "status", `目标修订至 v${ledger.state.contractVersion}`, runId);
       emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
-      void execute(runId, brief, projectRoot, controller, ledger);
+      launched = true;
+      void execute(runId, brief, projectRoot, controller, lease, ledger);
       return Response.json({ runId, taskId: ledger.state.id, contractVersion: ledger.state.contractVersion });
+      } finally {
+        if (!launched) operationManager.release(lease);
+      }
     }
     const resume = /^\/api\/tasks\/([0-9a-f-]{36})\/resume$/.exec(url.pathname);
     if (resume && request.method === "POST") {
-      if (active || verification || publishing || cleaning) return Response.json({ error: "A task is already running" }, { status: 409 });
+      const lease = operationManager.claim("run", resume[1]);
+      if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
+      let launched = false;
+      try {
       const ledger = await loadLedger(resume[1]);
       if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
       if (ledger.state.status === "complete") return Response.json({ error: "Task is already complete" }, { status: 409 });
@@ -712,19 +1133,25 @@ const server = Bun.serve({
       if (!projectRoot.startsWith(productsRoot + sep)) return Response.json({ error: "Task is outside products" }, { status: 403 });
       const body = await request.json().catch(() => ({})) as { brief?: unknown };
       const correction = typeof body.brief === "string" && body.brief.trim() ? body.brief.trim() : "Repair the pending acceptance checks while preserving the original objective.";
-      if (ledger.state.status === "stopped") await ledger.resume(correction);
+      if (ledger.state.status === "stopped" || ledger.state.status === "needs-input") await ledger.resume(correction);
       else await ledger.recordGuidance(correction);
-      const controller = new AbortController();
+      lease.controller.signal.throwIfAborted();
+      const controller = lease.controller;
       const runId = randomUUID();
       active = { runId, controller, ledger, steeringIds: new Set() };
       setContext(ledger);
       operations.set(ledger.state.id, runId);
-      void execute(runId, correction, projectRoot, controller, ledger);
+      launched = true;
+      void execute(runId, correction, projectRoot, controller, lease, ledger);
       return Response.json({ runId, taskId: ledger.state.id });
+      } finally {
+        if (!launched) operationManager.release(lease);
+      }
     }
     const publish = /^\/api\/tasks\/([0-9a-f-]{36})\/publish$/.exec(url.pathname);
     if (publish && request.method === "POST") {
-      if (active || verification || publishing || cleaning) return Response.json({ error: "A task is already running" }, { status: 409 });
+      const lease = operationManager.claim("publish", publish[1]);
+      if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
       publishing = true;
       try {
       const ledger = await loadLedger(publish[1]);
@@ -741,7 +1168,7 @@ const server = Bun.serve({
       }
       if (ledger.state.status === "complete") await ledger.reopen("Local preview was republished and needs browser verification");
       await ledger.refreshRevision();
-      const controller = new AbortController();
+       const controller = lease.controller;
       if (!(await build(projectRoot, ledger, controller.signal))) return Response.json({ error: "Build failed" }, { status: 422 });
       const instance = await publishPreview(ledger, projectRoot);
       emit({ type: "status", taskId: ledger.state.id, phase: "待验收", runId: publishRunId, pending: ledger.completionGaps() });
@@ -749,7 +1176,7 @@ const server = Bun.serve({
       {
         emit({ type: "status", taskId: ledger.state.id, phase: "浏览器验收", runId: publishRunId, pending: ledger.completionGaps() });
         try {
-          await controlledVerification(ledger, controller.signal);
+           await controlledVerification(ledger, controller.signal, lease);
           const verified = await TaskLedger.load(ledger.file);
           emit({ type: "task", taskId: ledger.state.id, task: taskView(verified) });
           emit({ type: "tool", taskId: ledger.state.id, name: "browser", state: "通过" });
@@ -767,13 +1194,16 @@ const server = Bun.serve({
       }
       return Response.json(instance.record);
       } finally {
-        operations.delete(publish[1]);
-        publishing = false;
-      }
+         operations.delete(publish[1]);
+         publishing = false;
+         operationManager.release(lease);
+       }
     }
     const verify = /^\/api\/tasks\/([0-9a-f-]{36})\/verify$/.exec(url.pathname);
     if (verify && request.method === "POST") {
-      if (active || verification || publishing || cleaning) return Response.json({ error: "A task is already running" }, { status: 409 });
+      const lease = operationManager.claim("verify", verify[1]);
+      if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
+      try {
       const ledger = await loadLedger(verify[1]);
       if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
       if (ledger.state.status !== "active" || !ledger.state.preview || !previews.has(ledger.state.preview.id)) return Response.json({ error: "A live active preview is required" }, { status: 409 });
@@ -782,7 +1212,7 @@ const server = Bun.serve({
       operations.set(ledger.state.id, verifyRunId);
       try {
         emit({ type: "status", taskId: ledger.state.id, phase: "浏览器验收", runId: verifyRunId, pending: ledger.completionGaps() });
-        await controlledVerification(ledger, new AbortController().signal);
+         await controlledVerification(ledger, lease.controller.signal, lease);
         const verified = await TaskLedger.load(ledger.file);
         emit({ type: "task", taskId: ledger.state.id, task: taskView(verified) });
         emit({ type: "tool", taskId: ledger.state.id, name: "browser", state: "通过" });
@@ -797,8 +1227,11 @@ const server = Bun.serve({
         if (current.state.status === "active") await current.recordFailure(error instanceof Error ? error.message : String(error));
         emit({ type: "status", taskId: ledger.state.id, phase: "待验收", runId: verifyRunId, pending: current.completionGaps() });
         return Response.json({ error: error instanceof Error ? error.message : String(error), task: taskView(current) }, { status: 422 });
+       } finally {
+         operations.delete(ledger.state.id);
+       }
       } finally {
-        operations.delete(ledger.state.id);
+        operationManager.release(lease);
       }
     }
     return new Response("Not found", { status: 404 });
@@ -811,4 +1244,7 @@ const server = Bun.serve({
 });
 
 console.log(`ALPHA_SERVER_READY ${server.port}`);
-process.on("SIGINT", () => { active?.controller.abort(); for (const preview of previews.values()) preview.stop(); server.stop(true); });
+await taskQueue.advanceDue();
+void drainQueue();
+const scheduleTimer = setInterval(() => { void taskQueue.advanceDue().then(() => drainQueue()).catch(error => console.error("ALPHA_SCHEDULE_FAILED", error)); }, 15_000);
+process.on("SIGINT", () => { clearInterval(scheduleTimer); active?.controller.abort(); for (const preview of previews.values()) preview.stop(); server.stop(true); });

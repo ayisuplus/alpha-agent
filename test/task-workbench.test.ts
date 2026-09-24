@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { TaskActivity } from "../src/runtime/task-activity";
 import { readSourceReviews, snapshotSource, writeSourceReview } from "../src/runtime/source-review";
 import { TaskLedger } from "../src/runtime/task-ledger";
+import { createGeneralWorkspace, verifyGeneralDeliverable } from "../src/runtime/general-work";
+import { createDocument } from "../src/runtime/document-tool";
+import { relative } from "node:path";
 
 test("task activity survives a new reader and stays attached to its task", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-activity-"));
@@ -173,6 +176,34 @@ async function startServer(root: string, env: Record<string, string | undefined>
   return { child, base: `http://127.0.0.1:${port}` };
 }
 
+test("workbench serves frozen file evidence and saves a local schedule", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-general-api-"));
+  let child: ReturnType<typeof Bun.spawn> | null = null;
+  try {
+    const productsRoot = join(root, "products");
+    const dataRoot = join(root, ".alpha");
+    await mkdir(productsRoot);
+    const ledger = await createGeneralWorkspace({ taskType: "file-work", objective: "Create a document", productsRoot, dataRoot, files: [{ name: "source.txt", mimeType: "text/plain", bytes: new TextEncoder().encode("input") }] });
+    const document = await createDocument(ledger.state.projectRoot, dataRoot, ledger.state.id, "docx", "result", "Result", "content");
+    await writeFile(join(ledger.state.projectRoot, "alpha-deliverable.json"), JSON.stringify({ outputs: [{ path: relative(ledger.state.projectRoot, document.path).replaceAll("\\", "/") }] }));
+    await ledger.refreshRevision();
+    await verifyGeneralDeliverable(ledger, dataRoot);
+    const server = await startServer(root, { ...process.env, ALPHA_WORKSPACE_ROOT: root, ALPHA_OMP_AGENT_DIR: join(root, "omp-agent") });
+    child = server.child;
+    const { base } = server;
+    const detail = await fetch(`${base}/api/tasks/${ledger.state.id}/evidence/${ledger.state.evidence[0].id}`).then(response => response.json()) as { artifactUrl: string };
+    const output = await fetch(`${base}${detail.artifactUrl}`);
+    expect(output.status).toBe(200);
+    expect((await output.arrayBuffer()).byteLength).toBeGreaterThan(100);
+    const input = await fetch(`${base}/api/tasks/${ledger.state.id}/inputs/${ledger.state.inputs![0].id}`);
+    expect(await input.text()).toBe("input");
+    const nextRunAt = new Date(Date.now() + 60_000).toISOString();
+    const scheduled = await fetch(`${base}/api/schedules`, { method: "POST", headers: { "content-type": "application/json", origin: base }, body: JSON.stringify({ taskId: ledger.state.id, instruction: "Update document", nextRunAt, intervalMinutes: null }) });
+    expect(scheduled.status).toBe(200);
+    expect((await fetch(`${base}/api/schedules`).then(response => response.json()) as { schedules: Array<{ taskId: string; nextRunAt: string }> }).schedules[0]).toMatchObject({ taskId: ledger.state.id, nextRunAt });
+  } finally { child?.kill(); if (child) await child.exited; await rm(root, { recursive: true, force: true }); }
+});
+
 test("model endpoints work against an isolated OMP store and never return keys", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-models-api-"));
   let child: ReturnType<typeof Bun.spawn> | null = null;
@@ -214,7 +245,10 @@ test("model endpoints work against an isolated OMP store and never return keys",
     expect((await TaskLedger.load(ledger.file)).state.modelSelector).toBe(selector);
     expect((await setModel(`${provider!.id}/not-a-real-model`)).status).toBe(400);
     expect((await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ model: { default: `${provider!.id}/not-a-real-model` } }) })).status).toBe(400);
+    expect((await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ model: { translation: `${provider!.id}/not-a-real-model` } }) })).status).toBe(400);
     expect((await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ model: { default: selector } }) })).status).toBe(200);
+    expect((await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ model: { translation: selector } }) })).status).toBe(200);
+    expect((await fetch(`${base}/api/prompts/refine`, { method: "POST", headers: json, body: JSON.stringify({ prompt: "" }) })).status).toBe(400);
 
     expect(await fetch(`${base}/api/providers/${provider!.id}/key`, { method: "DELETE", headers: { origin: base } }).then(response => response.json())).toEqual({ removed: 1 });
     const cleared = await fetch(`${base}/api/models`).then(response => response.json()) as Catalog;

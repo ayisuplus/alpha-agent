@@ -36,7 +36,7 @@ export function ThreadHeader({ task, busy, phase, compact }: { task: TaskView; b
   const [modelSaving, setModelSaving] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const status = taskStatus(task);
-  const criteria = [...task.criteria.map(item => item.id).filter(id => id !== "local-preview"), "local-preview"];
+  const criteria = [...task.criteria.map(item => item.id).filter(id => id !== "local-preview"), ...(!task.taskType || task.taskType === "web-product" ? ["local-preview"] : [])];
   const history = [...(task.contractHistory ?? [])].sort((a, b) => b.version - a.version);
 
   return <header className="thread-header">
@@ -73,6 +73,7 @@ export function ThreadHeader({ task, busy, phase, compact }: { task: TaskView; b
         <span className="objective-label">v{item.version} · 修订于 {formatDateTime(item.revisedAt)}</span>
         <p>{item.objective}</p>
       </div>)}
+      {!!task.inputs?.length && <div className="objective-version"><span className="objective-label">输入文件</span>{task.inputs.map(item => <p key={item.id}><a href={item.url} download>{item.name}</a> · SHA-256 {item.sha256.slice(0, 12)}…</p>)}</div>}
     </div>}
     <div className="criteria-row" aria-label="验收进度">
       {criteria.map(id => {

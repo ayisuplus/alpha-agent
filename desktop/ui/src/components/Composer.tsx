@@ -5,6 +5,7 @@ import { phaseInfo, taskTitle } from "../state/labels";
 import { useStore } from "../state/store";
 import { openTask, resumeTask, reviseTask, sendGuidance, stopTask, store } from "../state/workbench";
 import { Button } from "./ui";
+import { PromptRefine } from "./PromptRefine";
 import "./Composer.css";
 
 /** Unsent text per task, so switching tasks does not lose a half-written instruction. */
@@ -17,6 +18,8 @@ export function Composer({ task, phase }: { task: TaskView; phase: string | null
   const activeTaskId = useStore(store, state => state.activeTaskId);
   const activeRunId = useStore(store, state => state.activeRunId);
   const operation = useStore(store, state => state.operation);
+  const defaultModel = useStore(store, state => state.settings?.model.default ?? null);
+  const builtinModel = useStore(store, state => state.models?.builtin ?? null);
   const runningTitle = useStore(store, state => {
     const running = state.tasks.find(item => item.id === state.activeTaskId);
     return running ? taskTitle(running) : null;
@@ -69,11 +72,11 @@ export function Composer({ task, phase }: { task: TaskView; phase: string | null
       ? "补充的要求会立即送达正在工作的 Alpha"
       : `Alpha 正在${phase ? phaseInfo(phase).label : "处理"}，此阶段暂不接收补充要求`;
   } else if (mode === "resume") {
-    placeholder = "补充修复要求（可以留空）…";
-    hint = task.status === "stopped" ? "任务已停止，继续修复会从当前源码接着做" : "留空则按当前的验收问题继续修复";
+    placeholder = task.status === "needs-input" ? "回答工作台的问题后继续…" : "补充修复要求（可以留空）…";
+    hint = task.status === "needs-input" ? task.pendingQuestion ?? "请回答所需信息" : task.status === "stopped" ? "任务已停止，继续修复会从当前源码接着做" : "留空则按当前的验收问题继续修复";
   } else if (mode === "revise") {
     placeholder = task.status === "complete" ? "描述想要的修改，例如“再加一个按标题搜索”…" : "写下新的目标…";
-    hint = <>提交后生成目标 v{nextVersion}，之前的要求默认保留，预览和验收会重新进行。<button className="link-button" onClick={loadObjective}>载入当前目标全文</button></>;
+    hint = <>提交后生成目标 v{nextVersion}，之前的要求默认保留，{task.taskType === "code-change" ? "变更和检查会重新评估" : "预览和验收会重新进行"}。<button className="link-button" onClick={loadObjective}>载入当前目标全文</button></>;
   } else {
     placeholder = "当前无法发送";
     hint = otherRunning && activeTaskId && runningTitle
@@ -103,10 +106,11 @@ export function Composer({ task, phase }: { task: TaskView; phase: string | null
       />
       <div className="composer-bar">
         <span className="composer-hint">{hint}</span>
+        <PromptRefine value={draft} onApply={setDraft} optimizationModel={task.modelSelector ?? defaultModel ?? builtinModel} disabled={mode === "blocked"} />
         {mode === "steer" && <Button variant="danger" size="sm" icon={Square} onClick={() => void stopTask()} busy={pending === "stop"}>停止</Button>}
         {mode === "resume" && <Button variant="ghost" size="sm" onClick={() => void sendGuidance(text).then(done)} disabled={!text || !!pending} busy={pending === "guidance"} title="只保存，下次继续修复时交给模型">仅保存到下轮</Button>}
         {mode === "steer" && <Button variant="primary" size="sm" icon={ArrowUp} onClick={() => void primary()} disabled={!task.acceptsGuidance || !text || !!pending} busy={pending === "guidance"}>发送</Button>}
-        {mode === "resume" && <Button variant="primary" size="sm" onClick={() => void primary()} disabled={!!pending} busy={pending === "resume"}>继续修复</Button>}
+        {mode === "resume" && <Button variant="primary" size="sm" onClick={() => void primary()} disabled={!!pending || (task.status === "needs-input" && !text)} busy={pending === "resume"}>{task.status === "needs-input" ? "提交回答并继续" : "继续修复"}</Button>}
         {mode === "revise" && <Button variant="primary" size="sm" onClick={() => void primary()} disabled={!text || text === task.objective || !!pending} busy={pending === "revise"}>提交修订 · v{nextVersion}</Button>}
       </div>
     </div>

@@ -1,4 +1,4 @@
-.task-menu { position: absolute; z-index: 30; right: 8px; top: calc(100% - 2px); width: 216px; padding: 6px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg-elevated); box-shadow: var(--shadow-pop); }
+.task-menu { position: absolute; z-index: 30; right: 8px; top: calc(100% - 2px); width: 216px; padding: 6px; border: 1px solid var(--border-strong); border-radius: var(--radius-lg); background: var(--bg-elevated); box-shadow: var(--shadow-pop); }
 .task-menu.up { top: auto; bottom: calc(100% - 2px); }
 .task-menu button[role="menuitem"] { display: block; width: 100%; padding: 8px 10px; text-align: left; border: 0; border-radius: 6px; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
 .task-menu button[role="menuitem"]:hover:not(:disabled) { background: var(--bg-hover); }

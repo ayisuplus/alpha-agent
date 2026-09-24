@@ -1,9 +1,10 @@
 import type { ComponentType } from "react";
-import { Bot, Gauge, HardDrive, Keyboard, MonitorCog, Sparkles, Stethoscope, X, type LucideIcon } from "lucide-react";
+import { Bot, Gauge, HardDrive, Keyboard, MonitorCog, Sparkles, Stethoscope, Users, X, type LucideIcon } from "lucide-react";
 import { useStore } from "../../state/store";
 import { closePanel, openSettings, store, type SettingsSection } from "../../state/workbench";
 import { IconButton, Spinner } from "../ui";
 import { ModelSettings } from "./ModelSettings";
+import { AgentPresetsSettings } from "./AgentPresetsSettings";
 import { GenerationSettings, InterfaceSettings, RunSettings, ShortcutSettings } from "./sections";
 import { DiagnosticsSettings, WorkspaceSettings } from "./WorkspaceSettings";
 import "./settings.css";
@@ -13,7 +14,8 @@ interface SectionEntry { id: SettingsSection; label: string; icon: LucideIcon; r
 export const SECTIONS: SectionEntry[] = [
   { id: "model", label: "模型", icon: Bot, render: ModelSettings },
   { id: "run", label: "运行", icon: Gauge, render: RunSettings },
-  { id: "generation", label: "生成服务", icon: Sparkles, render: GenerationSettings },
+  { id: "agents", label: "角色预设", icon: Users, render: AgentPresetsSettings },
+  { id: "generation", label: "插件", icon: Sparkles, render: GenerationSettings },
   { id: "interface", label: "界面", icon: MonitorCog, render: InterfaceSettings },
   { id: "workspace", label: "工作区与数据", icon: HardDrive, render: WorkspaceSettings },
   { id: "diagnostics", label: "诊断", icon: Stethoscope, render: DiagnosticsSettings },

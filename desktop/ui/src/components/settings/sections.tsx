@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { RotateCcw } from "lucide-react";
 import { api } from "../../api/client";
-import type { Settings } from "../../api/types";
+import type { Settings, SkillPlugin } from "../../api/types";
 import { SCALE_STEPS, SHORTCUTS } from "../../state/shortcuts";
 import { useStore } from "../../state/store";
 import { notify, previewLocked, store, updateSettings } from "../../state/workbench";
@@ -24,14 +24,68 @@ export function RunSettings() {
       <NumberInput label="单轮时长上限" value={settings.budget.wallTimeMinutes} min={1} max={60} unit="分钟"
         onCommit={value => void updateSettings({ budget: { wallTimeMinutes: value } })} />
     </Field>
+    <Field label="任务总工具调用上限" description="跨恢复和修复轮次累计；达到上限后需调整预算才能继续。默认 1200。">
+      <NumberInput label="任务总工具调用上限" value={settings.budget.maxTotalToolCalls} min={20} max={10000} step={100} unit="次"
+        onCommit={value => void updateSettings({ budget: { maxTotalToolCalls: value } })} />
+    </Field>
+    <Field label="任务总模型时长上限" description="只累计模型运行时间。默认 120 分钟。">
+      <NumberInput label="任务总模型时长上限" value={settings.budget.totalWallTimeMinutes} min={1} max={1440} step={10} unit="分钟"
+        onCommit={value => void updateSettings({ budget: { totalWallTimeMinutes: value } })} />
+    </Field>
   </section>;
 }
 
 export function GenerationSettings() {
   const settings = useSettings();
   const generation = settings.generation;
+  const enabled = settings.plugins.comfyui;
   const [url, setUrl] = useState(generation.comfyUrl);
   const [check, setCheck] = useState<{ state: "idle" | "checking" | "online" | "offline" }>({ state: "idle" });
+  const [skillPlugins, setSkillPlugins] = useState<SkillPlugin[]>([]);
+  const [pluginSource, setPluginSource] = useState("");
+  const [mcpTools, setMcpTools] = useState<Record<string, string[]>>({});
+  const [mcpPermissions, setMcpPermissions] = useState<Record<string, "deny" | "read" | "write">>({});
+  const [installing, setInstalling] = useState(false);
+  useEffect(() => { void api.plugins().then(setSkillPlugins).catch(error => notify(error instanceof Error ? error.message : String(error))); }, []);
+
+  const installPlugin = async () => {
+    if (!pluginSource.trim()) return;
+    setInstalling(true);
+    try {
+      const plugin = await api.installPlugin(pluginSource.trim());
+      setSkillPlugins(current => [...current.filter(item => item.id !== plugin.id), plugin]);
+      setPluginSource("");
+      notify(`${plugin.name} 已安装：${plugin.skillCount} 个 Skills、${plugin.hookCount} 个 Pi Hook、${plugin.mcpCount} 个 MCP 服务`, "info");
+    } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
+    finally { setInstalling(false); }
+  };
+
+  const togglePlugin = async (plugin: SkillPlugin, enabled: boolean) => {
+    try {
+      const updated = await api.setPluginEnabled(plugin.id, enabled);
+      setSkillPlugins(current => current.map(item => item.id === updated.id ? updated : item));
+    } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
+  };
+  const toggleHooks = async (plugin: SkillPlugin, hooksEnabled: boolean) => {
+    try {
+      const updated = await api.setPluginHooksEnabled(plugin.id, hooksEnabled);
+      setSkillPlugins(current => current.map(item => item.id === updated.id ? updated : item));
+    } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
+  };
+  const toggleMCP = async (plugin: SkillPlugin, mcpEnabled: boolean) => {
+    try {
+      const updated = await api.setPluginMCPEnabled(plugin.id, mcpEnabled);
+      setSkillPlugins(current => current.map(item => item.id === updated.id ? updated : item));
+    } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
+  };
+  const checkMCP = async (plugin: SkillPlugin) => {
+    try {
+      const result = await api.checkPluginMCP(plugin.id);
+      setMcpTools(current => ({ ...current, [plugin.id]: result.tools }));
+      setMcpPermissions(await api.mcpPermissions(plugin.id));
+      notify(result.errors.length ? `MCP 连接失败：${result.errors.join("; ")}` : `MCP 已连接，发现 ${result.tools.length} 个工具`, result.errors.length ? "error" : "info");
+    } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
+  };
 
   const commitUrl = async () => {
     const next = url.trim();
@@ -53,24 +107,51 @@ export function GenerationSettings() {
   };
 
   return <section>
-    <SectionTitle title="生成服务" description="任务需要原创图片、配音或视频时，Alpha 会主动调用本机的 ComfyUI。关闭某一项后，模型不会得到对应的工具。" />
-    <Field stacked label="ComfyUI 地址" description="只能是本机地址。服务需要你自己保持运行；Alpha 不会换用其他生成服务。">
+    <SectionTitle title="插件" description="内置插件在下一轮任务开始时装载。" />
+    <Field stacked label="ComfyUI" description="内置插件，提供本机图片、配音和视频生成。关闭后模型不会得到它的工具。">
+      <Toggle label="启用 ComfyUI 插件" checked={enabled} onChange={value => void updateSettings({ plugins: { comfyui: value } })} />
+    </Field>
+    <Field stacked label="第三方插件" description="从 GitHub 仓库导入 Skills、Pi Hook 和 .mcp.json。Hook 与 MCP 独立启用；启用后会运行插件代码或连接它声明的服务，请只对信任的插件使用。变更在下一轮任务生效。">
+      <div className="settings-inline">
+        <input className="settings-text" aria-label="插件 GitHub 地址" placeholder="https://github.com/owner/repo.git" value={pluginSource} spellCheck={false}
+          onChange={event => setPluginSource(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void installPlugin(); }} />
+        <Button size="sm" busy={installing} disabled={installing || !pluginSource.trim()} onClick={() => void installPlugin()}>安装</Button>
+      </div>
+      {skillPlugins.map(plugin => <div className="provider-row" key={plugin.id}>
+        <div className="provider-main">
+          <strong className="provider-name">{plugin.name}</strong>
+          <span className="provider-meta">{plugin.skillCount} 个 Skills · {plugin.hookCount} 个 Pi Hook · {plugin.mcpCount} 个 MCP 服务 · {plugin.revision.slice(0, 8)} · {plugin.source}</span>
+        </div>
+        <span className="provider-meta">插件</span><Toggle label={`启用 ${plugin.name} 插件`} checked={plugin.enabled} onChange={value => void togglePlugin(plugin, value)} />
+        {plugin.hookCount > 0 && <><span className="provider-meta">Hook</span><Toggle label={`启用 ${plugin.name} Hook`} checked={plugin.hooksEnabled} disabled={!plugin.enabled} onChange={value => void toggleHooks(plugin, value)} /></>}
+        {plugin.mcpCount > 0 && <><span className="provider-meta">MCP</span><Toggle label={`启用 ${plugin.name} MCP`} checked={plugin.mcpEnabled} disabled={!plugin.enabled} onChange={value => void toggleMCP(plugin, value)} />{plugin.mcpEnabled && <Button size="sm" onClick={() => void checkMCP(plugin)}>检测</Button>}</>}
+        {(mcpTools[plugin.id] ?? []).map(tool => <label className="provider-meta" key={tool}>{tool}：
+          <select aria-label={`${tool} 权限`} value={mcpPermissions[tool] ?? "deny"} onChange={event => {
+            const permission = event.target.value as "deny" | "read" | "write";
+            void api.setMCPPermission(plugin.id, tool, permission).then(setMcpPermissions).catch(error => notify(error instanceof Error ? error.message : String(error)));
+          }}>
+            <option value="deny">禁止</option><option value="read">只读</option><option value="write">外部写入（记录回执）</option>
+          </select>
+        </label>)}
+      </div>)}
+    </Field>
+    <Field stacked label="ComfyUI 地址" description="只能是本机地址。服务需要你自己保持运行；Alpha 不会换用其他生成服务。" disabled={!enabled}>
       <span className="settings-inline">
-        <input className="settings-text" value={url} aria-label="ComfyUI 地址" spellCheck={false}
+        <input className="settings-text" value={url} aria-label="ComfyUI 地址" spellCheck={false} disabled={!enabled}
           onChange={event => setUrl(event.target.value)} onBlur={() => void commitUrl()} onKeyDown={event => { if (event.key === "Enter") void commitUrl(); }} />
-        <Button size="sm" onClick={() => void runCheck()} busy={check.state === "checking"}>检测</Button>
+        <Button size="sm" onClick={() => void runCheck()} busy={check.state === "checking"} disabled={!enabled}>检测</Button>
         {check.state === "online" && <Badge tone="success">在线</Badge>}
         {check.state === "offline" && <Badge tone="warning">未连接</Badge>}
       </span>
     </Field>
-    <Field label="图片生成" description="插画、封面、背景等。视频的参考图也依赖它。">
-      <Toggle label="图片生成" checked={generation.image} onChange={value => void updateSettings({ generation: { image: value } })} />
+    <Field stacked label="图片生成" description="插画、封面、背景等。视频的参考图也依赖它。" disabled={!enabled}>
+      <Toggle label="图片生成" checked={generation.image} disabled={!enabled} onChange={value => void updateSettings({ generation: { image: value } })} />
     </Field>
-    <Field label="语音生成" description="旁白、欢迎语等配音。">
-      <Toggle label="语音生成" checked={generation.voice} onChange={value => void updateSettings({ generation: { voice: value } })} />
+    <Field stacked label="语音生成" description="旁白、欢迎语等配音。" disabled={!enabled}>
+      <Toggle label="语音生成" checked={generation.voice} disabled={!enabled} onChange={value => void updateSettings({ generation: { voice: value } })} />
     </Field>
-    <Field label="视频生成" description={generation.image ? "从生成的横版参考图制作短视频，耗时较长。" : "视频需要先生成参考图；图片生成关闭时不可用。"} disabled={!generation.image}>
-      <Toggle label="视频生成" checked={generation.video && generation.image} disabled={!generation.image} onChange={value => void updateSettings({ generation: { video: value } })} />
+    <Field stacked label="视频生成" description={generation.image ? "从生成的横版参考图制作短视频，耗时较长。" : "视频需要先生成参考图；图片生成关闭时不可用。"} disabled={!enabled || !generation.image}>
+      <Toggle label="视频生成" checked={generation.video && generation.image} disabled={!enabled || !generation.image} onChange={value => void updateSettings({ generation: { video: value } })} />
     </Field>
   </section>;
 }

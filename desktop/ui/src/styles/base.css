@@ -24,7 +24,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 
 * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 
-::selection { background: rgba(124, 156, 255, 0.35); }
+::selection { background: rgba(0, 180, 255, 0.3); }
 
 .visually-hidden {
   position: absolute !important;

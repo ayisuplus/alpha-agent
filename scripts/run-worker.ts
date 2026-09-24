@@ -1,10 +1,11 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { runTask } from "../src/runtime/omp-runner";
 import type { WorkOrder, WorkerResult } from "../src/runtime/work-orders";
+import type { AgentPresetSnapshot } from "../src/runtime/agent-presets";
 
 const [requestFile, resultFile] = Bun.argv.slice(2);
 if (!requestFile || !resultFile) throw new Error("Worker request and result paths are required");
-const request = JSON.parse(await readFile(requestFile, "utf8")) as { projectRoot: string; dataRoot: string; objective: string; workOrder: WorkOrder; modelSelector?: string };
+const request = JSON.parse(await readFile(requestFile, "utf8")) as { projectRoot: string; dataRoot: string; objective: string; workOrder: WorkOrder; workerPreset?: AgentPresetSnapshot; modelSelector?: string };
 const controller = new AbortController();
 process.once("SIGINT", () => controller.abort());
 try {

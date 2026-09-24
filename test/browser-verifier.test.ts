@@ -1,5 +1,10 @@
-import { expect, test } from "bun:test";
-import { parsePlan } from "../src/runtime/browser-verifier";
+import { expect, spyOn, test } from "bun:test";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parsePlan, verifyBrowserPlan } from "../src/runtime/browser-verifier";
+import { TaskLedger } from "../src/runtime/task-ledger";
+import { VisibleBrowser } from "../src/runtime/visible-browser";
 
 const steps = [
   { action: "fill", selector: "#name", value: "Alpha {{nonce}}" },
@@ -34,4 +39,57 @@ test("a button-only product can verify a changed result without a form", () => {
 test("a video product must verify decodable frames in the preview", () => {
   expect(() => parsePlan({ steps }, "构建一个带原创视频的页面")).toThrow("decoded video frame");
   expect(parsePlan({ steps: [...steps, { action: "video", selector: "#hero-video" }] }, "构建一个带原创视频的页面").steps).toHaveLength(8);
+});
+
+test("each verification attempt keeps its own evidence and source changes cannot complete", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-browser-attempt-"));
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  const connect = spyOn(VisibleBrowser, "connect");
+  try {
+    const product = join(root, "product");
+    const dataRoot = join(root, "state");
+    await mkdir(product);
+    await writeFile(join(product, "index.html"), "original");
+    await writeFile(join(product, "alpha-verification.json"), JSON.stringify({ steps: [
+      { action: "click", selector: "#go" }, { action: "expectText", text: "done" },
+      { action: "expectText", text: "saved" }, { action: "viewport", width: 375, height: 800 },
+      { action: "contrast", selector: "#go", minRatio: 4.5 },
+    ] }));
+    const ledger = await TaskLedger.create(dataRoot, { objective: "Build app", projectRoot: product, criteria: [
+      { id: "build", kind: "build", description: "Build" }, { id: "user-path", kind: "browser", description: "Browser" },
+    ] });
+    const revision = ledger.state.revision!;
+    await ledger.recordEvidence({ criterionId: "build", kind: "build", revision, passed: true, source: "build.log" });
+    server = Bun.serve({ port: 0, fetch: () => new Response("ok", { headers: { "x-alpha-preview-id": "preview-one", "x-alpha-revision": revision } }) });
+    await ledger.recordPreview({ id: "preview-one", revision, path: join(root, "preview"), url: `http://127.0.0.1:${server.port}` });
+    const observation = { text: "done saved", consoleErrors: [], failedRequests: [], brokenImages: [], viewport: { horizontalOverflow: false } };
+    let changeSource = false;
+    connect.mockImplementation(async () => ({
+      navigate: async () => observation, observe: async () => observation,
+      click: async () => { if (changeSource) await writeFile(join(product, "index.html"), "changed"); return observation; },
+      viewport: async () => observation, contrast: async () => ({ ratio: 7 }),
+      screenshot: async (path: string) => { await writeFile(path, "image"); },
+      disconnect: async () => undefined,
+    }) as unknown as VisibleBrowser);
+    await verifyBrowserPlan(ledger, 1234, dataRoot);
+    const first = ledger.state.evidence.findLast(item => item.kind === "browser")!;
+    expect(first.attemptId).toBeTruthy();
+    expect(ledger.state.status).toBe("complete");
+    await ledger.reopen("repeat verification");
+    await verifyBrowserPlan(ledger, 1234, dataRoot);
+    const second = ledger.state.evidence.findLast(item => item.kind === "browser")!;
+    expect(second.source).not.toBe(first.source);
+    expect(second.attemptId).not.toBe(first.attemptId);
+    expect(JSON.parse(await readFile(first.source, "utf8")).attemptId).toBe(first.attemptId);
+    await ledger.reopen("check changed source");
+    changeSource = true;
+    await expect(verifyBrowserPlan(ledger, 1234, dataRoot)).rejects.toThrow("Source changed");
+    expect(ledger.state.status).toBe("active");
+    expect(ledger.state.preview).toBeNull();
+    expect(ledger.state.evidence.findLast(item => item.kind === "browser")?.passed).toBe(false);
+  } finally {
+    connect.mockRestore();
+    server?.stop();
+    await rm(root, { recursive: true, force: true });
+  }
 });

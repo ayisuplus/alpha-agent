@@ -104,6 +104,7 @@ export async function verifyBrowserPlan(ledger: TaskLedger, cdpPort: number, dat
   signal?.throwIfAborted();
   if (ledger.state.status !== "active") throw new Error("Only active tasks can be verified");
   const preview = ledger.state.preview;
+  const contractVersion = ledger.state.contractVersion ?? 1;
   if (!preview || preview.revision !== ledger.state.revision) throw new Error("Task has no current preview");
   if ((await fingerprintSource(ledger.state.projectRoot)) !== preview.revision) throw new Error("Preview source revision is stale");
   const planText = await readFile(join(ledger.state.projectRoot, "alpha-verification.json"), "utf8");
@@ -138,8 +139,17 @@ export async function verifyBrowserPlan(ledger: TaskLedger, cdpPort: number, dat
     if (!browser) await Bun.sleep(250);
   }
   if (!browser) throw new Error(`Visible preview did not open: ${preview.url}`);
-  const screenshot = join(evidenceDir, `${ledger.state.id}-${preview.id}-plan.png`);
-  const evidencePath = join(evidenceDir, `${ledger.state.id}-${preview.id}-plan.json`);
+  const attemptId = randomUUID();
+  const screenshot = join(evidenceDir, `${ledger.state.id}-${preview.id}-${attemptId}-plan.png`);
+  const evidencePath = join(evidenceDir, `${ledger.state.id}-${preview.id}-${attemptId}-plan.json`);
+  const assertCurrent = async () => {
+    const current = (await TaskLedger.load(ledger.file)).state;
+    if (current.status !== "active" || (current.contractVersion ?? 1) !== contractVersion || current.revision !== preview.revision || current.preview?.id !== preview.id) throw new Error("Task or preview changed during verification");
+    if (await fingerprintSource(ledger.state.projectRoot) !== preview.revision) throw new Error("Source changed during verification");
+    if (createHash("sha256").update(await readFile(join(ledger.state.projectRoot, "alpha-verification.json"), "utf8")).digest("hex") !== planHash) throw new Error("Verification plan changed during verification");
+    const response = await fetch(preview.url, { signal: AbortSignal.timeout(5_000) });
+    if (!response.ok || response.headers.get("x-alpha-preview-id") !== preview.id || response.headers.get("x-alpha-revision") !== preview.revision) throw new Error("Preview instance changed during verification");
+  };
   try {
     let observation = progress.nextStep > 0 ? await browser.observe() : await browser.navigate(preview.url);
     if (observation.consoleErrors.length || observation.failedRequests.length || observation.brokenImages.length) throw new Error(`Preview has console, network or broken image errors on load: ${observation.brokenImages.join(", ")}`);
@@ -186,16 +196,23 @@ export async function verifyBrowserPlan(ledger: TaskLedger, cdpPort: number, dat
     await Bun.sleep(250);
     signal?.throwIfAborted();
     await browser.screenshot(screenshot);
-    await writeFile(evidencePath, JSON.stringify({ taskId: ledger.state.id, previewId: preview.id, revision: preview.revision, planHash, nonce, results, screenshot }, null, 2));
-    await ledger.recordEvidence({ criterionId: "user-path", kind: "browser", previewId: preview.id, revision: preview.revision, passed: true, source: evidencePath });
+    await assertCurrent();
+    await writeFile(evidencePath, JSON.stringify({ attemptId, taskId: ledger.state.id, previewId: preview.id, revision: preview.revision, planHash, nonce, results, screenshot }, null, 2), { flag: "wx" });
+    await ledger.recordEvidence({ attemptId, criterionId: "user-path", kind: "browser", previewId: preview.id, revision: preview.revision, passed: true, source: evidencePath });
     await ledger.complete();
     await unlink(progressFile).catch(() => undefined);
   } catch (error) {
     if (signal?.aborted) throw error;
     const reason = error instanceof Error ? error.message : String(error);
     await browser.screenshot(screenshot).catch(() => undefined);
-    await writeFile(evidencePath, JSON.stringify({ taskId: ledger.state.id, previewId: preview.id, revision: preview.revision, planHash, nonce, results, reason, screenshot }, null, 2));
-    await ledger.recordEvidence({ criterionId: "user-path", kind: "browser", previewId: preview.id, revision: preview.revision, passed: false, source: evidencePath });
+    await writeFile(evidencePath, JSON.stringify({ attemptId, taskId: ledger.state.id, previewId: preview.id, revision: preview.revision, planHash, nonce, results, reason, screenshot }, null, 2), { flag: "wx" }).catch(writeError => {
+      if ((writeError as NodeJS.ErrnoException).code !== "EEXIST") throw writeError;
+    });
+    const current = (await TaskLedger.load(ledger.file)).state;
+    if (current.status === "active" && (current.contractVersion ?? 1) === contractVersion && current.preview?.id === preview.id && current.revision === preview.revision) {
+      await ledger.recordEvidence({ attemptId, criterionId: "user-path", kind: "browser", previewId: preview.id, revision: preview.revision, passed: false, source: evidencePath });
+      await ledger.refreshRevision();
+    }
     throw error;
   } finally {
     await browser.disconnect();

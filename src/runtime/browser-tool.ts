@@ -13,7 +13,7 @@ const parameters = type({
   "height?": "number",
 });
 
-export function createBrowserTool(getBrowser: () => VisibleBrowser | null, dataRoot: string): CustomTool<typeof parameters> {
+export function createBrowserTool(getBrowser: () => VisibleBrowser | null, dataRoot: string, allowedUrl?: string): CustomTool<typeof parameters> {
   return {
     name: "alpha_browser",
     label: "Visible product browser",
@@ -40,6 +40,7 @@ export function createBrowserTool(getBrowser: () => VisibleBrowser | null, dataR
             break;
           case "navigate":
             if (!args.url) throw new Error("url is required");
+            if (allowedUrl && new URL(args.url).origin !== new URL(allowedUrl).origin) throw new Error("Browser navigation must stay on the assigned local preview");
             observation = await browser.navigate(args.url);
             break;
           case "click":

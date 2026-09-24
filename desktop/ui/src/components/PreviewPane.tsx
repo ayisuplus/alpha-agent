@@ -14,12 +14,14 @@ type Shown = { taskId: string; url: string } | null;
  */
 function usePreviewTarget(): Shown | "keep" {
   const activeTaskId = useStore(store, state => state.activeTaskId);
+  const operation = useStore(store, state => state.serverOperation);
   const selectedId = useStore(store, state => state.selectedId);
   const task = useStore(store, state => state.task);
   const running = useStore(store, state => state.runningPreview);
-  if (activeTaskId) {
-    const fromRun = running?.taskId === activeTaskId ? running : null;
-    if (task?.id === activeTaskId) return task.preview?.live ? { taskId: task.id, url: task.preview.url } : fromRun;
+  const owner = operation?.browserTaskId ?? operation?.taskId ?? activeTaskId;
+  if (owner) {
+    const fromRun = running?.taskId === owner ? running : null;
+    if (task?.id === owner) return task.preview?.live ? { taskId: task.id, url: task.preview.url } : fromRun;
     return fromRun ?? "keep";
   }
   if (!task) return selectedId === null ? null : "keep";

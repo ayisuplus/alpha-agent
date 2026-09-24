@@ -1,6 +1,8 @@
 import { useMemo } from "react";
 import type { TaskView } from "../api/types";
 import { Composer } from "../components/Composer";
+import { ApplyCodePanel } from "../components/ApplyCodePanel";
+import { TaskAutomationPanel } from "../components/TaskAutomationPanel";
 import { DiffView } from "../components/DiffView";
 import { EvidenceView } from "../components/EvidenceView";
 import { NewTask } from "../components/NewTask";
@@ -30,6 +32,8 @@ function TaskThread({ task }: { task: TaskView }) {
     {detail?.kind === "diff" && <DiffView taskId={task.id} operationId={detail.operationId} onBack={back} />}
     {detail?.kind === "evidence" && <EvidenceView key={`${detail.criterionId}:${detail.evidenceId}`} task={task} criterionId={detail.criterionId} evidenceId={detail.evidenceId} onBack={back} />}
     {!detail && <>
+      <ApplyCodePanel task={task} />
+      <TaskAutomationPanel task={task} />
       <Timeline items={withLive} task={task} />
       <Composer key={task.id} task={task} phase={phase} />
     </>}

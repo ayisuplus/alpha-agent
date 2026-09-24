@@ -195,7 +195,7 @@ const AgentTurn = memo(function AgentTurn({ turn, defaultOpen, evidence }: { tur
       <button className="agent-turn-toggle" aria-expanded={open} onClick={() => setOpen(value => !value)}>
         <span className="agent-turn-title">第 {turn.index} 轮 · {KIND_LABEL[turn.kind]}</span>
         <span className="agent-turn-meta">
-          {formatTime(turn.startedAt)}{duration && !turn.live ? ` · ${duration}` : ""}{turn.toolCount ? ` · ${turn.toolCount} 次工具调用` : ""}{turn.models.length ? ` · ${turn.models.map(shortModel).join("、")}` : ""}
+          {formatTime(turn.startedAt)}{duration && !turn.live ? ` · ${duration}` : ""}{turn.toolCount ? ` · ${turn.toolCount} 次工具调用` : ""}{turn.usageTokens ? ` · ${turn.usageTokens.toLocaleString()} tokens` : ""}{turn.models.length ? ` · ${turn.models.map(shortModel).join("、")}` : ""}
         </span>
         <ChevronDown size={14} className="agent-turn-chevron" aria-hidden />
       </button>

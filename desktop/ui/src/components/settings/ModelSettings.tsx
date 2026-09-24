@@ -113,6 +113,10 @@ export function ModelSettings() {
     {test.state === "failed" && <p className="settings-error"><TriangleAlert size={14} aria-hidden />{test.text}</p>}
     {defaultMissing && <p className="settings-error"><TriangleAlert size={14} aria-hidden />默认模型 {modelName(effective, catalog)} 当前没有可用的认证，新任务会无法启动。请为它的服务商添加 API Key，或换一个模型。</p>}
     <p className="settings-note">「测试连接」会发送一次很短的请求，消耗极少量额度。</p>
+    <Field stacked label="提示词英译模型" description="优化使用输入框对应的任务模型；英译可单独指定模型。未指定时沿用优化模型。">
+      <ModelPicker value={settings.model.translation} allowDefault label="提示词英译模型" defaultLabel="跟随优化模型" defaultHint="使用当前输入框的模型"
+        onChange={value => void updateSettings({ model: { translation: value } })} />
+    </Field>
 
     <div className="settings-subheading-row">
       <h3 className="settings-subheading">服务商与 API Key</h3>

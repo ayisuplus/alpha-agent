@@ -41,13 +41,15 @@ interface Props {
   allowDefault?: boolean;
   /** Wording of the null choice; tasks "follow the default", the default itself falls back to Alpha's built-in model. */
   defaultKind?: "task" | "builtin";
+  defaultLabel?: string;
+  defaultHint?: string;
   placement?: "up" | "down";
   disabled?: boolean;
   disabledReason?: string;
   label?: string;
 }
 
-export function ModelPicker({ value, onChange, allowDefault, defaultKind = "task", placement = "down", disabled, disabledReason, label = "模型" }: Props) {
+export function ModelPicker({ value, onChange, allowDefault, defaultKind = "task", defaultLabel, defaultHint, placement = "down", disabled, disabledReason, label = "模型" }: Props) {
   const catalog = useStore(store, state => state.models);
   const settingsDefault = useStore(store, state => state.settings?.model.default ?? null);
   const [open, setOpen] = useState(false);
@@ -81,7 +83,7 @@ export function ModelPicker({ value, onChange, allowDefault, defaultKind = "task
 
   const buttonText = value
     ? modelName(value, catalog)
-    : allowDefault ? `${defaultName} · ${fallback ? modelName(fallback, catalog) : "…"}` : "选择模型";
+    : allowDefault ? `${defaultLabel ?? defaultName} · ${defaultHint ?? (fallback ? modelName(fallback, catalog) : "…")}` : "选择模型";
 
   return <div className="model-picker" ref={root}>
     <button className="model-picker-button" aria-haspopup="listbox" aria-expanded={open} disabled={disabled}
@@ -100,8 +102,8 @@ export function ModelPicker({ value, onChange, allowDefault, defaultKind = "task
         {!catalog && <p className="model-empty"><Spinner size={13} />正在读取模型…</p>}
         {allowDefault && catalog && !query && <button role="option" aria-selected={value === null} className="model-option" onClick={() => choose(null)}>
           <span className="model-option-main">
-            <span className="model-option-name">{defaultKind === "builtin" ? "使用 Alpha 内置默认" : "跟随默认"}</span>
-            <span className="model-option-id">{fallback ? modelName(fallback, catalog) : "未设置"}{defaultKind === "task" ? " · 在设置里修改" : ""}</span>
+            <span className="model-option-name">{defaultLabel ?? (defaultKind === "builtin" ? "使用 Alpha 内置默认" : "跟随默认")}</span>
+            <span className="model-option-id">{defaultHint ?? `${fallback ? modelName(fallback, catalog) : "未设置"}${defaultKind === "task" ? " · 在设置里修改" : ""}`}</span>
           </span>
           {value === null && <Check size={14} aria-hidden />}
         </button>}

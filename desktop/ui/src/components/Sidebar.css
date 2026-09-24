@@ -37,12 +37,13 @@
   width: 30px;
   height: 30px;
   flex: 0 0 30px;
-  border-radius: 9px;
-  background: linear-gradient(145deg, #93adff, #6b86f0);
-  color: var(--on-accent);
-  font-size: 19px;
+  color: var(--accent);
+  font-family: Georgia, "Cambria Math", serif;
+  font-size: 30px;
+  font-style: italic;
   font-weight: 700;
   line-height: 1;
+  text-shadow: 1px 1px 0 var(--accent-deep);
 }
 .brand-name {
   display: flex;
@@ -53,7 +54,7 @@
   font-weight: 700;
   line-height: 1.25;
 }
-.brand-name small { color: var(--text-muted); font-size: var(--text-xs); font-weight: 500; }
+.brand-name small { color: var(--accent-gold); font-size: var(--text-xs); font-weight: 500; }
 
 .new-task-button {
   display: flex;

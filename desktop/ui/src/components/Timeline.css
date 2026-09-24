@@ -36,12 +36,12 @@
   color: var(--text-muted);
   font-size: var(--text-xs);
 }
-.user-message-meta > span:first-child { color: var(--text-secondary); font-weight: 600; }
+.user-message-meta > span:first-child { color: var(--accent-gold); font-weight: 600; }
 .user-message-bubble {
   max-width: min(88%, 680px);
   padding: 10px 14px;
   border: 1px solid var(--border);
-  border-radius: 14px 14px 4px 14px;
+  border-radius: var(--radius);
   background: var(--bg-elevated);
   font-size: var(--text-md);
   white-space: pre-wrap;
@@ -57,14 +57,15 @@
   width: 26px;
   height: 26px;
   flex: 0 0 26px;
-  border-radius: 8px;
-  background: linear-gradient(145deg, #93adff, #6b86f0);
-  color: var(--on-accent);
-  font-size: 16px;
+  color: var(--accent);
+  font-family: Georgia, "Cambria Math", serif;
+  font-size: 24px;
+  font-style: italic;
   font-weight: 700;
   line-height: 1;
+  text-shadow: 1px 1px 0 var(--accent-deep);
 }
-.agent-turn[data-live] .agent-avatar { box-shadow: 0 0 0 3px var(--accent-bg); }
+.agent-turn[data-live] .agent-avatar { text-shadow: 0 0 8px var(--accent-border); }
 .agent-turn-toggle {
   display: flex;
   align-items: baseline;
@@ -325,7 +326,7 @@
   height: 30px;
   padding: 0 12px;
   border: 1px solid var(--border-strong);
-  border-radius: 999px;
+  border-radius: var(--radius);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-pop);
   color: var(--text);

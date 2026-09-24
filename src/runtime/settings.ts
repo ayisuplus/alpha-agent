@@ -6,18 +6,22 @@ export type FontSize = "sm" | "md" | "lg";
 
 export interface AlphaSettings {
   version: 1;
-  model: { default: string | null };
-  budget: { maxToolCalls: number; wallTimeMinutes: number };
+  revision?: number;
+  model: { default: string | null; translation: string | null };
+  budget: { maxToolCalls: number; wallTimeMinutes: number; maxTotalToolCalls: number; totalWallTimeMinutes: number };
   generation: { comfyUrl: string; image: boolean; voice: boolean; video: boolean };
+  plugins: { comfyui: boolean };
   notifications: { enabled: boolean };
   ui: { scale: number; fontSize: FontSize; sidebarCollapsed: boolean; previewCollapsed: boolean; previewRatio: number };
 }
 
 export const DEFAULT_SETTINGS: AlphaSettings = {
   version: 1,
-  model: { default: null },
-  budget: { maxToolCalls: 120, wallTimeMinutes: 15 },
+  revision: 0,
+  model: { default: null, translation: null },
+  budget: { maxToolCalls: 120, wallTimeMinutes: 15, maxTotalToolCalls: 1200, totalWallTimeMinutes: 120 },
   generation: { comfyUrl: "http://127.0.0.1:8188", image: true, voice: true, video: true },
+  plugins: { comfyui: true },
   notifications: { enabled: true },
   ui: { scale: 1, fontSize: "md", sidebarCollapsed: false, previewCollapsed: false, previewRatio: 0.46 },
 };
@@ -25,6 +29,8 @@ export const DEFAULT_SETTINGS: AlphaSettings = {
 export const LIMITS = {
   maxToolCalls: [20, 400],
   wallTimeMinutes: [1, 60],
+  maxTotalToolCalls: [20, 10000],
+  totalWallTimeMinutes: [1, 1440],
   scale: [0.8, 1.5],
   previewRatio: [0.2, 0.8],
 } as const;
@@ -82,16 +88,21 @@ export function mergeSettings(current: AlphaSettings, input: unknown, strict = t
   const model = section(patch.model, "model", strict);
   const budget = section(patch.budget, "budget", strict);
   const generation = section(patch.generation, "generation", strict);
+  const plugins = section(patch.plugins, "plugins", strict);
   const notifications = section(patch.notifications, "notifications", strict);
   const ui = section(patch.ui, "ui", strict);
   return {
     version: 1,
+    revision: current.revision ?? 0,
     model: {
       default: pick(model, "default", current.model.default, value => value === null ? null : isModelSelector(value) ? value : undefined, strict, "默认模型"),
+      translation: pick(model, "translation", current.model.translation, value => value === null ? null : isModelSelector(value) ? value : undefined, strict, "翻译模型"),
     },
     budget: {
       maxToolCalls: pick(budget, "maxToolCalls", current.budget.maxToolCalls, number(...LIMITS.maxToolCalls, true), strict, "工具调用上限"),
       wallTimeMinutes: pick(budget, "wallTimeMinutes", current.budget.wallTimeMinutes, number(...LIMITS.wallTimeMinutes, true), strict, "单轮时长上限"),
+      maxTotalToolCalls: pick(budget, "maxTotalToolCalls", current.budget.maxTotalToolCalls, number(...LIMITS.maxTotalToolCalls, true), strict, "任务总工具调用上限"),
+      totalWallTimeMinutes: pick(budget, "totalWallTimeMinutes", current.budget.totalWallTimeMinutes, number(...LIMITS.totalWallTimeMinutes, true), strict, "任务总时长上限"),
     },
     generation: {
       comfyUrl: pick(generation, "comfyUrl", current.generation.comfyUrl, value => {
@@ -101,6 +112,9 @@ export function mergeSettings(current: AlphaSettings, input: unknown, strict = t
       image: pick(generation, "image", current.generation.image, bool, strict, "图片生成"),
       voice: pick(generation, "voice", current.generation.voice, bool, strict, "语音生成"),
       video: pick(generation, "video", current.generation.video, bool, strict, "视频生成"),
+    },
+    plugins: {
+      comfyui: pick(plugins, "comfyui", current.plugins.comfyui, bool, strict, "ComfyUI 插件"),
     },
     notifications: {
       enabled: pick(notifications, "enabled", current.notifications.enabled, bool, strict, "通知"),
@@ -145,21 +159,32 @@ class JsonFile<T> {
 export class SettingsStore {
   private readonly json: JsonFile<AlphaSettings>;
   private cached: AlphaSettings | null = null;
+  private updates: Promise<void> = Promise.resolve();
 
   constructor(dataRoot: string) {
     this.json = new JsonFile(join(dataRoot, "settings.json"));
   }
 
   async get(): Promise<AlphaSettings> {
-    this.cached ??= mergeSettings(DEFAULT_SETTINGS, await this.json.read() ?? {}, false);
+    if (!this.cached) {
+      const stored = await this.json.read() ?? {};
+      this.cached = mergeSettings(DEFAULT_SETTINGS, stored, false);
+      const revision = (stored as { revision?: unknown }).revision;
+      this.cached.revision = typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0 ? revision : 0;
+    }
     return this.cached;
   }
 
   async update(patch: unknown): Promise<AlphaSettings> {
-    const next = mergeSettings(await this.get(), patch, true);
-    this.cached = next;
-    await this.json.write(next);
-    return next;
+    const run = this.updates.then(async () => {
+      const next = mergeSettings(await this.get(), patch, true);
+      next.revision = (next.revision ?? 0) + 1;
+      await this.json.write(next);
+      this.cached = next;
+      return next;
+    });
+    this.updates = run.then(() => undefined, () => undefined);
+    return run;
   }
 }
 
@@ -173,6 +198,7 @@ export interface TaskMeta {
 export class WorkbenchMeta {
   private readonly json: JsonFile<{ tasks: Record<string, TaskMeta> }>;
   private cached: Record<string, TaskMeta> | null = null;
+  private updates: Promise<void> = Promise.resolve();
 
   constructor(dataRoot: string) {
     this.json = new JsonFile(join(dataRoot, "workbench.json"));
@@ -191,6 +217,12 @@ export class WorkbenchMeta {
   }
 
   async update(taskId: string, input: unknown): Promise<TaskMeta> {
+    const run = this.updates.then(() => this.applyUpdate(taskId, input));
+    this.updates = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private async applyUpdate(taskId: string, input: unknown): Promise<TaskMeta> {
     const patch = section(input, "meta", true);
     const next: TaskMeta = { ...await this.get(taskId) };
     if ("title" in patch) {
@@ -208,8 +240,8 @@ export class WorkbenchMeta {
     const tasks = { ...await this.all() };
     if (Object.keys(next).length) tasks[taskId] = next;
     else delete tasks[taskId];
-    this.cached = tasks;
     await this.json.write({ tasks });
+    this.cached = tasks;
     return next;
   }
 }

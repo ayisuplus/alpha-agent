@@ -2,7 +2,7 @@ import type { Criterion, GuidanceStatus, TaskSummary } from "../api/types";
 
 export type Tone = "neutral" | "accent" | "success" | "warning" | "danger";
 
-export const TERMINAL_PHASES = new Set(["待验收", "已验收", "用户接管", "已停止", "失败"]);
+export const TERMINAL_PHASES = new Set(["待验收", "已验收", "用户接管", "已停止", "失败", "需要回答"]);
 
 /** The instruction the server substitutes when "continue repair" is sent without text. */
 export const DEFAULT_RESUME_INSTRUCTION = "Repair the pending acceptance checks while preserving the original objective.";
@@ -31,15 +31,18 @@ export function taskTitle(task: Pick<TaskSummary, "objective" | "originalObjecti
   return task.meta?.title ?? titleOf(task.originalObjective ?? task.objective);
 }
 
-export function taskStatus(task: Pick<TaskSummary, "running" | "status">): { label: string; tone: Tone } {
+export function taskStatus(task: Pick<TaskSummary, "running" | "status" | "taskType">): { label: string; tone: Tone } {
   if (task.running) return { label: "运行中", tone: "accent" };
-  if (task.status === "complete") return { label: "已验收", tone: "success" };
+  if (task.status === "complete") return { label: task.taskType === "code-change" ? "技术完成" : "已验收", tone: "success" };
   if (task.status === "stopped") return { label: "已停止", tone: "neutral" };
+  if (task.status === "needs-input") return { label: "需要回答", tone: "warning" };
   return { label: "待验收", tone: "warning" };
 }
 
 const CRITERIA: Record<string, string> = {
   build: "产品构建",
+  change: "变更审阅",
+  check: "项目检查",
   "user-path": "浏览器关键路径",
   "local-preview": "本机预览",
 };
@@ -77,6 +80,7 @@ export function phaseInfo(phase: string): { label: string; tone: Tone } {
     case "待验收": return { label: "待验收", tone: "warning" };
     case "用户接管": return { label: "你接管了预览", tone: "warning" };
     case "已停止": return { label: "已停止", tone: "neutral" };
+    case "需要回答": return { label: "需要回答", tone: "warning" };
     case "失败": return { label: "失败", tone: "danger" };
     case "修复中": return { label: "根据验收失败自动修复", tone: "warning" };
     default: return { label: phase, tone: "neutral" };

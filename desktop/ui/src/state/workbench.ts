@@ -1,6 +1,6 @@
 import { api } from "../api/client";
 import { connectEvents, type ConnectionState } from "../api/events";
-import type { ActivityEntry, ControlHolder, ModelCatalog, ReviewSummary, ServerMessage, Settings, SettingsPatch, TaskList, TaskMeta, TaskSummary, TaskView } from "../api/types";
+import type { ActivityEntry, ControlHolder, ModelCatalog, OperationSnapshot, ReviewSummary, ServerMessage, Settings, SettingsPatch, TaskList, TaskMeta, TaskSummary, TaskView } from "../api/types";
 import { TERMINAL_PHASES, taskTitle } from "./labels";
 import { buildTaskReport } from "./report";
 import { createStore } from "./store";
@@ -8,7 +8,7 @@ import { mergeActivity } from "./timeline";
 
 export type Detail = { kind: "diff"; operationId: string } | { kind: "evidence"; criterionId?: string; evidenceId?: string };
 export type PendingAction = "start" | "resume" | "revise" | "guidance" | "stop" | "publish" | "verify" | "control";
-export type SettingsSection = "model" | "run" | "generation" | "interface" | "workspace" | "diagnostics" | "shortcuts";
+export type SettingsSection = "model" | "run" | "agents" | "generation" | "interface" | "workspace" | "diagnostics" | "shortcuts";
 export type Panel = { kind: "settings"; section: SettingsSection };
 
 export interface AppState {
@@ -17,6 +17,7 @@ export interface AppState {
   /** The task whose model run holds the single execution slot, as reported by the server. */
   activeTaskId: string | null;
   activeRunId: string | null;
+  serverOperation: OperationSnapshot | null;
   selectedId: string | null;
   task: TaskView | null;
   activity: ActivityEntry[];
@@ -45,6 +46,7 @@ export const store = createStore<AppState>({
   tasks: [],
   activeTaskId: null,
   activeRunId: null,
+  serverOperation: null,
   selectedId: null,
   task: null,
   activity: [],
@@ -65,7 +67,7 @@ export const store = createStore<AppState>({
 });
 
 export function isOccupied(state: AppState): boolean {
-  return state.activeRunId !== null || state.operation !== null || state.pending !== null;
+  return state.serverOperation !== null || state.activeRunId !== null || state.operation !== null || state.pending !== null;
 }
 
 const SELECTED_KEY = "alpha.selectedTask";
@@ -108,7 +110,8 @@ function upsertSummary(tasks: TaskSummary[], task: TaskView): TaskSummary[] {
 
 async function loadRunningPreview(id: string): Promise<void> {
   const task = await api.task(id).catch(() => null);
-  if (task?.preview?.live && store.get().activeTaskId === id) store.set({ runningPreview: { taskId: id, url: task.preview.url } });
+  const state = store.get();
+  if (task?.preview?.live && (state.serverOperation?.browserTaskId ?? state.serverOperation?.taskId ?? state.activeTaskId) === id) store.set({ runningPreview: { taskId: id, url: task.preview.url } });
 }
 
 export async function refreshTasks(): Promise<TaskList | null> {
@@ -117,9 +120,12 @@ export async function refreshTasks(): Promise<TaskList | null> {
   const previous = store.get();
   store.set({
     loaded: true, tasks: list.tasks, activeTaskId: list.activeTaskId, activeRunId: list.activeRunId,
-    runningPreview: list.activeTaskId ? previous.runningPreview : null,
+    serverOperation: list.operation,
+    operation: list.operation ? { taskId: list.operation.taskId, phase: list.operation.phase } : null,
+    runningPreview: list.operation?.taskId ? previous.runningPreview : null,
   });
-  if (list.activeTaskId && list.activeTaskId !== previous.activeTaskId) void loadRunningPreview(list.activeTaskId);
+  const owner = list.operation?.browserTaskId ?? list.operation?.taskId ?? list.activeTaskId;
+  if (owner && owner !== (previous.serverOperation?.browserTaskId ?? previous.serverOperation?.taskId ?? previous.activeTaskId)) void loadRunningPreview(owner);
   const state = store.get();
   if (state.starting && !state.starting.error && state.selectedId === null && list.activeTaskId) void openTask(list.activeTaskId);
   return list;
@@ -278,22 +284,43 @@ function combinePatches(first: SettingsPatch, second: SettingsPatch): SettingsPa
 
 let unsentSettings: SettingsPatch = {};
 let settingsTimer: ReturnType<typeof setTimeout> | undefined;
+let inFlightSettings: SettingsPatch = {};
+let settingsFlight: Promise<boolean> | null = null;
+let settingsRevision = 0;
+
+function acceptSettings(settings: Settings): void {
+  const revision = settings.revision ?? 0;
+  if (revision < settingsRevision) return;
+  settingsRevision = revision;
+  store.set({ settings: applyPatch(settings, combinePatches(inFlightSettings, unsentSettings)) });
+}
 
 async function flushSettings(): Promise<boolean> {
   clearTimeout(settingsTimer);
+  if (settingsFlight) {
+    await settingsFlight;
+    return flushSettings();
+  }
   const patch = unsentSettings;
   unsentSettings = {};
   if (!Object.keys(patch).length) return true;
-  try {
-    const saved = await api.updateSettings(patch);
-    store.set({ settings: applyPatch(saved, unsentSettings) });
-    return true;
-  } catch (error) {
-    notify(messageOf(error));
-    const current = await api.settings().catch(() => null);
-    if (current) store.set({ settings: applyPatch(current, unsentSettings) });
-    return false;
-  }
+  inFlightSettings = patch;
+  const flight = (async () => {
+    try {
+      acceptSettings(await api.updateSettings(patch));
+      return true;
+    } catch (error) {
+      notify(messageOf(error));
+      const current = await api.settings().catch(() => null);
+      if (current) acceptSettings(current);
+      return false;
+    } finally {
+      inFlightSettings = {};
+    }
+  })();
+  settingsFlight = flight;
+  try { return await flight; }
+  finally { if (settingsFlight === flight) settingsFlight = null; }
 }
 
 /**
@@ -315,7 +342,7 @@ function revealPreviewForBrowserWork(): void {
 }
 
 export function previewLocked(state: AppState): boolean {
-  return state.controlHolder === "user" || state.operation !== null;
+  return state.controlHolder === "user" || state.serverOperation !== null || state.operation !== null;
 }
 
 const notifiedPhases = new Set<string>();
@@ -339,6 +366,9 @@ function notifyStatus(message: Extract<ServerMessage, { type: "status" }>): void
 function handleMessage(message: ServerMessage): void {
   const state = store.get();
   switch (message.type) {
+    case "operation":
+      store.set({ serverOperation: message.operation, operation: message.operation ? { taskId: message.operation.taskId, phase: message.operation.phase } : null });
+      break;
     case "activity":
       if (message.taskId === state.selectedId) {
         store.set(current => ({
@@ -362,7 +392,7 @@ function handleMessage(message: ServerMessage): void {
       break;
     }
     case "settings":
-      store.set({ settings: applyPatch(message.settings, unsentSettings) });
+      acceptSettings(message.settings);
       break;
     case "status": {
       notifyStatus(message);
@@ -398,7 +428,7 @@ function handleMessage(message: ServerMessage): void {
 
 async function loadSettings(): Promise<void> {
   const settings = await api.settings().catch(() => null);
-  if (settings) store.set({ settings: applyPatch(settings, unsentSettings) });
+  if (settings) acceptSettings(settings);
 }
 
 async function resync(): Promise<void> {
@@ -477,6 +507,32 @@ export async function startTask(brief: string, model: string | null = null): Pro
   }
 }
 
+export async function importTask(sourcePath: string, objective: string, model: string | null = null): Promise<void> {
+  const text = objective.trim();
+  if (!sourcePath.trim() || !text || store.get().pending) return;
+  store.set({ pending: "start", starting: { brief: text, error: null } });
+  try {
+    const { taskId, runId } = await api.importWorkspace(sourcePath.trim(), text, model);
+    store.set({ activeRunId: runId, activeTaskId: taskId });
+    await Promise.all([refreshTasks(), openTask(taskId)]);
+  } catch (error) {
+    store.set({ starting: { brief: text, error: messageOf(error) } });
+  } finally { store.set({ pending: null }); }
+}
+
+export async function startWorkflow(taskType: "research" | "file-work", objective: string, files: File[], model: string | null = null): Promise<void> {
+  const text = objective.trim();
+  if (!text || store.get().pending) return;
+  store.set({ pending: "start", starting: { brief: text, error: null } });
+  try {
+    const { taskId, runId } = await api.startWorkflow(taskType, text, files, model);
+    store.set({ activeRunId: runId, activeTaskId: taskId });
+    await Promise.all([refreshTasks(), openTask(taskId)]);
+  } catch (error) {
+    store.set({ starting: { brief: text, error: messageOf(error) } });
+  } finally { store.set({ pending: null }); }
+}
+
 export function clearStarting(): void {
   store.set({ starting: null });
 }
@@ -516,11 +572,21 @@ export async function sendGuidance(text: string): Promise<boolean> {
 }
 
 export async function stopTask(): Promise<void> {
-  const { task, activeRunId } = store.get();
-  if (!task?.running || !activeRunId) return;
-  const result = await perform("stop", () => api.cancel(activeRunId));
-  if (result) notify("正在停止本轮运行…", "info");
+  if (stopFlight) return stopFlight;
+  const { activeRunId, serverOperation } = store.get();
+  if (!serverOperation?.cancellable && !activeRunId) return;
+  stopFlight = (async () => {
+    try {
+      if (serverOperation?.cancellable) await api.cancelOperation(serverOperation.id);
+      else if (activeRunId) await api.cancel(activeRunId);
+      notify("正在停止本轮运行…", "info");
+    } catch (error) { notify(messageOf(error)); }
+    finally { stopFlight = null; }
+  })();
+  return stopFlight;
 }
+
+let stopFlight: Promise<void> | null = null;
 
 export async function republish(): Promise<void> {
   const task = store.get().task;
@@ -558,11 +624,19 @@ export async function verifyTask(): Promise<void> {
 }
 
 export async function toggleControl(): Promise<void> {
+  if (controlFlight) return controlFlight;
   const holder: ControlHolder = store.get().controlHolder === "alpha" ? "user" : "alpha";
-  const result = await perform("control", () => api.setControl(holder));
-  if (!result) return;
-  store.set({ controlHolder: holder });
-  const state = store.get();
-  const task = state.task;
-  if (holder === "alpha" && task?.status === "active" && task.preview?.live && task.pending.includes("user-path") && !isOccupied(state)) void verifyTask();
+  controlFlight = (async () => {
+    try {
+      await api.setControl(holder);
+      store.set({ controlHolder: holder });
+      const state = store.get();
+      const task = state.task;
+      if (holder === "alpha" && task?.status === "active" && task.preview?.live && task.pending.includes("user-path") && !isOccupied(state)) void verifyTask();
+    } catch (error) { notify(messageOf(error)); }
+    finally { controlFlight = null; }
+  })();
+  return controlFlight;
 }
+
+let controlFlight: Promise<void> | null = null;

@@ -1,4 +1,4 @@
-import type { ActivityEntry, ControlHolder, Diagnostics, EvidenceDetail, ModelCatalog, ReviewDetail, ReviewSummary, Settings, SettingsPatch, StorageReport, TaskList, TaskMeta, TaskView } from "./types";
+import type { ActivityEntry, AgentPreset, AgentPresetSummary, ControlHolder, Diagnostics, EvidenceDetail, LocalSchedule, ModelCatalog, PromptRefinement, QueueItem, ReviewDetail, ReviewSummary, Settings, SettingsPatch, SkillPlugin, StorageReport, TaskList, TaskMeta, TaskView } from "./types";
 
 const SERVER_MESSAGES: Record<string, string> = {
   "A task is already running": "已有任务或操作正在进行，请等它结束",
@@ -56,12 +56,26 @@ const taskPath = (id: string) => `/api/tasks/${encodeURIComponent(id)}`;
 export const api = {
   settings: () => request<{ settings: Settings }>("/api/settings").then(result => result.settings),
   updateSettings: (patch: SettingsPatch) => send<{ settings: Settings }>("PUT", "/api/settings", patch).then(result => result.settings),
+  agentPresets: () => request<{ presets: AgentPresetSummary[] }>("/api/agent-presets").then(result => result.presets),
+  agentPreset: (id: string) => request<{ preset: AgentPreset }>(`/api/agent-presets/${encodeURIComponent(id)}`).then(result => result.preset),
+  setAgentPresetEnabled: (id: string, enabled: boolean) => send<{ preset: AgentPreset }>("PATCH", `/api/agent-presets/${encodeURIComponent(id)}`, { enabled }).then(result => result.preset),
+  copyAgentPreset: (id: string) => post<{ preset: AgentPreset }>(`/api/agent-presets/${encodeURIComponent(id)}/copy`, {}).then(result => result.preset),
+  updateAgentPreset: (id: string, patch: Pick<AgentPreset, "name" | "description" | "instructions">) => send<{ preset: AgentPreset }>("PUT", `/api/agent-presets/${encodeURIComponent(id)}`, patch).then(result => result.preset),
+  plugins: () => request<{ plugins: SkillPlugin[] }>("/api/plugins").then(result => result.plugins),
+  installPlugin: (source: string) => post<{ plugin: SkillPlugin }>("/api/plugins/install", { source }).then(result => result.plugin),
+  setPluginEnabled: (id: string, enabled: boolean) => send<{ plugin: SkillPlugin }>("PATCH", `/api/plugins/${encodeURIComponent(id)}`, { enabled }).then(result => result.plugin),
+  setPluginHooksEnabled: (id: string, hooksEnabled: boolean) => send<{ plugin: SkillPlugin }>("PATCH", `/api/plugins/${encodeURIComponent(id)}`, { hooksEnabled }).then(result => result.plugin),
+  setPluginMCPEnabled: (id: string, mcpEnabled: boolean) => send<{ plugin: SkillPlugin }>("PATCH", `/api/plugins/${encodeURIComponent(id)}`, { mcpEnabled }).then(result => result.plugin),
+  checkPluginMCP: (id: string) => post<{ tools: string[]; errors: string[] }>(`/api/plugins/${encodeURIComponent(id)}/mcp/check`, {}),
+  mcpPermissions: (id: string) => request<{ permissions: Record<string, "deny" | "read" | "write"> }>(`/api/plugins/${encodeURIComponent(id)}/mcp/permissions`).then(result => result.permissions),
+  setMCPPermission: (id: string, tool: string, permission: "deny" | "read" | "write") => send<{ permissions: Record<string, "deny" | "read" | "write"> }>("PUT", `/api/plugins/${encodeURIComponent(id)}/mcp/permissions`, { tool, permission }).then(result => result.permissions),
   checkGeneration: (url: string) => post<{ url: string; online: boolean }>("/api/generation/check", { url }),
   models: () => request<ModelCatalog>("/api/models"),
   diagnostics: () => request<Diagnostics>("/api/diagnostics"),
   storage: () => request<StorageReport>("/api/storage"),
   cleanupPreviews: () => post<{ removed: number; bytes: number }>("/api/storage/cleanup-previews"),
   testModel: (model: string) => post<{ ok: boolean; latencyMs: number; error?: string }>("/api/models/test", { model }),
+  refinePrompt: (prompt: string, model?: string | null) => post<{ result: PromptRefinement }>("/api/prompts/refine", { prompt, model: model ?? undefined }).then(response => response.result),
   setApiKey: (provider: string, apiKey: string) => send<{ saved: boolean }>("PUT", `/api/providers/${encodeURIComponent(provider)}/key`, { apiKey }),
   removeApiKey: (provider: string) => send<{ removed: number }>("DELETE", `/api/providers/${encodeURIComponent(provider)}/key`),
   setTaskModel: (id: string, model: string | null) => post<{ task: TaskView }>(`${taskPath(id)}/model`, { model }).then(result => result.task),
@@ -75,10 +89,29 @@ export const api = {
   control: () => request<{ holder: ControlHolder }>("/api/browser/control").then(result => result.holder),
   setControl: (holder: ControlHolder) => post<{ holder: ControlHolder }>("/api/browser/control", { holder }),
   start: (brief: string, model?: string | null) => post<{ runId: string }>("/api/tasks", { brief, model: model ?? null }),
+  importWorkspace: (sourcePath: string, objective: string, model?: string | null) => post<{ taskId: string; runId: string }>("/api/workspaces/import", { sourcePath, objective, model: model ?? null }),
+  startWorkflow: (taskType: "research" | "file-work", objective: string, files: File[], model?: string | null) => {
+    const form = new FormData();
+    form.set("taskType", taskType);
+    form.set("objective", objective);
+    if (model) form.set("model", model);
+    files.forEach(file => form.append("files", file));
+    return request<{ taskId: string; runId: string }>("/api/workflows", { method: "POST", body: form });
+  },
+  taskQueue: () => request<{ items: QueueItem[]; schedules: LocalSchedule[] }>("/api/queue"),
+  enqueueTask: (taskId: string, instruction: string) => post<{ item: QueueItem }>("/api/queue", { taskId, instruction }),
+  cancelQueuedTask: (id: string) => send<{ cancelled: boolean }>("DELETE", `/api/queue/${encodeURIComponent(id)}`),
+  scheduleTask: (taskId: string, instruction: string, nextRunAt: string, intervalMinutes: number | null) => post<{ schedule: LocalSchedule }>("/api/schedules", { taskId, instruction, nextRunAt, intervalMinutes }),
+  disableSchedule: (id: string) => send<{ disabled: boolean }>("DELETE", `/api/schedules/${encodeURIComponent(id)}`),
+  applyReview: (id: string) => request<{ revision: string | null; changes: Array<{ path: string; action: string; conflict: boolean }>; conflicts: string[] }>(`${taskPath(id)}/apply-review`),
+  applyCode: (id: string, revision: string) => post<{ applied: Array<{ path: string; action: string }> }>(`${taskPath(id)}/apply`, { revision }),
+  approvals: (id: string) => request<{ approvals: import("./types").CommandApproval[] }>(`${taskPath(id)}/approvals`).then(result => result.approvals),
+  decideApproval: (id: string, approvalId: string, approved: boolean) => post<{ approval: import("./types").CommandApproval }>(`${taskPath(id)}/approvals/${encodeURIComponent(approvalId)}/decision`, { approved }),
   revise: (id: string, brief: string) => post<{ runId: string }>(`${taskPath(id)}/revise`, { brief }),
   resume: (id: string, brief: string) => post<{ runId: string }>(`${taskPath(id)}/resume`, { brief }),
   guidance: (id: string, text: string) => post<{ id: string; status?: string }>(`${taskPath(id)}/guidance`, { text }),
   cancel: (runId: string) => post<{ stopping: boolean }>(`/api/tasks/${encodeURIComponent(runId)}/cancel`),
+  cancelOperation: (id: string) => post<{ stopping: boolean }>(`/api/operations/${encodeURIComponent(id)}/cancel`),
   verify: (id: string) => post<{ task?: TaskView; paused?: boolean }>(`${taskPath(id)}/verify`),
   /** Publication may finish even when its reply is lost, so only an explicit refusal counts as rejected; callers re-query the task. */
   async publish(id: string): Promise<{ rejected: string | null }> {

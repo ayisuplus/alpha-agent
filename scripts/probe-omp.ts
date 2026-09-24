@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createBrowserTool } from "../src/runtime/browser-tool";
+import { assertFileToolGuardLoaded, fileToolGuard } from "../src/runtime/file-tool-guard";
 
 process.env.PI_EDIT_VARIANT = "hashline";
 process.env.PI_STRICT_EDIT_MODE = "1";
@@ -12,7 +13,7 @@ const agentDir = join(process.cwd(), ".alpha", "omp-probe");
 
 try {
   await writeFile(join(workspace, "sample.txt"), "one\ntwo\nthree\n");
-  const { session, mcpManager } = await createAgentSession({
+  const { session, mcpManager, extensionsResult } = await createAgentSession({
     cwd: workspace,
     agentDir,
     sessionManager: SessionManager.inMemory(workspace),
@@ -20,6 +21,7 @@ try {
     restrictToolNames: true,
     allowRestrictedCustomTools: true,
     customTools: [createBrowserTool(() => null, join(process.cwd(), ".alpha"))],
+    preloadedPreparedExtensions: [fileToolGuard(workspace)],
     disableExtensionDiscovery: true,
     enableMCP: false,
     enableLsp: false,
@@ -31,6 +33,7 @@ try {
     slashCommands: [],
   });
   try {
+    assertFileToolGuardLoaded(extensionsResult.extensions);
     const tools = session.agent.state.tools.map(tool => tool.name).sort();
     if (tools.join(",") !== "alpha_browser,edit,read,write") {
       throw new Error(`Unexpected tools: ${tools.join(",")}`);
@@ -38,7 +41,16 @@ try {
     if (mcpManager) throw new Error("Restricted probe unexpectedly enabled MCP");
     const read = session.getToolByName("read");
     const edit = session.getToolByName("edit");
+    const write = session.getToolByName("write");
+    if (!write) throw new Error("Write tool missing");
     if (!read || !edit) throw new Error("Read/edit tools missing");
+    const outside = join(process.cwd(), "package.json");
+    const blocked = async (call: () => Promise<unknown>) => {
+      try { return (await call() as { isError?: boolean }).isError === true; }
+      catch (error) { return error instanceof Error && error.message.includes("outside the assigned project"); }
+    };
+    if (!await blocked(() => read.execute(crypto.randomUUID(), { path: outside }))) throw new Error("Out-of-root read passed guard");
+    if (!await blocked(() => write.execute(crypto.randomUUID(), { path: outside, content: "forbidden" }))) throw new Error("Out-of-root write passed guard");
     const sample = join(workspace, "sample.txt");
     const readText = async () => {
       const result = await read.execute(crypto.randomUUID(), { path: sample });
