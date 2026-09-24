@@ -1,4 +1,4 @@
-import type { ActivityEntry, ControlHolder, EvidenceDetail, ModelCatalog, ReviewDetail, ReviewSummary, Settings, SettingsPatch, TaskList, TaskMeta, TaskView } from "./types";
+import type { ActivityEntry, ControlHolder, Diagnostics, EvidenceDetail, ModelCatalog, ReviewDetail, ReviewSummary, Settings, SettingsPatch, StorageReport, TaskList, TaskMeta, TaskView } from "./types";
 
 const SERVER_MESSAGES: Record<string, string> = {
   "A task is already running": "已有任务或操作正在进行，请等它结束",
@@ -58,6 +58,9 @@ export const api = {
   updateSettings: (patch: SettingsPatch) => send<{ settings: Settings }>("PUT", "/api/settings", patch).then(result => result.settings),
   checkGeneration: (url: string) => post<{ url: string; online: boolean }>("/api/generation/check", { url }),
   models: () => request<ModelCatalog>("/api/models"),
+  diagnostics: () => request<Diagnostics>("/api/diagnostics"),
+  storage: () => request<StorageReport>("/api/storage"),
+  cleanupPreviews: () => post<{ removed: number; bytes: number }>("/api/storage/cleanup-previews"),
   testModel: (model: string) => post<{ ok: boolean; latencyMs: number; error?: string }>("/api/models/test", { model }),
   setApiKey: (provider: string, apiKey: string) => send<{ saved: boolean }>("PUT", `/api/providers/${encodeURIComponent(provider)}/key`, { apiKey }),
   removeApiKey: (provider: string) => send<{ removed: number }>("DELETE", `/api/providers/${encodeURIComponent(provider)}/key`),

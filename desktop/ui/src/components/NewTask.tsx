@@ -1,8 +1,10 @@
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { CircleAlert, Globe, Hammer, MonitorPlay, PencilLine } from "lucide-react";
+import { api } from "../api/client";
+import type { Diagnostics } from "../api/types";
 import { taskTitle } from "../state/labels";
 import { useStore } from "../state/store";
-import { clearStarting, openTask, startTask, store } from "../state/workbench";
+import { clearStarting, openSettings, openTask, startTask, store } from "../state/workbench";
 import { ModelPicker } from "./ModelPicker";
 import { Button, Spinner } from "./ui";
 import "./NewTask.css";
@@ -25,13 +27,23 @@ export function NewTask() {
   const pending = useStore(store, state => state.pending);
   const activeTaskId = useStore(store, state => state.activeTaskId);
   const busy = useStore(store, state => state.activeRunId !== null || state.operation !== null);
+  const catalog = useStore(store, state => state.models);
+  const defaultModel = useStore(store, state => state.settings?.model.default ?? null);
   const runningTitle = useStore(store, state => {
     const running = state.tasks.find(item => item.id === state.activeTaskId);
     return running ? taskTitle(running) : null;
   });
   const [draft, setDraft] = useState(() => starting?.brief ?? "");
   const [model, setModel] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  useEffect(() => {
+    let mounted = true;
+    void api.diagnostics().then(result => { if (mounted) setDiagnostics(result); }).catch(() => undefined);
+    return () => { mounted = false; };
+  }, []);
   const text = draft.trim();
+  const selectedModel = model ?? defaultModel ?? catalog?.builtin;
+  const modelReady = !!catalog?.models.some(item => item.selector === selectedModel && item.available);
 
   if (starting && !starting.error) {
     return <div className="new-task starting" data-testid="new-task">
@@ -44,7 +56,7 @@ export function NewTask() {
   }
 
   const submit = () => {
-    if (!text || busy || pending) return;
+    if (!text || busy || pending || !modelReady) return;
     void startTask(text, model);
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -65,6 +77,15 @@ export function NewTask() {
       <div className="thread-alert-body"><strong>任务没有启动</strong><p>{starting.error}</p></div>
       <div className="thread-alert-actions"><button className="link-button" onClick={clearStarting}>关闭</button></div>
     </div>}
+    <div className="new-task-readiness" aria-label="准备情况">
+      <strong>准备情况</strong>
+      <span className={modelReady ? "ready" : "needs-attention"}>模型：{!catalog ? "正在读取…" : modelReady ? "可用" : "未认证或不可用"}</span>
+      {diagnostics && <>
+        <span className={diagnostics.checks.find(check => check.id === "comfy")?.ok ? "ready" : "needs-attention"}>ComfyUI：{diagnostics.checks.find(check => check.id === "comfy")?.ok ? "在线" : "未连接，仅影响媒体生成"}</span>
+        <span className={diagnostics.checks.find(check => check.id === "browser")?.ok ? "ready" : "needs-attention"}>桌面浏览器：{diagnostics.checks.find(check => check.id === "browser")?.ok ? "可验收" : "不可用，验收需桌面端"}</span>
+      </>}
+      {!modelReady && catalog && <button className="link-button" onClick={() => openSettings("model")}>去设置模型</button>}
+    </div>
     <div className="composer-box new-task-box">
       <textarea
         id="brief"
@@ -84,7 +105,7 @@ export function NewTask() {
             ? <>「{runningTitle}」正在运行，同一时间只运行一个任务。<button className="link-button" onClick={() => void openTask(activeTaskId)}>查看</button></>
             : <><kbd>Ctrl</kbd>+<kbd>Enter</kbd> 开始</>}
         </span>
-        <Button variant="primary" data-testid="start-build" onClick={submit} disabled={!text || busy || !!pending} busy={pending === "start"}>开始构建</Button>
+        <Button variant="primary" data-testid="start-build" onClick={submit} disabled={!text || busy || !!pending || !modelReady} busy={pending === "start"}>开始构建</Button>
       </div>
     </div>
     <div className="new-task-examples">

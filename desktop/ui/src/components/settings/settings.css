@@ -192,3 +192,14 @@
 .provider-hint { color: var(--text-faint); font-size: var(--text-xs); }
 .provider-key-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; }
 .provider-key-form .settings-text { flex: 1; min-width: 180px; }
+.settings-path { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border-subtle); font-size: var(--text-sm); }
+.settings-path > span { width: 72px; color: var(--text-secondary); }
+.settings-path code { flex: 1; min-width: 160px; overflow-wrap: anywhere; color: var(--text-muted); font-size: var(--text-xs); }
+.settings-storage { margin-top: 8px; }
+.settings-storage > div, .diagnostic-list > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border-subtle); font-size: var(--text-sm); }
+.settings-storage strong { font-variant-numeric: tabular-nums; font-weight: 600; }
+.settings-cleanup { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 18px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius); }
+.settings-cleanup p { margin: 0; color: var(--text-secondary); font-size: var(--text-sm); }
+.diagnostic-list { margin: 8px 0 20px; }
+.diagnostic-list > div > span { display: flex; flex-direction: column; gap: 3px; }
+.diagnostic-list small { color: var(--text-muted); font-size: var(--text-xs); overflow-wrap: anywhere; }

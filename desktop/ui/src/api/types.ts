@@ -150,6 +150,17 @@ export interface ModelCatalog {
   builtin: string;
 }
 
+export interface Diagnostics {
+  paths: { workspace: string; data: string; products: string };
+  versions: { bun: string; omp: string; electron: string | null };
+  checks: Array<{ id: string; label: string; ok: boolean; detail: string }>;
+}
+
+export interface StorageReport {
+  categories: Array<{ id: string; label: string; path: string; bytes: number }>;
+  cleanup: { count: number; bytes: number };
+}
+
 export type FontSize = "sm" | "md" | "lg";
 
 export interface Settings {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ServerWebSocket } from "bun";
-import { cp, mkdir, readFile, readdir, realpath, unlink, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readFile, readdir, realpath, unlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
 import { publishLocalPreview, type PreviewInstance } from "./runtime/local-preview";
 import { DEFAULT_MODEL, runTask, type RunEvent } from "./runtime/omp-runner";
@@ -12,6 +13,7 @@ import { TaskActivity, type ActivityKind } from "./runtime/task-activity";
 import { readSourceReviews, snapshotSource, writeSourceReview } from "./runtime/source-review";
 import { SettingsError, SettingsStore, WorkbenchMeta, isModelSelector, normalizeComfyUrl } from "./runtime/settings";
 import { ComfyClient } from "./runtime/comfy-client";
+import { cleanupStalePreviews, storageReport } from "./runtime/storage";
 
 const appRoot = resolve(import.meta.dir, "..");
 const workspaceRoot = resolve(process.env.ALPHA_WORKSPACE_ROOT ?? appRoot);
@@ -37,6 +39,7 @@ let active: { runId: string; controller: AbortController; ledger?: TaskLedger; s
 let controlHolder: "alpha" | "user" = "alpha";
 let verification: { taskId: string; controller: AbortController } | null = null;
 let publishing = false;
+let cleaning = false;
 const activities = new Map<string, TaskActivity>();
 const operations = new Map<string, string>();
 const contexts = new Map<string, { contractVersion: number; revision: string | null; previewId: string | null }>();
@@ -150,6 +153,38 @@ async function listTasks(): Promise<TaskLedger[]> {
   const names = (await readdir(join(dataRoot, "tasks")).catch(() => [] as string[])).filter(name => /^[0-9a-f-]{36}\.json$/.test(name));
   const ledgers = (await Promise.all(names.map(name => TaskLedger.load(join(dataRoot, "tasks", name)).catch(() => null)))).filter((ledger): ledger is TaskLedger => ledger !== null);
   return ledgers.sort((a, b) => b.state.updatedAt.localeCompare(a.state.updatedAt));
+}
+
+async function protectedPreviewIds(): Promise<Set<string>> {
+  return new Set([...previews.keys(), ...(await listTasks()).flatMap(task => task.state.preview ? [task.state.preview.id] : [])]);
+}
+
+async function diagnostics() {
+  const settings = await settingsStore.get();
+  const selectedModel = settings.model.default ?? DEFAULT_MODEL;
+  const cdpPort = process.env.ALPHA_CDP_PORT;
+  const [modelReady, comfyReady, workspaceWritable, productsWritable, browserReady] = await Promise.all([
+    isModelAvailable(selectedModel).catch(() => false),
+    new ComfyClient(settings.generation.comfyUrl).health(),
+    access(dataRoot, constants.W_OK).then(() => true, () => false),
+    access(productsRoot, constants.W_OK).then(() => true, () => false),
+    cdpPort && /^\d{1,5}$/.test(cdpPort)
+      ? fetch(`http://127.0.0.1:${cdpPort}/json/version`, { signal: AbortSignal.timeout(2_000) }).then(response => response.ok, () => false)
+      : Promise.resolve(false),
+  ]);
+  const appPackage = JSON.parse(await readFile(join(appRoot, "package.json"), "utf8")) as { dependencies?: Record<string, string> };
+  return {
+    paths: { workspace: workspaceRoot, data: dataRoot, products: productsRoot },
+    versions: { bun: Bun.version, omp: appPackage.dependencies?.["@oh-my-pi/pi-coding-agent"] ?? "unknown", electron: process.env.ALPHA_ELECTRON_VERSION ?? null },
+    checks: [
+      { id: "service", label: "Alpha 本机服务", ok: true, detail: "在线" },
+      { id: "workspace", label: "运行数据目录", ok: workspaceWritable, detail: dataRoot },
+      { id: "products", label: "产品目录", ok: productsWritable, detail: productsRoot },
+      { id: "model", label: "默认模型", ok: modelReady, detail: selectedModel },
+      { id: "comfy", label: "ComfyUI", ok: comfyReady, detail: settings.generation.comfyUrl },
+      { id: "browser", label: "桌面浏览器调试", ok: browserReady, detail: browserReady ? `端口 ${cdpPort}` : "仅桌面端提供" },
+    ],
+  };
 }
 
 function taskSummary(ledger: TaskLedger) {
@@ -507,8 +542,16 @@ const server = Bun.serve({
       const settings = await settingsStore.get();
       return Response.json({ ...await listModels(), default: settings.model.default, builtin: DEFAULT_MODEL });
     }
+    if (url.pathname === "/api/diagnostics" && request.method === "GET") return Response.json(await diagnostics());
+    if (url.pathname === "/api/storage" && request.method === "GET") return Response.json(await storageReport(dataRoot, productsRoot, await protectedPreviewIds()));
     // Every state-changing request must come from the workbench page itself.
     if (request.method !== "GET" && request.method !== "HEAD" && request.headers.get("origin") && request.headers.get("origin") !== `http://127.0.0.1:${server.port}`) return new Response("Forbidden", { status: 403 });
+    if (url.pathname === "/api/storage/cleanup-previews" && request.method === "POST") {
+      if (active || verification || publishing || cleaning) return Response.json({ error: "请等当前操作结束后再清理预览" }, { status: 409 });
+      cleaning = true;
+      try { return Response.json(await cleanupStalePreviews(dataRoot, await protectedPreviewIds())); }
+      finally { cleaning = false; }
+    }
     if (url.pathname === "/api/settings" && request.method === "PUT") {
       try {
         const patch = await request.json().catch(() => null) as { model?: { default?: unknown } } | null;
@@ -583,7 +626,7 @@ const server = Bun.serve({
       }
     }
     if (url.pathname === "/api/tasks" && request.method === "POST") {
-      if (active || verification || publishing) return Response.json({ error: "A task is already running" }, { status: 409 });
+      if (active || verification || publishing || cleaning) return Response.json({ error: "A task is already running" }, { status: 409 });
       const body = await request.json().catch(() => ({})) as { brief?: unknown; model?: unknown };
       const brief = typeof body.brief === "string" ? body.brief.trim() : "";
       if (!brief) return Response.json({ error: "Brief is required" }, { status: 400 });
@@ -635,7 +678,7 @@ const server = Bun.serve({
     }
     const revise = /^\/api\/tasks\/([0-9a-f-]{36})\/revise$/.exec(url.pathname);
     if (revise && request.method === "POST") {
-      if (active || verification || publishing) return Response.json({ error: "A task is already running" }, { status: 409 });
+      if (active || verification || publishing || cleaning) return Response.json({ error: "A task is already running" }, { status: 409 });
       const ledger = await loadLedger(revise[1]);
       if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
       const projectRoot = resolve(ledger.state.projectRoot);
@@ -661,7 +704,7 @@ const server = Bun.serve({
     }
     const resume = /^\/api\/tasks\/([0-9a-f-]{36})\/resume$/.exec(url.pathname);
     if (resume && request.method === "POST") {
-      if (active || verification || publishing) return Response.json({ error: "A task is already running" }, { status: 409 });
+      if (active || verification || publishing || cleaning) return Response.json({ error: "A task is already running" }, { status: 409 });
       const ledger = await loadLedger(resume[1]);
       if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
       if (ledger.state.status === "complete") return Response.json({ error: "Task is already complete" }, { status: 409 });
@@ -681,7 +724,7 @@ const server = Bun.serve({
     }
     const publish = /^\/api\/tasks\/([0-9a-f-]{36})\/publish$/.exec(url.pathname);
     if (publish && request.method === "POST") {
-      if (active || verification || publishing) return Response.json({ error: "A task is already running" }, { status: 409 });
+      if (active || verification || publishing || cleaning) return Response.json({ error: "A task is already running" }, { status: 409 });
       publishing = true;
       try {
       const ledger = await loadLedger(publish[1]);
@@ -730,7 +773,7 @@ const server = Bun.serve({
     }
     const verify = /^\/api\/tasks\/([0-9a-f-]{36})\/verify$/.exec(url.pathname);
     if (verify && request.method === "POST") {
-      if (active || verification || publishing) return Response.json({ error: "A task is already running" }, { status: 409 });
+      if (active || verification || publishing || cleaning) return Response.json({ error: "A task is already running" }, { status: 409 });
       const ledger = await loadLedger(verify[1]);
       if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
       if (ledger.state.status !== "active" || !ledger.state.preview || !previews.has(ledger.state.preview.id)) return Response.json({ error: "A live active preview is required" }, { status: 409 });

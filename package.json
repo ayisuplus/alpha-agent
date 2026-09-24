@@ -15,7 +15,7 @@
     "probe:browser": "bun run scripts/probe-browser.ts",
     "probe:preview-browser": "bun run scripts/probe-preview-browser.ts",
     "check": "tsc --noEmit",
-    "test": "bun test ./test/task-ledger.test.ts ./test/local-preview.test.ts ./test/comfy-client.test.ts ./test/browser-verifier.test.ts ./test/work-orders.test.ts ./test/workspace-preflight.test.ts ./test/task-workbench.test.ts ./test/workbench-timeline.test.ts ./test/settings.test.ts ./test/report.test.ts"
+    "test": "bun test ./test/task-ledger.test.ts ./test/local-preview.test.ts ./test/comfy-client.test.ts ./test/browser-verifier.test.ts ./test/work-orders.test.ts ./test/workspace-preflight.test.ts ./test/task-workbench.test.ts ./test/workbench-timeline.test.ts ./test/settings.test.ts ./test/report.test.ts ./test/storage.test.ts"
   },
   "dependencies": {
     "@oh-my-pi/omptype": "18.2.11",

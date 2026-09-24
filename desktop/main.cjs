@@ -26,7 +26,7 @@ const emptyPreview = "data:text/html," + encodeURIComponent("<title>Alpha previe
 function startSidecar() {
   return new Promise((resolve, reject) => {
     const executable = process.env.ALPHA_BUN_PATH || "bun";
-    sidecar = spawn(executable, ["run", "src/server.ts"], { cwd: root, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    sidecar = spawn(executable, ["run", "src/server.ts"], { cwd: root, env: { ...process.env, ALPHA_ELECTRON_VERSION: process.versions.electron }, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let buffer = "";
     let errorTail = "";
     const timeout = setTimeout(() => { sidecar.kill(); reject(new Error(`Alpha sidecar did not start\n${errorTail}`)); }, 20_000);
@@ -166,8 +166,11 @@ app.whenReady().then(async () => {
       if (event.sender !== shell.webContents || typeof directory !== "string") return "不允许打开这个目录";
       try {
         const target = realpathSync(directory);
-        const relative = path.relative(realpathSync(path.join(workspaceRoot, "products")), target);
-        if (relative.startsWith("..") || path.isAbsolute(relative)) return "目录不在产品工作区内";
+        const workspace = realpathSync(workspaceRoot);
+        const data = realpathSync(path.join(workspaceRoot, ".alpha"));
+        const products = realpathSync(path.join(workspaceRoot, "products"));
+        const relative = path.relative(products, target);
+        if (target !== workspace && target !== data && (relative.startsWith("..") || path.isAbsolute(relative))) return "目录不在 Alpha 工作区内";
         return await electronShell.openPath(target);
       } catch { return "目录不存在"; }
     });

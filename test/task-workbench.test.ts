@@ -227,3 +227,44 @@ test("model endpoints work against an isolated OMP store and never return keys",
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 }, 60_000);
+
+test("storage API preserves current previews and reports local diagnostics", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-storage-api-"));
+  let child: ReturnType<typeof Bun.spawn> | null = null;
+  try {
+    const dataRoot = join(root, ".alpha");
+    const product = join(root, "products", "sample");
+    await mkdir(product, { recursive: true });
+    const ledger = await TaskLedger.create(dataRoot, { objective: "Keep current preview", projectRoot: product, criteria: [{ id: "build", description: "Build", kind: "build" }] });
+    await ledger.refreshRevision();
+    const current = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const stale = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    for (const id of [current, stale]) {
+      const path = join(dataRoot, "previews", id);
+      await mkdir(path, { recursive: true });
+      await writeFile(join(path, "preview.json"), JSON.stringify({ id }));
+    }
+    await ledger.recordPreview({ id: current, revision: ledger.state.revision!, path: join(dataRoot, "previews", current), url: "http://127.0.0.1:5000/" });
+    await writeFile(join(dataRoot, "settings.json"), JSON.stringify({ generation: { comfyUrl: "http://127.0.0.1:1" } }));
+    const env: Record<string, string | undefined> = { ...process.env, ALPHA_WORKSPACE_ROOT: root, ALPHA_OMP_AGENT_DIR: join(root, "omp-agent") };
+    delete env.OMP_AUTH_BROKER_URL;
+    delete env.OMP_AUTH_BROKER_TOKEN;
+    const server = await startServer(root, env);
+    child = server.child;
+    const { base } = server;
+    const before = await fetch(`${base}/api/storage`).then(response => response.json()) as { cleanup: { count: number } };
+    expect(before.cleanup.count).toBe(1);
+    expect((await fetch(`${base}/api/storage/cleanup-previews`, { method: "POST", headers: { origin: "http://evil.example" } })).status).toBe(403);
+    expect(await fetch(`${base}/api/storage/cleanup-previews`, { method: "POST", headers: { origin: base } }).then(response => response.json())).toMatchObject({ removed: 1 });
+    expect((await fetch(`${base}/api/storage`).then(response => response.json()) as { cleanup: { count: number } }).cleanup.count).toBe(0);
+    expect((await readFile(join(dataRoot, "previews", current, "preview.json"), "utf8"))).toContain(current);
+    const diagnostics = await fetch(`${base}/api/diagnostics`).then(response => response.json()) as { checks: Array<{ id: string; ok: boolean }>; versions: { bun: string } };
+    expect(diagnostics.versions.bun).toBeTruthy();
+    expect(diagnostics.checks.find(item => item.id === "workspace")?.ok).toBe(true);
+    expect(diagnostics.checks.find(item => item.id === "comfy")?.ok).toBe(false);
+  } finally {
+    child?.kill();
+    if (child) await child.exited;
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
+}, 60_000);
