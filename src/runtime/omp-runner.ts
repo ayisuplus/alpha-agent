@@ -22,6 +22,8 @@ export interface RunOptions {
   modelSelector?: string;
   onEvent?: (event: { type: "text" | "tool-start" | "tool-end"; value: string; error?: boolean }) => void;
   onLedger?: (ledger: TaskLedger) => void;
+  onSessionReady?: (steer: (text: string) => Promise<void>) => Promise<void> | void;
+  onSessionEnd?: (queuedSteering: readonly string[], completed: boolean) => Promise<void> | void;
   signal?: AbortSignal;
   browser?: VisibleBrowser;
   existingLedger?: TaskLedger;
@@ -158,6 +160,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   if (options.signal?.aborted) onAbort();
   try {
     const prompt = options.existingLedger ? taskPrompt(ledger, options.objective) : options.objective;
+    await options.onSessionReady?.(text => session.steer(text));
     await session.prompt(prompt);
     if (stalledReason) throw new Error(stalledReason);
     if (budgetReason) throw new Error(budgetReason);
@@ -186,6 +189,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     clearTimeout(firstResponseTimer);
     options.signal?.removeEventListener("abort", onAbort);
     unsubscribe();
+    await options.onSessionEnd?.(session.getQueuedMessages().steering, outcome === "returned");
     await ledger.recordRun({ model: selector, toolCalls, compactions, compactionFailures, maxToolCalls, wallTimeMs, elapsedMs: Math.round(performance.now() - started), outcome, failureReason });
     await session.dispose();
   }

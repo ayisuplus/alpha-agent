@@ -47,12 +47,19 @@ export interface RunRecord {
   recordedAt: string;
 }
 
+export interface GuidanceRecord {
+  id?: string;
+  instruction: string;
+  recordedAt: string;
+  status?: "recorded" | "delivered" | "processed";
+}
+
 export interface TaskState {
   id: string;
   objective: string;
   contractVersion?: number;
   contractHistory?: Array<{ version: number; objective: string; revisedAt: string }>;
-  guidanceHistory?: Array<{ instruction: string; recordedAt: string }>;
+  guidanceHistory?: GuidanceRecord[];
   projectRoot: string;
   criteria: AcceptanceCriterion[];
   status: "active" | "stopped" | "complete";
@@ -99,6 +106,7 @@ export async function fingerprintSource(projectRoot: string): Promise<string> {
 }
 
 export class TaskLedger {
+  private saveQueue: Promise<void> = Promise.resolve();
   private constructor(readonly file: string, readonly state: TaskState) {}
 
   static async create(dataRoot: string, input: {
@@ -228,11 +236,21 @@ export class TaskLedger {
     await this.save();
   }
 
-  async recordGuidance(instruction: string): Promise<void> {
-    if (this.state.status !== "active") throw new Error("Only an active task can receive guidance");
+  async recordGuidance(instruction: string): Promise<string> {
+    if (this.state.status === "complete") throw new Error("A completed task cannot receive guidance");
     if (!instruction.trim()) throw new Error("Guidance is required");
     this.state.guidanceHistory ??= [];
-    this.state.guidanceHistory.push({ instruction: instruction.trim(), recordedAt: new Date().toISOString() });
+    const id = randomUUID();
+    this.state.guidanceHistory.push({ id, instruction: instruction.trim(), recordedAt: new Date().toISOString(), status: "recorded" });
+    await this.save();
+    return id;
+  }
+
+  async setGuidanceStatus(id: string, status: "delivered" | "processed"): Promise<void> {
+    const guidance = this.state.guidanceHistory?.find(item => item.id === id);
+    if (!guidance) throw new Error("Guidance not found");
+    if (guidance.status === "processed" || guidance.status === status) return;
+    guidance.status = status;
     await this.save();
   }
 
@@ -267,9 +285,13 @@ export class TaskLedger {
 
   private async save(): Promise<void> {
     this.state.updatedAt = new Date().toISOString();
-    await mkdir(resolve(this.file, ".."), { recursive: true });
-    const temporary = `${this.file}.${randomUUID()}.tmp`;
-    await writeFile(temporary, JSON.stringify(this.state, null, 2));
-    await rename(temporary, this.file);
+    const contents = JSON.stringify(this.state, null, 2);
+    this.saveQueue = this.saveQueue.then(async () => {
+      await mkdir(resolve(this.file, ".."), { recursive: true });
+      const temporary = `${this.file}.${randomUUID()}.tmp`;
+      await writeFile(temporary, contents);
+      await rename(temporary, this.file);
+    });
+    await this.saveQueue;
   }
 }

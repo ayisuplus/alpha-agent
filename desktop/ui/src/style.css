@@ -75,3 +75,24 @@ textarea { resize: vertical; width: 100%; min-height: 72px; border: 1px solid #3
 .log { overflow-y: auto; flex: 1; min-height: 120px; background: #121920; border-radius: 8px; padding: 9px 10px; }
 .log p { margin: 0 0 8px; color: #b9c6d2; font-size: 11px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .log .muted { color: #8593a0; }
+.panel h2 { margin: 0 0 10px; }
+.muted { color: #8593a0; font-size: 11px; line-height: 1.5; }
+.guidance-state { margin: 0; color: #c5d0d9; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.guidance-state span { color: #b4e9c5; font-weight: 700; }
+.review-link { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 5px 2px; color: #cbd5de; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.review-link:hover:not(:disabled) { color: #b7ecc8; background: #24332b; }
+.review-list { list-style: none; padding: 0; margin: 0; }
+.history-run { border-top: 1px solid #34404d; padding: 9px 0; }
+.history-run summary, .review-detail summary { cursor: pointer; color: #d5e1e9; font-size: 11px; line-height: 1.5; }
+.history-events { margin-top: 8px; padding: 8px; background: #121920; border-radius: 8px; max-height: 330px; overflow-y: auto; }
+.history-events p { margin: 0 0 7px; color: #bdcbd5; font-size: 11px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.history-events time { color: #8798a6; margin-right: 7px; }
+.history-events span { color: #a8ebbe; margin-right: 7px; }
+.evidence-detail, .review-detail { border-top: 1px solid #34404d; margin-top: 9px; padding-top: 10px; }
+.evidence-detail p { font-size: 11px; line-height: 1.5; margin: 6px 0; overflow-wrap: anywhere; }
+.evidence-detail .failure-detail { color: #f0b69a; }
+.evidence-detail pre, .source-compare pre { margin: 7px 0; padding: 9px; max-height: 360px; overflow: auto; color: #cbd5de; background: #121920; border-radius: 8px; font-size: 10px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.review-detail details { margin: 8px 0; }
+.source-compare { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin-top: 8px; }
+.source-compare > div { min-width: 0; }
+.source-compare strong { color: #9fbdad; font-size: 10px; }

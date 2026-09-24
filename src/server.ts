@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { ServerWebSocket } from "bun";
-import { cp, mkdir, readdir, unlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, realpath, unlink, writeFile } from "node:fs/promises";
 import { extname, join, resolve, sep } from "node:path";
 import { publishLocalPreview, type PreviewInstance } from "./runtime/local-preview";
 import { runTask } from "./runtime/omp-runner";
 import { TaskLedger, fingerprintSource } from "./runtime/task-ledger";
 import { assertGeneratedAssetsIntact } from "./runtime/media-integrity";
 import { verifyBrowserPlan } from "./runtime/browser-verifier";
+import { TaskActivity, type ActivityKind } from "./runtime/task-activity";
+import { readSourceReviews, snapshotSource, writeSourceReview } from "./runtime/source-review";
 
 const appRoot = resolve(import.meta.dir, "..");
 const workspaceRoot = resolve(process.env.ALPHA_WORKSPACE_ROOT ?? appRoot);
@@ -25,31 +27,100 @@ for (const directory of [dataRoot, productsRoot]) {
 }
 const clients = new Set<ServerWebSocket<unknown>>();
 const previews = new Map<string, PreviewInstance>();
-let active: { runId: string; controller: AbortController; ledger?: TaskLedger } | null = null;
+let active: { runId: string; controller: AbortController; ledger?: TaskLedger; steer?: (text: string) => Promise<void>; steeringIds: Set<string> } | null = null;
 let controlHolder: "alpha" | "user" = "alpha";
 let verification: { taskId: string; controller: AbortController } | null = null;
 let publishing = false;
+const activities = new Map<string, TaskActivity>();
+const operations = new Map<string, string>();
+const contexts = new Map<string, { contractVersion: number; revision: string | null; previewId: string | null }>();
+const textBuffers = new Map<string, string>();
+const textTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function activityFor(taskId: string): TaskActivity {
+  let activity = activities.get(taskId);
+  if (!activity) {
+    activity = new TaskActivity(dataRoot, taskId);
+    activities.set(taskId, activity);
+  }
+  return activity;
+}
+
+function setContext(ledger: TaskLedger): void {
+  contexts.set(ledger.state.id, {
+    contractVersion: ledger.state.contractVersion ?? 1,
+    revision: ledger.state.revision,
+    previewId: ledger.state.preview?.id ?? null,
+  });
+}
+
+function appendActivity(taskId: string, kind: ActivityKind, value: string, operationId?: string): void {
+  const context = contexts.get(taskId);
+  void activityFor(taskId).append({
+    operationId: operationId ?? operations.get(taskId) ?? null,
+    kind, value, contractVersion: context?.contractVersion ?? 1,
+    revision: context?.revision ?? null, previewId: context?.previewId ?? null,
+  }).catch(error => console.error("ALPHA_ACTIVITY_WRITE_FAILED", error));
+}
+
+function flushText(taskId: string): void {
+  const timer = textTimers.get(taskId);
+  if (timer) clearTimeout(timer);
+  textTimers.delete(taskId);
+  const value = textBuffers.get(taskId);
+  textBuffers.delete(taskId);
+  if (value) appendActivity(taskId, "text", value);
+}
 
 async function loadLedger(id: string): Promise<TaskLedger | null> {
   if (!/^[0-9a-f-]{36}$/.test(id)) return null;
   return TaskLedger.load(join(dataRoot, "tasks", `${id}.json`)).catch(() => null);
 }
 
+async function safeEvidencePath(path: string): Promise<string | null> {
+  const root = await realpath(dataRoot);
+  const file = await realpath(path).catch(() => null);
+  return file && file.startsWith(root + sep) ? file : null;
+}
+
+async function evidenceDetail(ledger: TaskLedger, evidenceId: string): Promise<{ content: string; screenshotUrl: string | null } | null> {
+  const item = ledger.state.evidence.find(candidate => candidate.id === evidenceId);
+  if (!item) return null;
+  const file = await safeEvidencePath(item.source);
+  if (!file || ![".json", ".log", ".txt"].includes(extname(file).toLowerCase())) return null;
+  const fullContent = await readFile(file, "utf8");
+  const content = fullContent.slice(0, 1_000_000);
+  let screenshotUrl: string | null = null;
+  if (item.kind === "browser" && extname(file).toLowerCase() === ".json" && fullContent.length <= 1_000_000) {
+    try {
+      const parsed = JSON.parse(fullContent) as { screenshot?: unknown };
+      if (typeof parsed.screenshot === "string" && await safeEvidencePath(parsed.screenshot)) screenshotUrl = `/api/tasks/${ledger.state.id}/evidence/${item.id}/screenshot`;
+    } catch { /* Preserve readable evidence content even if structured detail is damaged. */ }
+  }
+  return { content, screenshotUrl };
+}
+
 function taskView(ledger: TaskLedger) {
   const preview = ledger.state.preview;
   const evidence = ledger.state.evidence.filter(item => (item.contractVersion ?? 1) === (ledger.state.contractVersion ?? 1) && item.revision === ledger.state.revision && (item.kind !== "browser" || item.previewId === preview?.id));
+  const latestEvidence = new Set(ledger.state.criteria.map(criterion => evidence.findLast(item => item.criterionId === criterion.id)?.id));
   return {
     id: ledger.state.id,
     objective: ledger.state.objective,
     contractVersion: ledger.state.contractVersion ?? 1,
     status: ledger.state.status,
+    revision: ledger.state.revision,
     running: active?.ledger?.state.id === ledger.state.id,
+    acceptsGuidance: active?.ledger?.state.id === ledger.state.id && !!active.steer,
     pending: ledger.completionGaps(),
     criteria: ledger.state.criteria,
+    contractHistory: ledger.state.contractHistory ?? [],
+    guidanceHistory: ledger.state.guidanceHistory ?? [],
+    runs: ledger.state.runs ?? [],
     lastFailure: ledger.state.lastFailure ?? null,
     reopenReason: ledger.state.reopenReason ?? null,
     latestRun: ledger.state.runs?.at(-1) ?? null,
-    evidence: evidence.map(item => ({ id: item.id, criterionId: item.criterionId, kind: item.kind, passed: item.passed, source: item.source, recordedAt: item.recordedAt })),
+    evidence: ledger.state.evidence.map(item => ({ id: item.id, criterionId: item.criterionId, kind: item.kind, passed: item.passed, source: item.source, recordedAt: item.recordedAt, contractVersion: item.contractVersion ?? 1, revision: item.revision, previewId: item.previewId ?? null, current: latestEvidence.has(item.id) })),
     screenshotUrl: preview && evidence.some(item => item.kind === "browser") ? `/api/tasks/${ledger.state.id}/screenshot` : null,
     preview: preview ? { ...preview, live: previews.has(preview.id) } : null,
     updatedAt: ledger.state.updatedAt,
@@ -75,6 +146,18 @@ function taskSummary(ledger: TaskLedger) {
 }
 
 function emit(message: unknown): void {
+  const event = message as { type?: string; taskId?: string; runId?: string; value?: string; phase?: string; name?: string; state?: string; message?: string; url?: string; task?: { id: string; contractVersion: number; revision: string | null; preview: { id: string } | null } };
+  if (event.type === "task" && event.task) contexts.set(event.task.id, { contractVersion: event.task.contractVersion, revision: event.task.revision, previewId: event.task.preview?.id ?? null });
+  if (event.taskId) {
+    if (event.type === "text" && event.value) {
+      textBuffers.set(event.taskId, (textBuffers.get(event.taskId) ?? "") + event.value);
+      if (!textTimers.has(event.taskId)) textTimers.set(event.taskId, setTimeout(() => flushText(event.taskId!), 1_000));
+    } else {
+      flushText(event.taskId);
+      const value = event.type === "status" ? event.phase : event.type === "tool" ? `${event.name} · ${event.state}` : event.type === "error" ? event.message : event.type === "guidance" ? event.value : event.type === "preview" ? `本机预览：${event.url}` : undefined;
+      if (value && ["status", "tool", "error", "guidance", "preview"].includes(event.type ?? "")) appendActivity(event.taskId, event.type === "preview" ? "status" : event.type as ActivityKind, value, event.runId);
+    }
+  }
   const data = JSON.stringify(message);
   for (const client of clients) client.send(data);
 }
@@ -129,6 +212,7 @@ async function publishPreview(ledger: TaskLedger, projectRoot: string): Promise<
     previews.get(previousId)?.stop();
     previews.delete(previousId);
   }
+  setContext(ledger);
   emit({ type: "preview", taskId: ledger.state.id, url: instance.record.url, previewId: instance.record.id, pending: ledger.completionGaps() });
   return instance;
 }
@@ -167,9 +251,46 @@ async function controlledVerification(ledger: TaskLedger, signal: AbortSignal): 
   }
 }
 
+async function deliverGuidance(ledger: TaskLedger, id: string, instruction: string, steer: (text: string) => Promise<void>): Promise<void> {
+  if (!active || active.ledger?.state.id !== ledger.state.id || active.steeringIds.has(id)) return;
+  active.steeringIds.add(id);
+  try {
+    await steer(instruction);
+    await ledger.setGuidanceStatus(id, "delivered");
+    appendActivity(ledger.state.id, "guidance", "补充要求已投递到当前模型会话");
+  } finally {
+    active?.steeringIds.delete(id);
+  }
+}
+
+function sessionHooks(runId: string) {
+  return {
+    async onSessionReady(steer: (text: string) => Promise<void>) {
+      if (active?.runId !== runId || !active.ledger) return;
+      active.steer = steer;
+      emit({ type: "task", taskId: active.ledger.state.id, task: taskView(active.ledger) });
+      for (const item of active.ledger.state.guidanceHistory ?? []) {
+        if (item.id && item.status === "recorded") await active.ledger.setGuidanceStatus(item.id, "delivered");
+      }
+    },
+    async onSessionEnd(queued: readonly string[], completed: boolean) {
+      if (active?.runId !== runId || !active.ledger) return;
+      active.steer = undefined;
+      if (completed) {
+        for (const item of active.ledger.state.guidanceHistory ?? []) {
+          if (item.id && item.status === "delivered" && !queued.includes(item.instruction)) await active.ledger.setGuidanceStatus(item.id, "processed");
+        }
+      }
+      emit({ type: "task", taskId: active.ledger.state.id, task: taskView(active.ledger) });
+    },
+  };
+}
+
 async function execute(runId: string, objective: string, projectRoot: string, controller: AbortController, existingLedger?: TaskLedger): Promise<void> {
+  let beforeSource: Awaited<ReturnType<typeof snapshotSource>> | null = null;
   const emitRun = (message: Record<string, unknown>) => emit({ ...message, taskId: active?.runId === runId ? active.ledger?.state.id : existingLedger?.state.id });
   try {
+    beforeSource = await snapshotSource(projectRoot);
     emitRun({ type: "status", phase: "构建中", runId });
     const forwardEvent = (event: { type: "text" | "tool-start" | "tool-end"; value: string; error?: boolean }) => {
       if (event.type === "text") emitRun({ type: "text", value: event.value });
@@ -180,8 +301,12 @@ async function execute(runId: string, objective: string, projectRoot: string, co
       onEvent: forwardEvent,
       onLedger(created) {
         if (active?.runId === runId) active.ledger = created;
+        setContext(created);
+        operations.set(created.state.id, runId);
+        if (!existingLedger) appendActivity(created.state.id, "status", "任务已创建", runId);
         emitRun({ type: "task", task: taskView(created) });
       },
+      ...sessionHooks(runId),
     });
     if (active?.runId === runId) active.ledger = ledger;
     emitRun({ type: "task", task: taskView(ledger) });
@@ -223,6 +348,8 @@ async function execute(runId: string, objective: string, projectRoot: string, co
             projectRoot, dataRoot, signal: controller.signal, existingLedger: current,
             objective: `Visible browser acceptance failed: ${reason}. Read the failure evidence and inspect the exact failing step. Decide whether the product or the verification plan is wrong; preserve the original requirements and do not change product code to fix an invalid test selector. Then rebuild.`,
             onEvent: forwardEvent,
+            onLedger(created) { if (active?.runId === runId) active.ledger = created; setContext(created); },
+            ...sessionHooks(runId),
           });
           if (controller.signal.aborted || repaired.state.revision === failedRevision) break;
           emitRun({ type: "status", phase: "验证构建", runId });
@@ -243,6 +370,13 @@ async function execute(runId: string, objective: string, projectRoot: string, co
     emitRun({ type: "error", message: error instanceof Error ? error.message : String(error) });
     emitRun({ type: "status", phase: controller.signal.aborted ? "已停止" : "失败", runId });
   } finally {
+    const ledger = active?.runId === runId ? active.ledger : existingLedger;
+    if (beforeSource && ledger) {
+      try {
+        await writeSourceReview(dataRoot, { taskId: ledger.state.id, operationId: runId, contractVersion: ledger.state.contractVersion ?? 1, revision: ledger.state.revision, before: beforeSource, after: await snapshotSource(projectRoot) });
+      } catch (error) { console.error("ALPHA_SOURCE_REVIEW_FAILED", error); }
+    }
+    if (ledger) { flushText(ledger.state.id); operations.delete(ledger.state.id); }
     if (controller.signal.aborted && active?.runId === runId && active.ledger) {
       const current = await TaskLedger.load(active.ledger.file).catch(() => null);
       if (current?.state.status === "active") await current.stop();
@@ -275,6 +409,44 @@ const server = Bun.serve({
       const ledger = await loadLedger(getTask[1]);
       return ledger ? Response.json({ task: taskView(ledger) }) : Response.json({ error: "Task not found" }, { status: 404 });
     }
+    const activity = /^\/api\/tasks\/([0-9a-f-]{36})\/activity$/.exec(url.pathname);
+    if (activity && request.method === "GET") {
+      const ledger = await loadLedger(activity[1]);
+      if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+      flushText(ledger.state.id);
+      return Response.json({ entries: await activityFor(ledger.state.id).read() });
+    }
+    const reviews = /^\/api\/tasks\/([0-9a-f-]{36})\/reviews$/.exec(url.pathname);
+    if (reviews && request.method === "GET") {
+      const ledger = await loadLedger(reviews[1]);
+      if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+      return Response.json({ reviews: (await readSourceReviews(dataRoot, ledger.state.id)).map(item => ({ operationId: item.operationId, contractVersion: item.contractVersion, revision: item.revision, recordedAt: item.recordedAt, paths: item.changes.map(change => change.path) })) });
+    }
+    const review = /^\/api\/tasks\/([0-9a-f-]{36})\/reviews\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (review && request.method === "GET") {
+      const ledger = await loadLedger(review[1]);
+      if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+      const selected = (await readSourceReviews(dataRoot, ledger.state.id)).find(item => item.operationId === review[2]);
+      return selected ? Response.json({ review: selected }) : Response.json({ error: "Review not found" }, { status: 404 });
+    }
+    const evidence = /^\/api\/tasks\/([0-9a-f-]{36})\/evidence\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (evidence && request.method === "GET") {
+      const ledger = await loadLedger(evidence[1]);
+      if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+      const detail = await evidenceDetail(ledger, evidence[2]);
+      return detail ? Response.json(detail) : Response.json({ error: "Evidence unavailable" }, { status: 404 });
+    }
+    const evidenceImage = /^\/api\/tasks\/([0-9a-f-]{36})\/evidence\/([0-9a-f-]{36})\/screenshot$/.exec(url.pathname);
+    if (evidenceImage && request.method === "GET") {
+      const ledger = await loadLedger(evidenceImage[1]);
+      const item = ledger?.state.evidence.find(candidate => candidate.id === evidenceImage[2] && candidate.kind === "browser");
+      if (!item) return new Response("Not found", { status: 404 });
+      const file = await safeEvidencePath(item.source);
+      if (!file || extname(file).toLowerCase() !== ".json") return new Response("Not found", { status: 404 });
+      const detail = JSON.parse(await readFile(file, "utf8")) as { screenshot?: unknown };
+      const screenshot = typeof detail.screenshot === "string" ? await safeEvidencePath(detail.screenshot) : null;
+      return screenshot && extname(screenshot).toLowerCase() === ".png" ? new Response(Bun.file(screenshot), { headers: { "content-type": "image/png" } }) : new Response("Not found", { status: 404 });
+    }
     const screenshot = /^\/api\/tasks\/([0-9a-f-]{36})\/screenshot$/.exec(url.pathname);
     if (screenshot && request.method === "GET") {
       const ledger = await loadLedger(screenshot[1]);
@@ -296,7 +468,7 @@ const server = Bun.serve({
       await mkdir(productsRoot, { recursive: true });
       await cp(join(appRoot, "templates", "web-minimal"), projectRoot, { recursive: true });
       const controller = new AbortController();
-      active = { runId, controller };
+      active = { runId, controller, steeringIds: new Set() };
       void execute(runId, brief, projectRoot, controller);
       return Response.json({ runId, projectRoot });
     }
@@ -313,6 +485,26 @@ const server = Bun.serve({
       if (controlHolder === "user") verification?.controller.abort(new Error("User took over the browser"));
       emit({ type: "control", holder: controlHolder });
       return Response.json({ holder: controlHolder });
+    }
+    const guidance = /^\/api\/tasks\/([0-9a-f-]{36})\/guidance$/.exec(url.pathname);
+    if (guidance && request.method === "POST") {
+      const live = active?.ledger?.state.id === guidance[1] && !!active.steer;
+      if ((active || verification || publishing) && !live) return Response.json({ error: "Wait for the current operation to finish before saving guidance" }, { status: 409 });
+      const body = await request.json().catch(() => ({})) as { text?: unknown };
+      const instruction = typeof body.text === "string" ? body.text.trim() : "";
+      if (!instruction) return Response.json({ error: "Guidance is required" }, { status: 400 });
+      const ledger = live ? active!.ledger! : await loadLedger(guidance[1]);
+      if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+      if (ledger.state.status === "complete") return Response.json({ error: "Revise a completed task before adding guidance" }, { status: 409 });
+      setContext(ledger);
+      const id = await ledger.recordGuidance(instruction);
+      appendActivity(ledger.state.id, "guidance", `补充要求已记录：${instruction}`);
+      if (live) {
+        try { await deliverGuidance(ledger, id, instruction, active!.steer!); }
+        catch (error) { console.error("ALPHA_GUIDANCE_DELIVERY_FAILED", error); }
+      }
+      emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+      return Response.json({ id, status: ledger.state.guidanceHistory?.find(item => item.id === id)?.status });
     }
     const revise = /^\/api\/tasks\/([0-9a-f-]{36})\/revise$/.exec(url.pathname);
     if (revise && request.method === "POST") {
@@ -331,10 +523,14 @@ const server = Bun.serve({
         previews.delete(previousPreviewId);
       }
       const controller = new AbortController();
-      active = { runId: ledger.state.id, controller, ledger };
+      const runId = randomUUID();
+      active = { runId, controller, ledger, steeringIds: new Set() };
+      setContext(ledger);
+      operations.set(ledger.state.id, runId);
+      appendActivity(ledger.state.id, "status", `目标修订至 v${ledger.state.contractVersion}`, runId);
       emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
-      void execute(ledger.state.id, brief, projectRoot, controller, ledger);
-      return Response.json({ runId: ledger.state.id, taskId: ledger.state.id, contractVersion: ledger.state.contractVersion });
+      void execute(runId, brief, projectRoot, controller, ledger);
+      return Response.json({ runId, taskId: ledger.state.id, contractVersion: ledger.state.contractVersion });
     }
     const resume = /^\/api\/tasks\/([0-9a-f-]{36})\/resume$/.exec(url.pathname);
     if (resume && request.method === "POST") {
@@ -349,9 +545,12 @@ const server = Bun.serve({
       if (ledger.state.status === "stopped") await ledger.resume(correction);
       else await ledger.recordGuidance(correction);
       const controller = new AbortController();
-      active = { runId: ledger.state.id, controller, ledger };
-      void execute(ledger.state.id, correction, projectRoot, controller, ledger);
-      return Response.json({ runId: ledger.state.id, taskId: ledger.state.id });
+      const runId = randomUUID();
+      active = { runId, controller, ledger, steeringIds: new Set() };
+      setContext(ledger);
+      operations.set(ledger.state.id, runId);
+      void execute(runId, correction, projectRoot, controller, ledger);
+      return Response.json({ runId, taskId: ledger.state.id });
     }
     const publish = /^\/api\/tasks\/([0-9a-f-]{36})\/publish$/.exec(url.pathname);
     if (publish && request.method === "POST") {
@@ -360,6 +559,9 @@ const server = Bun.serve({
       try {
       const ledger = await loadLedger(publish[1]);
       if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+      setContext(ledger);
+      const publishRunId = randomUUID();
+      operations.set(ledger.state.id, publishRunId);
       if (ledger.state.status === "stopped") return Response.json({ error: "Task is stopped" }, { status: 409 });
       const projectRoot = resolve(ledger.state.projectRoot);
       if (!projectRoot.startsWith(productsRoot + sep)) return Response.json({ error: "Task is outside products" }, { status: 403 });
@@ -372,29 +574,30 @@ const server = Bun.serve({
       const controller = new AbortController();
       if (!(await build(projectRoot, ledger, controller.signal))) return Response.json({ error: "Build failed" }, { status: 422 });
       const instance = await publishPreview(ledger, projectRoot);
-      emit({ type: "status", taskId: ledger.state.id, phase: "待验收", runId: ledger.state.id, pending: ledger.completionGaps() });
+      emit({ type: "status", taskId: ledger.state.id, phase: "待验收", runId: publishRunId, pending: ledger.completionGaps() });
       emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
       {
-        emit({ type: "status", taskId: ledger.state.id, phase: "浏览器验收", runId: ledger.state.id, pending: ledger.completionGaps() });
+        emit({ type: "status", taskId: ledger.state.id, phase: "浏览器验收", runId: publishRunId, pending: ledger.completionGaps() });
         try {
           await controlledVerification(ledger, controller.signal);
           const verified = await TaskLedger.load(ledger.file);
           emit({ type: "task", taskId: ledger.state.id, task: taskView(verified) });
           emit({ type: "tool", taskId: ledger.state.id, name: "browser", state: "通过" });
-          emit({ type: "status", taskId: ledger.state.id, phase: "已验收", runId: ledger.state.id, pending: verified.completionGaps() });
+          emit({ type: "status", taskId: ledger.state.id, phase: "已验收", runId: publishRunId, pending: verified.completionGaps() });
         } catch (error) {
           const current = await TaskLedger.load(ledger.file);
           if (controlHolder === "user") {
-            emit({ type: "status", taskId: ledger.state.id, phase: "用户接管", runId: ledger.state.id, pending: current.completionGaps() });
+            emit({ type: "status", taskId: ledger.state.id, phase: "用户接管", runId: publishRunId, pending: current.completionGaps() });
             return Response.json(instance.record);
           }
           if (current.state.status === "active") await current.recordFailure(error instanceof Error ? error.message : String(error));
           emit({ type: "error", taskId: ledger.state.id, message: `浏览器验收未通过：${error instanceof Error ? error.message : String(error)}` });
-          emit({ type: "status", taskId: ledger.state.id, phase: "待验收", runId: ledger.state.id, pending: current.completionGaps() });
+          emit({ type: "status", taskId: ledger.state.id, phase: "待验收", runId: publishRunId, pending: current.completionGaps() });
         }
       }
       return Response.json(instance.record);
       } finally {
+        operations.delete(publish[1]);
         publishing = false;
       }
     }
@@ -404,23 +607,28 @@ const server = Bun.serve({
       const ledger = await loadLedger(verify[1]);
       if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
       if (ledger.state.status !== "active" || !ledger.state.preview || !previews.has(ledger.state.preview.id)) return Response.json({ error: "A live active preview is required" }, { status: 409 });
+      setContext(ledger);
+      const verifyRunId = randomUUID();
+      operations.set(ledger.state.id, verifyRunId);
       try {
-        emit({ type: "status", taskId: ledger.state.id, phase: "浏览器验收", runId: ledger.state.id, pending: ledger.completionGaps() });
+        emit({ type: "status", taskId: ledger.state.id, phase: "浏览器验收", runId: verifyRunId, pending: ledger.completionGaps() });
         await controlledVerification(ledger, new AbortController().signal);
         const verified = await TaskLedger.load(ledger.file);
         emit({ type: "task", taskId: ledger.state.id, task: taskView(verified) });
         emit({ type: "tool", taskId: ledger.state.id, name: "browser", state: "通过" });
-        emit({ type: "status", taskId: ledger.state.id, phase: "已验收", runId: ledger.state.id, pending: verified.completionGaps() });
+        emit({ type: "status", taskId: ledger.state.id, phase: "已验收", runId: verifyRunId, pending: verified.completionGaps() });
         return Response.json({ task: taskView(verified) });
       } catch (error) {
         const current = await TaskLedger.load(ledger.file);
         if (controlHolder === "user") {
-          emit({ type: "status", taskId: ledger.state.id, phase: "用户接管", runId: ledger.state.id, pending: current.completionGaps() });
+          emit({ type: "status", taskId: ledger.state.id, phase: "用户接管", runId: verifyRunId, pending: current.completionGaps() });
           return Response.json({ paused: true, task: taskView(current) }, { status: 202 });
         }
         if (current.state.status === "active") await current.recordFailure(error instanceof Error ? error.message : String(error));
-        emit({ type: "status", taskId: ledger.state.id, phase: "待验收", runId: ledger.state.id, pending: current.completionGaps() });
+        emit({ type: "status", taskId: ledger.state.id, phase: "待验收", runId: verifyRunId, pending: current.completionGaps() });
         return Response.json({ error: error instanceof Error ? error.message : String(error), task: taskView(current) }, { status: 422 });
+      } finally {
+        operations.delete(ledger.state.id);
       }
     }
     return new Response("Not found", { status: 404 });
