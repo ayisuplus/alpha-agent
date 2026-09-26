@@ -101,6 +101,18 @@ async function status(root: string, scopes: string[]): Promise<string[]> {
   return [...new Set(paths)].sort();
 }
 
+async function indexEntries(root: string, scopes: string[]): Promise<Map<string, string>> {
+  const output = await git(root, ["ls-files", "-s", "-z", "--", ...scopes]);
+  const entries = new Map<string, string>();
+  for (const entry of output.split("\0").filter(Boolean)) {
+    const tab = entry.indexOf("\t");
+    const path = entry.slice(tab + 1);
+    const metadata = entry.slice(0, tab);
+    entries.set(path, entries.has(path) ? `${entries.get(path)}\n${metadata}` : metadata);
+  }
+  return entries;
+}
+
 async function fileHash(root: string, path: string): Promise<string | null> {
   const full = resolve(root, path);
   if (!inside(root, full)) throw new Error(`Git path leaves project: ${path}`);
@@ -156,9 +168,11 @@ export async function prepareProjectTurn(input: { dataRoot: string; projectRoot:
   for (const repo of repos.values()) {
     repo.head = await git(repo.root, ["rev-parse", "HEAD"]);
     repo.dirty = await status(repo.root, repo.scopes);
-    for (const path of repo.dirty.filter(safe)) {
+    const dirty = repo.dirty.filter(safe);
+    const index = dirty.length ? await indexEntries(repo.root, repo.scopes) : new Map<string, string>();
+    for (const path of dirty) {
       repo.hashes[path] = await fileHash(repo.root, path);
-      repo.index[path] = await git(repo.root, ["ls-files", "-s", "--", path]);
+      repo.index[path] = index.get(path) ?? "";
     }
   }
   const turn: ProjectTurn = { runId: input.runId, taskId: input.ledger?.state.id, key: identity(input.ledger, projectRoot), dataRoot, projectRoot, repos: [...repos.values()], codeCommits: [], status: "prepared" };
@@ -192,8 +206,12 @@ async function commitCode(turn: ProjectTurn, repo: RepoTurn, allowCodeChanges: b
   const prior = turn.codeCommits.find(item => item.root === repo.root)?.commit ?? await matchingCommit(repo.root, turn.runId);
   if (prior) return prior;
   if (await git(repo.root, ["rev-parse", "HEAD"]) !== repo.head) throw new Error(`Git HEAD changed during this turn: ${repo.root}`);
-  for (const path of repo.dirty.filter(safe)) {
-    if (await fileHash(repo.root, path) !== repo.hashes[path] || await git(repo.root, ["ls-files", "-s", "--", path]) !== repo.index[path]) {
+  const dirty = repo.dirty.filter(safe);
+  const index = dirty.length ? await indexEntries(repo.root, repo.scopes) : new Map<string, string>();
+  for (const path of dirty) {
+    // Older journals include Git's quoted path after each stage entry; identity is already the map key.
+    const before = (repo.index[path] ?? "").split("\n").map(entry => entry.split("\t", 1)[0]).join("\n");
+    if (await fileHash(repo.root, path) !== repo.hashes[path] || (index.get(path) ?? "") !== before) {
       throw new Error(`Cannot separate Alpha edits from pre-existing changes: ${path}`);
     }
   }
@@ -318,5 +336,5 @@ export async function recoverProjectTurn(turn: ProjectTurn, ledger: TaskLedger):
     turn.status = "code-committed";
     await writeJournal(turn);
   }
-  return finalizeProjectTurn(turn, ledger);
+  return finalizeProjectTurn(turn, ledger, false);
 }

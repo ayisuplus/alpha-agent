@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import puppeteer from "puppeteer-core";
 import { TaskLedger } from "../src/runtime/task-ledger";
+import { AgentMailbox, createWorkerMailboxTools } from "../src/runtime/agent-mailbox";
+import type { WorkOrder } from "../src/runtime/work-orders";
 import { verifyGeneralDeliverable } from "../src/runtime/general-work";
 import { discoverBrowserWebSocket } from "../src/runtime/visible-browser";
 
@@ -18,6 +20,16 @@ await mkdir(productsRoot, { recursive: true });
 const waitingRoot = join(productsRoot, "waiting");
 await mkdir(waitingRoot);
 const waiting = await TaskLedger.create(dataRoot, { objective: "等待用户回答", projectRoot: waitingRoot, taskType: "general", criteria: [] });
+const agentId = crypto.randomUUID();
+const attemptId = crypto.randomUUID();
+const order: WorkOrder = { id: "inspect", objective: "检查中断现场", acceptance: ["保留可审阅的中断信息"], mode: "investigate", ownedPaths: [], readPaths: ["."], resources: [], agentId, instanceId: attemptId, fullAccess: true };
+await waiting.queueWorker({ id: attemptId, order });
+await waiting.updateWorker(attemptId, "failed");
+const [send] = createWorkerMailboxTools(join(dataRoot, "worker-agents", waiting.state.id, agentId, "state"), waiting.state.id, order);
+const sent = await send.execute("probe-message", { kind: "information", body: "中断现场已保留" }, undefined, undefined as never);
+if (sent.isError) throw new Error("Cannot create neutral-agent message fixture");
+await new AgentMailbox(dataRoot, waiting).collect();
+await waiting.recordCheckpointFailure("项目状态恢复待审阅：保留现有改动");
 await waiting.needInput("请补充目标", "context");
 
 const planRoot = join(productsRoot, "plan");
@@ -105,6 +117,14 @@ try {
   await shell.keyboard.down("Control"); await shell.keyboard.press("Enter"); await shell.keyboard.up("Control");
   const waitingState = await shell.evaluate(() => ({ disabled: (document.querySelector('.composer-bar .btn-primary') as HTMLButtonElement)?.disabled, value: (document.querySelector('[data-testid="composer-input"]') as HTMLTextAreaElement)?.value }));
   if (!waitingState.disabled || waitingState.value) throw new Error(`Blank shortcut bypassed submit guard: ${JSON.stringify(waitingState)}`);
+  await shell.click('[aria-label="任务详情"]');
+  await shell.waitForSelector(".task-info-view");
+  await shell.evaluate(() => document.querySelectorAll<HTMLDetailsElement>(".task-info-view .cognition-panel").forEach(panel => { panel.open = true; }));
+  await shell.waitForFunction(() => document.body.innerText.includes("通用执行") && document.body.innerText.includes("中断现场已保留") && document.body.innerText.includes("项目状态恢复待审阅：保留现有改动"));
+  await shell.screenshot({ path: join(output, "neutral-agent-recovery.png") });
+  await shell.reload();
+  await shell.waitForSelector('.composer[data-mode="resume"] [data-testid="composer-input"]');
+  await expandSidebar();
 
   await shell.click(taskRow(result.state.objective));
   console.log("probe: result row");

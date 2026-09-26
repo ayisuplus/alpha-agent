@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -256,6 +256,61 @@ test("a read-only turn does not claim an unrelated filesystem edit", async () =>
     await writeFile(join(work, "file.txt"), "external edit\n");
     await expect(finalizeProjectTurn(turn, ledger, false)).rejects.toThrow("no writing tool");
     expect(await git(work, "show", "HEAD:file.txt")).toBe("old");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("recovery batches index reads for large dirty projects and accepts legacy snapshots", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-project-recovery-index-"));
+  const spawn = spyOn(Bun, "spawn");
+  try {
+    const work = join(root, "work");
+    const data = join(root, ".alpha");
+    const staged = "修改 状态.txt";
+    await mkdir(work);
+    await writeFile(join(work, staged), "base\n");
+    const ledger = await TaskLedger.create(data, { objective: "Recover existing changes", projectRoot: work, criteria: [], taskType: "general" });
+    await finalizeProjectTurn(await prepareProjectTurn({ dataRoot: data, projectRoot: work, ledger, runId: crypto.randomUUID() }), ledger);
+    const head = await git(work, "rev-parse", "HEAD");
+    await writeFile(join(work, staged), "staged by user\n");
+    await git(work, "add", "--", staged);
+    const legacy = await git(work, "ls-files", "-s", "--", staged);
+    await Promise.all(Array.from({ length: 128 }, (_, i) => writeFile(join(work, `existing-${i}.txt`), "user changes\n")));
+    spawn.mockClear();
+    const turn = await prepareProjectTurn({ dataRoot: data, projectRoot: work, ledger, runId: crypto.randomUUID() });
+    turn.repos[0]!.index[staged] = legacy;
+    await writeFile(join(data, "project-turns", `${turn.runId}.json`), JSON.stringify(turn));
+    const finished = await recoverProjectTurn(turn, ledger);
+    expect(finished.status).toBe("finished");
+    expect(finished.codeCommits).toHaveLength(0);
+    const indexReads = spawn.mock.calls.filter(([command]) => Array.isArray(command) && command.includes("ls-files") && command.includes("-s"));
+    expect(indexReads.length).toBeLessThanOrEqual(2);
+    expect(await git(work, "rev-parse", "HEAD")).toBe(head);
+    expect(await git(work, "ls-files", "-s", "--", staged)).toBe(legacy);
+    expect(await readFile(join(work, "existing-127.txt"), "utf8")).toBe("user changes\n");
+  } finally {
+    spawn.mockRestore();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 20_000);
+
+test.each(["prepared", "code-committed"] as const)("recovery never commits new changes from a %s journal", async status => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-project-recovery-uncommitted-"));
+  try {
+    const work = join(root, "work");
+    const data = join(root, ".alpha");
+    await mkdir(work);
+    await writeFile(join(work, "app.txt"), "base\n");
+    const ledger = await TaskLedger.create(data, { objective: "Recover without claiming edits", projectRoot: work, criteria: [], taskType: "general" });
+    const turn = await prepareProjectTurn({ dataRoot: data, projectRoot: work, ledger, runId: crypto.randomUUID() });
+    turn.status = status;
+    await writeFile(join(data, "project-turns", `${turn.runId}.json`), JSON.stringify(turn));
+    const head = await git(work, "rev-parse", "HEAD");
+    await writeFile(join(work, "app.txt"), "external change after interruption\n");
+    await expect(recoverProjectTurn(turn, ledger)).rejects.toThrow(/Uncommitted project changes|no writing tool/);
+    expect(await git(work, "rev-parse", "HEAD")).toBe(head);
+    expect(await git(work, "diff", "--cached", "--name-only")).toBe("");
+    expect(await readFile(join(work, "app.txt"), "utf8")).toBe("external change after interruption\n");
+    expect(ledger.state.checkpointStatus).toBe("pending");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
