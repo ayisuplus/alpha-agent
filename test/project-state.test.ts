@@ -140,6 +140,62 @@ test("restart recognizes a code commit made before its journal update", async ()
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test.each(["journaled", "not journaled"] as const)("recovery rejects edits after a %s code commit", async mode => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-project-postcommit-"));
+  try {
+    const work = join(root, "work");
+    const data = join(root, ".alpha");
+    await mkdir(work);
+    await writeFile(join(work, "app.txt"), "old\n");
+    const ledger = await TaskLedger.create(data, { objective: "Recover committed work", projectRoot: work, criteria: [], taskType: "general" });
+    const turn = await prepareProjectTurn({ dataRoot: data, projectRoot: work, ledger, runId: crypto.randomUUID() });
+    await writeFile(join(work, "app.txt"), "committed\n");
+    await git(work, "add", "app.txt");
+    await git(work, "-c", "user.name=Alpha Agent", "-c", "user.email=alpha@local.invalid", "commit", "-m", `alpha checkpoint\n\nAlpha-Run-Id: ${turn.runId}`);
+    const head = await git(work, "rev-parse", "HEAD");
+    if (mode === "journaled") {
+      turn.codeCommits.push({ root: work, commit: head });
+      turn.status = "code-committed";
+      await writeFile(join(data, "project-turns", `${turn.runId}.json`), JSON.stringify(turn));
+    }
+    await writeFile(join(work, "app.txt"), "later edit\n");
+    await expect(recoverProjectTurn(turn, ledger)).rejects.toThrow("Uncommitted project changes");
+    expect(await git(work, "rev-parse", "HEAD")).toBe(head);
+    expect(await readFile(join(work, "app.txt"), "utf8")).toBe("later edit\n");
+    expect(ledger.state.checkpointStatus).toBe("pending");
+    expect(await readProjectMemory(data, work, ledger)).toBe("");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test.each(["new head", "changed user file"] as const)("recovery rejects a %s after the code commit", async change => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-project-recovery-drift-"));
+  try {
+    const work = join(root, "work");
+    const data = join(root, ".alpha");
+    await mkdir(work);
+    await writeFile(join(work, "app.txt"), "old\n");
+    await writeFile(join(work, "user.txt"), "base\n");
+    const ledger = await TaskLedger.create(data, { objective: "Recover after commit", projectRoot: work, criteria: [], taskType: "general" });
+    await finalizeProjectTurn(await prepareProjectTurn({ dataRoot: data, projectRoot: work, ledger, runId: crypto.randomUUID() }), ledger);
+    await writeFile(join(work, "user.txt"), "user's prior edit\n");
+    const turn = await prepareProjectTurn({ dataRoot: data, projectRoot: work, ledger, runId: crypto.randomUUID() });
+    await writeFile(join(work, "app.txt"), "alpha edit\n");
+    await git(work, "add", "app.txt");
+    await git(work, "-c", "user.name=Alpha Agent", "-c", "user.email=alpha@local.invalid", "commit", "-m", `alpha checkpoint\n\nAlpha-Run-Id: ${turn.runId}`);
+    const checkpoint = await git(work, "rev-parse", "HEAD");
+    turn.codeCommits.push({ root: work, commit: checkpoint });
+    turn.status = "code-committed";
+    await writeFile(join(data, "project-turns", `${turn.runId}.json`), JSON.stringify(turn));
+    if (change === "new head") {
+      await writeFile(join(work, "later.txt"), "later commit\n");
+      await git(work, "add", "later.txt");
+      await git(work, "-c", "user.name=Other", "-c", "user.email=other@local.invalid", "commit", "-m", "later commit");
+    } else await writeFile(join(work, "user.txt"), "changed after checkpoint\n");
+    await expect(recoverProjectTurn(turn, ledger)).rejects.toThrow(change === "new head" ? "Git HEAD changed" : "pre-existing changes");
+    expect(ledger.state.checkpointStatus).toBe("pending");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("memory refuses to drop an oversized user requirement", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-project-limit-"));
   try {

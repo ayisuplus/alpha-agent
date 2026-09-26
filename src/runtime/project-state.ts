@@ -202,10 +202,7 @@ async function matchingCommit(root: string, runId: string): Promise<string> {
   return git(root, ["log", "HEAD", "-n", "1", `--grep=Alpha-Run-Id: ${runId}`, "--format=%H"], false);
 }
 
-async function commitCode(turn: ProjectTurn, repo: RepoTurn, allowCodeChanges: boolean): Promise<string | null> {
-  const prior = turn.codeCommits.find(item => item.root === repo.root)?.commit ?? await matchingCommit(repo.root, turn.runId);
-  if (prior) return prior;
-  if (await git(repo.root, ["rev-parse", "HEAD"]) !== repo.head) throw new Error(`Git HEAD changed during this turn: ${repo.root}`);
+async function assertOriginalChangesUnchanged(repo: RepoTurn): Promise<void> {
   const dirty = repo.dirty.filter(safe);
   const index = dirty.length ? await indexEntries(repo.root, repo.scopes) : new Map<string, string>();
   for (const path of dirty) {
@@ -215,6 +212,13 @@ async function commitCode(turn: ProjectTurn, repo: RepoTurn, allowCodeChanges: b
       throw new Error(`Cannot separate Alpha edits from pre-existing changes: ${path}`);
     }
   }
+}
+
+async function commitCode(turn: ProjectTurn, repo: RepoTurn, allowCodeChanges: boolean): Promise<string | null> {
+  const prior = turn.codeCommits.find(item => item.root === repo.root)?.commit ?? await matchingCommit(repo.root, turn.runId);
+  if (prior) return prior;
+  if (await git(repo.root, ["rev-parse", "HEAD"]) !== repo.head) throw new Error(`Git HEAD changed during this turn: ${repo.root}`);
+  await assertOriginalChangesUnchanged(repo);
   const changed = await status(repo.root, repo.scopes);
   const start = new Set(repo.dirty);
   const owned: string[] = [];
@@ -324,15 +328,21 @@ export async function unfinishedProjectTurns(dataRoot: string): Promise<ProjectT
 
 /** Resume only changes already committed before the crash; never guess ownership after restart. */
 export async function recoverProjectTurn(turn: ProjectTurn, ledger: TaskLedger): Promise<ProjectTurn> {
-  if (turn.status === "prepared") {
-    for (const repo of turn.repos) {
-      if (turn.codeCommits.some(item => item.root === repo.root)) continue;
-      const commit = await matchingCommit(repo.root, turn.runId);
-      if (commit) turn.codeCommits.push({ root: repo.root, commit });
-      else if ((await status(repo.root, repo.scopes)).some(path => safe(path) && !repo.dirty.includes(path))) {
+  for (const repo of turn.repos) {
+    const recorded = turn.codeCommits.find(item => item.root === repo.root);
+    const commit = recorded?.commit ?? await matchingCommit(repo.root, turn.runId);
+    if (commit) {
+      if (await git(repo.root, ["rev-parse", "HEAD"]) !== commit) throw new Error(`Git HEAD changed after this turn's commit: ${repo.root}`);
+      await assertOriginalChangesUnchanged(repo);
+      if ((await status(repo.root, repo.scopes)).some(path => safe(path) && !repo.dirty.includes(path))) {
         throw new Error("Uncommitted project changes remain after interruption; review them before another run");
       }
+      if (!recorded) turn.codeCommits.push({ root: repo.root, commit });
+    } else if (turn.status === "prepared" && (await status(repo.root, repo.scopes)).some(path => safe(path) && !repo.dirty.includes(path))) {
+      throw new Error("Uncommitted project changes remain after interruption; review them before another run");
     }
+  }
+  if (turn.status === "prepared") {
     turn.status = "code-committed";
     await writeJournal(turn);
   }
