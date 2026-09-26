@@ -232,7 +232,7 @@ function startSidecar() {
     sidecar = spawn(executable, ["run", "src/server.ts"], { cwd: root, env: { ...process.env, ALPHA_ELECTRON_VERSION: process.versions.electron, ALPHA_BROWSER_BRIDGE_PORT: String(bridgePort), ALPHA_BROWSER_BRIDGE_TOKEN: bridgeToken }, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let buffer = "";
     let errorTail = "";
-    const timeout = setTimeout(() => { sidecar.kill(); reject(new Error(`Alpha sidecar did not start\n${errorTail}`)); }, 20_000);
+    const timeout = setTimeout(() => { sidecar.kill(); reject(new Error(`Alpha sidecar did not start\n${errorTail}`)); }, 60_000);
     sidecar.stdout.on("data", chunk => {
       buffer += chunk.toString();
       for (;;) {
