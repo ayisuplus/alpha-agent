@@ -7,14 +7,14 @@ const context = { projectRoot: "C:/alpha-product", dataRoot: "C:/alpha-data" };
 
 test("ComfyUI is one built-in plugin with an independently switchable tool set", () => {
   expect(comfyPlugin).toMatchObject({ id: "comfyui", source: "builtin" });
-  expect(builtinPlugins.map(plugin => plugin.id)).toEqual(["comfyui"]);
+  expect(builtinPlugins.map(plugin => plugin.id)).toEqual(["comfyui", "office"]);
   const enabled = createComfyPlugin(context);
   expect(enabled.tools.map(tool => tool.name)).toEqual(["alpha_comfy_status", "alpha_generate_image", "alpha_generate_voice", "alpha_generate_video"]);
   expect(enabled.instructions.join("\n")).toContain("alpha_generate_image");
 
   const disabled = createComfyPlugin({ ...context, enabled: false });
   expect(disabled).toEqual({ tools: [], instructions: [] });
-  expect(loadBuiltinPlugins({ ...context, enabled: { comfyui: false } })).toEqual(disabled);
+  expect(loadBuiltinPlugins({ ...context, enabled: { comfyui: false, office: false } })).toEqual(disabled);
 
   const imageOff = createComfyPlugin({ ...context, generation: { image: false, voice: true, video: true } });
   expect(imageOff.tools.map(tool => tool.name)).toEqual(["alpha_comfy_status", "alpha_generate_voice"]);

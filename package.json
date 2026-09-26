@@ -18,11 +18,12 @@
     "probe:preview-browser": "bun run scripts/probe-preview-browser.ts",
     "check": "tsc --noEmit",
     "test:web": "bun test ./test/web-kernel.test.ts",
-    "test": "bun test ./test/read-only-code-check.test.ts ./test/agent-mailbox.test.ts ./test/async-workers.test.ts ./test/project-state.test.ts ./test/web-kernel.test.ts ./test/cognitive-runtime.test.ts ./test/cognitive-workflow.test.ts ./test/task-ledger.test.ts ./test/local-preview.test.ts ./test/comfy-client.test.ts ./test/builtin-plugins.test.ts ./test/third-party-plugins.test.ts ./test/prompt-refinement.test.ts ./test/browser-verifier.test.ts ./test/work-orders.test.ts ./test/agent-presets.test.ts ./test/workspace-preflight.test.ts ./test/task-workbench.test.ts ./test/workbench-state.test.ts ./test/workbench-timeline.test.ts ./test/settings.test.ts ./test/report.test.ts ./test/storage.test.ts ./test/reliability-boundaries.test.ts ./test/workspace-import.test.ts ./test/command-approval.test.ts ./test/command-permissions.test.ts ./test/projects.test.ts ./test/project-api.test.ts ./test/direct-file-worker.test.ts ./test/direct-file-tools.test.ts ./test/direct-git-project.test.ts ./test/direct-omp-boundary.test.ts ./test/document-tool.test.ts ./test/general-work.test.ts ./test/task-inputs.test.ts ./test/mcp-permissions.test.ts ./test/task-queue.test.ts ./test/operation-journal.test.ts"
+    "test": "bun test ./test/read-only-code-check.test.ts ./test/agent-mailbox.test.ts ./test/async-workers.test.ts ./test/project-state.test.ts ./test/web-kernel.test.ts ./test/cognitive-runtime.test.ts ./test/cognitive-workflow.test.ts ./test/task-ledger.test.ts ./test/local-preview.test.ts ./test/comfy-client.test.ts ./test/builtin-plugins.test.ts ./test/third-party-plugins.test.ts ./test/prompt-refinement.test.ts ./test/browser-verifier.test.ts ./test/work-orders.test.ts ./test/agent-presets.test.ts ./test/workspace-preflight.test.ts ./test/task-workbench.test.ts ./test/workbench-state.test.ts ./test/workbench-timeline.test.ts ./test/settings.test.ts ./test/report.test.ts ./test/storage.test.ts ./test/reliability-boundaries.test.ts ./test/workspace-import.test.ts ./test/command-approval.test.ts ./test/command-permissions.test.ts ./test/projects.test.ts ./test/project-api.test.ts ./test/direct-file-worker.test.ts ./test/direct-file-tools.test.ts ./test/direct-git-project.test.ts ./test/direct-omp-boundary.test.ts ./test/document-tool.test.ts ./test/general-work.test.ts ./test/office-runtime.test.ts ./test/task-inputs.test.ts ./test/mcp-permissions.test.ts ./test/task-queue.test.ts ./test/operation-journal.test.ts"
   },
   "dependencies": {
     "@oh-my-pi/omptype": "18.2.11",
     "@oh-my-pi/pi-coding-agent": "18.2.11",
+    "@oh-my-pi/pi-natives": "18.2.11",
     "@openai/codex": "0.156.1",
     "@pdf-lib/fontkit": "^1.1.1",
     "puppeteer-core": "25.3.0",
@@ -30,6 +31,7 @@
     "diff": "9.0.0",
     "exceljs": "^4.4.0",
     "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "5.4.624",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },

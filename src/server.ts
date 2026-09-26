@@ -996,7 +996,7 @@ const server = Bun.serve({
       const ledger = await loadLedger(artifact[1]);
       const file = ledger ? await safeArtifactPath(ledger, artifact[2]) : null;
       if (!file) return new Response("Not found", { status: 404 });
-      const type = { ".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".md": "text/markdown; charset=utf-8", ".txt": "text/plain; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg" }[extname(file).toLowerCase()] ?? "application/octet-stream";
+      const type = { ".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation", ".md": "text/markdown; charset=utf-8", ".txt": "text/plain; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg" }[extname(file).toLowerCase()] ?? "application/octet-stream";
       const disposition = url.searchParams.get("inline") === "1" && ["application/pdf", "image/png", "image/jpeg", "text/plain; charset=utf-8"].includes(type) ? "inline" : "attachment";
       return new Response(Bun.file(file), { headers: { "content-type": type, "content-disposition": `${disposition}; filename="${encodeURIComponent(file.split(sep).at(-1) ?? "artifact")}"` } });
     }

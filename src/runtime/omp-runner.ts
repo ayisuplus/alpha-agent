@@ -29,6 +29,7 @@ import { createAsyncWorkTools } from "./async-work-tools";
 import type { WorkerSupervisor } from "./worker-supervisor";
 import { AgentPresetStore, verifyPresetSnapshot, type AgentPresetSnapshot } from "./agent-presets";
 import { loadBuiltinPlugins } from "../plugins";
+import { createOfficePlugin } from "../plugins/office";
 import { SkillPluginStore, hashSkillDirectory, skillCatalog } from "../plugins/third-party";
 import { recoverIncompleteMerges, type WorkOrder } from "./work-orders";
 import { createCognitionTools } from "./cognition-tool";
@@ -306,7 +307,8 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   const plugins = (options.workOrder && !options.workOrder.fullAccess) || reviewing || planning
     ? { tools: [], instructions: [] }
     : direct ? { tools: [], instructions: [] }
-    : loadBuiltinPlugins({ projectRoot, dataRoot: authorizationRoot, url: options.comfyUrl, enabled: options.plugins, generation: options.generation });
+    : loadBuiltinPlugins({ projectRoot, dataRoot: authorizationRoot, url: options.comfyUrl, enabled: options.plugins, generation: options.generation, ledger });
+  const officeReadTools = !options.workOrder && (reviewing || planning) ? createOfficePlugin({ ledger, dataRoot: authorizationRoot, readOnly: true }).tools : [];
   let mcp: Awaited<ReturnType<SkillPluginStore["loadMCP"]>> | null = null;
   try { if ((!options.workOrder || options.workOrder.fullAccess) && !direct && !reviewing && !planning && !codeTask) mcp = await pluginStore.loadMCP(projectRoot, ledger.state.capabilities?.plugins.map(item => item.id)); }
   catch (error) {
@@ -400,7 +402,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       ...(skills.length ? ["alpha_skill_read"] : []), ...(workerReadOnly ? [] : [...plugins.tools.map(tool => tool.name), ...mcpTools.map(tool => tool.name)]),
       "alpha_browser", "alpha_worker_result", ...(options.workOrder.agentId ? ["alpha_cognition_update", "alpha_send", "alpha_inbox"] : []),
       ...(!options.workOrder.fullAccess ? ["alpha_capability_request"] : []),
-    ] : reviewing ? ["read", "grep", "alpha_browser", "alpha_review_result"] : planning ? [...PLANNING_TOOL_NAMES] : [
+    ] : reviewing ? ["read", "grep", "alpha_browser", "alpha_review_result", ...officeReadTools.map(tool => tool.name)] : planning ? [...PLANNING_TOOL_NAMES, ...officeReadTools.map(tool => tool.name)] : [
       "read", "grep", "edit", "write", ...(ledger.state.taskType === "general" ? ["alpha_input", "alpha_check", "alpha_command", ...(direct ? [] : ["alpha_document", "alpha_build"])] : generalTask ? ["alpha_document"] : [codeTask ? "alpha_check" : "alpha_build"]),
       "alpha_search", "alpha_source", "alpha_crawl", "alpha_site",
       ...(codeTask ? ["alpha_command"] : []),
@@ -415,6 +417,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     allowRestrictedCustomTools: true,
     customTools: [
       ...directFileTools,
+      ...officeReadTools,
       ...(ledger.state.taskType === "general" && (planning || reviewing) ? [createTaskInputTool(ledger)] : []),
       ...(!reviewing && !planning && !options.workOrder ? ledger.state.taskType === "general" ? [createTaskInputTool(ledger), createCodeCheckTool(projectRoot, dataRoot, ledger.state.id, ledger.state.workspaceOrigin?.checks ?? [], permission, reason => pauseForInput(reason, "windows-sandbox")), ...(direct ? [] : [createDocumentTool(projectRoot, dataRoot, ledger.state.id), createBuildTool(projectRoot)])] : generalTask ? [createDocumentTool(projectRoot, dataRoot, ledger.state.id)] : [codeTask ? createCodeCheckTool(projectRoot, dataRoot, ledger.state.id, ledger.state.workspaceOrigin?.checks ?? [], permission, reason => pauseForInput(reason, "windows-sandbox")) : createBuildTool(projectRoot)] : options.workOrder && !workerReadOnly ? [createBuildTool(projectRoot, true), createCodeCheckTool(projectRoot, dataRoot, ledger.state.id, await configuredChecks(projectRoot), undefined, undefined, true, options.workOrder.agentId ? async result => ledger.recordWorkerCheckReceipt({ attemptId: options.workOrder!.instanceId!, sourceRevision: result.sourceRevision, passed: result.passed, path: result.logPath }) : undefined), ...(options.workOrder.fullAccess ? [createDocumentTool(projectRoot, authorizationRoot, authorizationTaskId)] : [])] : options.workOrder && workerReadOnly ? [createReadOnlyCodeCheckTool(projectRoot, dataRoot, ledger.state.id, await configuredChecks(projectRoot))] : []),
       ...((!options.workOrder || options.workOrder.fullAccess) && !reviewing ? [createSearchTool(webContext), createCrawlTool(webContext), createSiteTool(webContext), createResearchSourceTool(authorizationRoot, authorizationTaskId || ledger.state.id, reason => pauseForInput(reason, "web-source"), { retrieval, kernel: webKernel, authorizeRead: scope => webRead(webContext, scope) })] : []),

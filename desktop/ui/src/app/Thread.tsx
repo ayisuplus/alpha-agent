@@ -5,6 +5,7 @@ import { ApplyCodePanel } from "../components/ApplyCodePanel";
 import { DiffView } from "../components/DiffView";
 import { EvidenceView } from "../components/EvidenceView";
 import { NewTask } from "../components/NewTask";
+import { OfficePdfPreview } from "../components/OfficePdfPreview";
 import { SettingsView } from "../components/settings/SettingsView";
 import { ThreadHeader } from "../components/ThreadHeader";
 import { Timeline } from "../components/Timeline";
@@ -39,11 +40,15 @@ function TaskThread({ task }: { task: TaskView }) {
     <ThreadHeader key={task.id} task={task} busy={busy} phase={phase} />
     <ApplyCodePanel task={task} />
     <Timeline items={withLive} task={task} />
-    {!!artifacts.length && <section className="task-results" aria-label="本次成果"><h2>已完成的成果</h2>{artifacts.map(item => {
+    {!!artifacts.length && <section className="task-results" aria-label="本次成果"><h2>已完成的成果</h2>{artifacts.filter(item => !/[0-9a-f-]{36}-(?:before|preview)\.pdf$/i.test(item.source)).map(item => {
       const name = item.source.split(/[\\/]/).at(-1) ?? "成果文件";
       const url = `/api/tasks/${task.id}/artifacts/${item.id}`;
       const openable = /\.(pdf|png|jpe?g|txt)$/i.test(name);
-      return <div key={item.id}><strong>{name}</strong>{openable && <a href={`${url}?inline=1`} target="_blank" rel="noreferrer">打开</a>}<a href={url} download={name}>下载</a></div>;
+      const officeId = /^([0-9a-f-]{36})-/.exec(name)?.[1];
+      const preview = artifacts.find(candidate => candidate.source.split(/[\\/]/).at(-1) === `${officeId}-preview.pdf`);
+      const before = artifacts.find(candidate => candidate.source.split(/[\\/]/).at(-1) === `${officeId}-before.pdf`);
+      const afterUrl = preview ? `/api/tasks/${task.id}/artifacts/${preview.id}` : /\.pdf$/i.test(name) ? url : null;
+      return <div className="task-result" key={item.id}><div className="task-result-file"><strong>{name}</strong>{openable && <a href={`${url}?inline=1`} target="_blank" rel="noreferrer">打开</a>}<a href={url} download={name}>下载</a></div>{afterUrl && <details><summary>查看页面预览</summary><div className="office-preview-grid">{before && <OfficePdfPreview url={`/api/tasks/${task.id}/artifacts/${before.id}`} label="修改前" />}<OfficePdfPreview url={afterUrl} label="修改后" /></div></details>}</div>;
     })}</section>}
     <Composer key={task.id} task={task} phase={phase} />
     {detail && workspaceView === "preview" && <div className="task-detail-overlay" role="dialog" aria-label="审阅详情">

@@ -57,6 +57,18 @@ export async function verifyGeneralDeliverable(ledger: TaskLedger, dataRoot: str
     if (!Array.isArray(sourceIds) || sourceIds.some(id => typeof id !== "string" || !sourceById.has(id))) throw new Error("Deliverable cites an unknown source");
     outputs.push({ path, hash: sha256(await readFile(path)), sourceIds });
   }
+  for (const output of [...outputs]) {
+    const id = /^([0-9a-f-]{36})-/.exec(basename(output.path))?.[1];
+    if (!id) continue;
+    const record = await readFile(join(dataRoot, "artifacts", ledger.state.id, `${id}.json`), "utf8").then(value => JSON.parse(value) as { id: string; taskId: string; path: string; sha256: string; previewPath?: string; previewSha256?: string; beforePreviewPath?: string; beforePreviewSha256?: string }).catch(() => null);
+    if (!record || record.id !== id || record.taskId !== ledger.state.id || record.path !== output.path || record.sha256 !== output.hash) continue;
+    for (const [candidate, expected] of [[record.previewPath, record.previewSha256], [record.beforePreviewPath, record.beforePreviewSha256]]) {
+      if (!candidate || !expected || candidate === output.path || outputs.some(item => item.path === candidate)) continue;
+      const path = await realpath(candidate);
+      if (!inside(join(ledger.state.projectRoot, "outputs"), path) || sha256(await readFile(path)) !== expected) throw new Error("Office preview changed after verification");
+      outputs.push({ path, hash: expected, sourceIds: output.sourceIds });
+    }
+  }
   if (ledger.state.criteria.some(item => item.id === "sources")) {
     for (const source of sources) {
       await ledger.recordEvidence({ criterionId: "sources", kind: "source", revision: ledger.state.revision!, passed: true, source: join(dataRoot, "sources", ledger.state.id, `${source.id}.json`), contentHash: source.sha256, referenceIds: [source.id] });
