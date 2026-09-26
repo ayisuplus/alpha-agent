@@ -1,9 +1,15 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
+import { verifyUiHashes } from "./portable-ui";
 
 const portable = resolve(Bun.argv[2] ?? "");
 if (!Bun.argv[2] || !await Bun.file(join(portable, "release.json")).exists()) throw new Error("Pass a built portable release directory");
+const release = JSON.parse(await readFile(join(portable, "release.json"), "utf8")) as { format?: number; ui?: { files?: Record<string, string> } };
+if (release.format === 2) {
+  if (!release.ui?.files || typeof release.ui.files !== "object") throw new Error("Portable UI manifest is missing");
+  await verifyUiHashes(join(portable, "desktop", "dist"), release.ui.files);
+}
 const workspace = await mkdtemp(join(tmpdir(), "alpha-portable-probe-"));
 const child = Bun.spawn([join(portable, "runtime", "bun.exe"), "run", "src/server.ts"], {
   cwd: portable,
@@ -26,7 +32,16 @@ try {
   const port = await Promise.race([ready, Bun.sleep(20_000).then(() => { throw new Error("Portable server startup timed out"); })]);
   const response = await fetch(`http://127.0.0.1:${port}/health`);
   if (!response.ok || (await response.json() as { ok?: boolean }).ok !== true) throw new Error("Portable health probe failed");
-  console.log(JSON.stringify({ portable, port, health: "ok" }));
+  const page = await fetch(`http://127.0.0.1:${port}/ui/`);
+  if (!page.ok) throw new Error("Portable desktop UI did not load");
+  const html = await page.text();
+  const assets = [...html.matchAll(/(?:src|href)="(\/ui\/assets\/[^"]+)"/g)].map(match => match[1]!);
+  if (!html.includes('id="root"') || !assets.some(asset => asset.endsWith(".js"))) throw new Error("Portable desktop UI entry is incomplete");
+  for (const asset of assets) {
+    const response = await fetch(`http://127.0.0.1:${port}${asset}`);
+    if (!response.ok || (await response.arrayBuffer()).byteLength === 0) throw new Error(`Portable desktop UI asset failed: ${asset}`);
+  }
+  console.log(JSON.stringify({ portable, port, health: "ok", ui: "ok", assets: assets.length, manifest: release.format === 2 ? "verified" : "legacy" }));
 } finally {
   child.kill();
   await child.exited;

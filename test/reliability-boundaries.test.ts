@@ -6,6 +6,7 @@ import { checkFileToolCall } from "../src/runtime/file-tool-guard";
 import { OperationManager } from "../src/runtime/operation-manager";
 import { SettingsStore, WorkbenchMeta } from "../src/runtime/settings";
 import { TaskLedger } from "../src/runtime/task-ledger";
+import { uiHashes, verifyUiHashes } from "../scripts/portable-ui";
 
 test("operation claim is synchronous and only its owner can release or cancel", () => {
   const seen: Array<string | null> = [];
@@ -22,6 +23,21 @@ test("operation claim is synchronous and only its owner can release or cancel", 
   manager.release(first!);
   expect(manager.claim("publish", "task")).not.toBeNull();
   expect(seen).toHaveLength(3);
+});
+
+test("portable UI manifest rejects a changed or incomplete renderer", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-portable-ui-"));
+  try {
+    await mkdir(join(root, "assets"));
+    await writeFile(join(root, "index.html"), '<script src="/ui/assets/app.js"></script>');
+    await writeFile(join(root, "assets", "app.js"), "document.title = 'Alpha';");
+    const hashes = await uiHashes(root);
+    await verifyUiHashes(root, hashes);
+    await writeFile(join(root, "assets", "app.js"), "document.title = 'Changed';");
+    await expect(verifyUiHashes(root, hashes)).rejects.toThrow("differs from the fresh build");
+    await rm(join(root, "assets", "app.js"));
+    await expect(uiHashes(root)).rejects.toThrow("incomplete");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("OMP file targets reject escapes, links and unowned worker writes", async () => {
