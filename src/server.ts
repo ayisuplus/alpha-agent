@@ -4,31 +4,40 @@ import { access, cp, mkdir, readFile, readdir, realpath, unlink, writeFile } fro
 import { constants } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
 import { publishLocalPreview, type PreviewInstance } from "./runtime/local-preview";
-import { DEFAULT_MODEL, runTask, type RunEvent, type RunOptions } from "./runtime/omp-runner";
+import { DEFAULT_MODEL, type RunEvent, type RunOptions } from "./runtime/omp-runner";
+import { runDevelopmentWorkflow } from "./runtime/development-workflow";
+import { WorkerSupervisor, inspectWorkerAttempt } from "./runtime/worker-supervisor";
 import { ModelServiceError, isModelAvailable, listModels, removeApiKey, setApiKey, testModel } from "./runtime/models";
 import { PromptRefinementError, refinePrompt } from "./runtime/prompt-refinement";
 import { TaskLedger, fingerprintSource } from "./runtime/task-ledger";
+import { goalStopReason, nextGoalCycle, progressSignature } from "./runtime/goal-continuation";
 import { assertGeneratedAssetsIntact } from "./runtime/media-integrity";
 import { verifyBrowserPlan } from "./runtime/browser-verifier";
 import { TaskActivity, type ActivityKind } from "./runtime/task-activity";
-import { readSourceReviews, snapshotSource, sourceChanges, writeSourceReview } from "./runtime/source-review";
+import { readSourceReviews, snapshotSource, snapshotSourceHashes, sourceChanges, writeSourceReview } from "./runtime/source-review";
 import { SettingsError, SettingsStore, WorkbenchMeta, isModelSelector, normalizeComfyUrl } from "./runtime/settings";
 import { ComfyClient } from "./runtime/comfy-client";
-import { SkillPluginError, SkillPluginStore } from "./plugins/third-party";
+import { SkillPluginError, SkillPluginStore, hashSkillDirectory } from "./plugins/third-party";
 import { AgentPresetStore } from "./runtime/agent-presets";
 import { cleanupStalePreviews, storageReport } from "./runtime/storage";
 import { OperationManager, type OperationLease } from "./runtime/operation-manager";
 import { buildChildEnv } from "./runtime/child-env";
 import { importCodeWorkspace } from "./runtime/workspace-import";
 import { applyCodeChanges, reviewCodeApply } from "./runtime/workspace-apply";
-import { runCodeCheck } from "./runtime/code-check";
-import { VisibleBrowser } from "./runtime/visible-browser";
+import { acceptCodeChange } from "./runtime/code-acceptance";
+import { listResearchSources } from "./runtime/research-source";
+import { BrowserBridge } from "./runtime/browser-bridge";
+import { BrowserKernel } from "./runtime/browser-kernel";
+import { WebPermissionStore } from "./runtime/web-permissions";
+import { WebRetrieval, type WebProvider } from "./runtime/web-retrieval";
 import { commandApprovalStore } from "./runtime/command-approval";
-import { createGeneralWorkspace, verifyGeneralDeliverable } from "./runtime/general-work";
+import { createGeneralWorkspace, verifyGeneralDeliverable, type UploadedInput } from "./runtime/general-work";
+import { addTaskInputs } from "./runtime/task-inputs";
 import { MCPPermissionStore, type MCPPermission } from "./runtime/mcp-permissions";
 import { OperationJournal } from "./runtime/operation-journal";
 import { TaskQueueStore } from "./runtime/task-queue";
 import { ProjectStore } from "./runtime/projects";
+import { assertWritablePaths, bindProjectTurn, finalizeProjectTurn, mayWriteProject, prepareProjectTurn, readProjectMemorySnapshot, recoverProjectTurn, unfinishedProjectTurns, type ProjectTurn } from "./runtime/project-state";
 import { configuredChecks } from "./runtime/code-check";
 import { SandboxUnavailableError, verifySandbox } from "./runtime/sandbox-exec";
 
@@ -54,11 +63,27 @@ const agentPresetStore = new AgentPresetStore(dataRoot);
 const workbenchMeta = new WorkbenchMeta(dataRoot);
 const commandApprovals = commandApprovalStore(dataRoot);
 const mcpPermissions = new MCPPermissionStore(dataRoot);
+const browserBridge = process.env.ALPHA_BROWSER_BRIDGE_PORT && process.env.ALPHA_BROWSER_BRIDGE_TOKEN ? new BrowserBridge() : null;
+const webKernel = new BrowserKernel(Number(process.env.ALPHA_CDP_PORT) || null, browserBridge);
+const webPermissions = new WebPermissionStore(dataRoot);
+const webRetrieval = new WebRetrieval(dataRoot, async (provider: WebProvider) => process.env[provider === "tavily" ? "TAVILY_API_KEY" : "FIRECRAWL_API_KEY"] ?? await browserBridge?.key(provider) ?? null);
 const operationJournal = new OperationJournal(dataRoot);
 const startupReconciliation = await operationJournal.reconcile();
 for (const item of startupReconciliation) console.error("ALPHA_RECONCILED_OPERATION", item);
 const taskQueue = new TaskQueueStore(dataRoot);
 const projectStore = new ProjectStore(dataRoot);
+for (const turn of await unfinishedProjectTurns(dataRoot)) {
+  if (!turn.taskId) continue;
+  const ledger = await TaskLedger.load(join(dataRoot, "tasks", `${turn.taskId}.json`)).catch(() => null);
+  if (!ledger) continue;
+  try { await recoverProjectTurn(turn, ledger); }
+  catch (error) {
+    const reason = `项目状态恢复待审阅：${error instanceof Error ? error.message : String(error)}`;
+    await ledger.recordCheckpointFailure(reason);
+    if (ledger.state.status === "active") await ledger.needInput(reason, "project-state");
+    console.error("ALPHA_PROJECT_STATE_RECOVERY", turn.runId, reason);
+  }
+}
 await taskQueue.reconcile();
 const queuedRuns = new Map<string, string>();
 let queueDraining = false;
@@ -66,9 +91,7 @@ let taskMeta = await workbenchMeta.all();
 const clients = new Set<ServerWebSocket<unknown>>();
 const previews = new Map<string, PreviewInstance>();
 let active: { runId: string; controller: AbortController; ledger?: TaskLedger; steer?: (text: string) => Promise<void>; steeringIds: Set<string> } | null = null;
-let controlHolder: "alpha" | "user" = "alpha";
 let verification: { taskId: string; controller: AbortController } | null = null;
-let modelBrowser: VisibleBrowser | null = null;
 let publishing = false;
 let cleaning = false;
 const activities = new Map<string, TaskActivity>();
@@ -129,8 +152,15 @@ async function loadLedger(id: string): Promise<TaskLedger | null> {
 async function taskRootAllowed(ledger: TaskLedger): Promise<boolean> {
   const root = resolve(ledger.state.projectRoot);
   if (ledger.state.projectId) {
-    const roots = await projectStore.roots(ledger.state.projectId, ledger.state.projectVersion ?? 0);
-    return roots.some(item => item.toLowerCase() === root.toLowerCase());
+    try {
+      const roots = await projectStore.roots(ledger.state.projectId, ledger.state.projectVersion ?? 0);
+      return ledger.state.workspaceOrigin?.kind === "direct"
+        ? roots.some(item => item.toLowerCase() === root.toLowerCase())
+        : root === join(productsRoot, `project-${ledger.state.projectId}`);
+    } catch (error) {
+      if (ledger.state.status === "active") await ledger.needInput(`项目目录已变化，需要重新检查：${error instanceof Error ? error.message : String(error)}`, "project");
+      return false;
+    }
   }
   return root.startsWith(productsRoot + sep);
 }
@@ -171,7 +201,7 @@ async function evidenceDetail(ledger: TaskLedger, evidenceId: string): Promise<{
   return { content, screenshotUrl };
 }
 
-function taskView(ledger: TaskLedger) {
+function taskView(ledger: TaskLedger, queued = false) {
   const preview = ledger.state.preview;
   const evidence = ledger.state.evidence.filter(item => (item.contractVersion ?? 1) === (ledger.state.contractVersion ?? 1) && item.revision === ledger.state.revision && (item.kind !== "browser" || item.previewId === preview?.id));
   const latestEvidence = new Set(ledger.state.criteria.map(criterion => evidence.findLast(item => item.criterionId === criterion.id)?.id));
@@ -183,25 +213,37 @@ function taskView(ledger: TaskLedger) {
     taskType: ledger.state.taskType ?? "web-product",
     workspaceOrigin: ledger.state.workspaceOrigin ?? { kind: "generated" },
     objective: ledger.state.objective,
+    designatedExpertId: ledger.state.designatedExpertId ?? null,
     originalObjective: ledger.state.contractHistory?.[0]?.objective ?? ledger.state.objective,
     contractVersion: ledger.state.contractVersion ?? 1,
     status: ledger.state.status,
+    phase: ledger.state.phase ?? "execute",
+    planApproval: ledger.state.planApproval ?? null,
+    goal: ledger.state.goal ?? { enabled: false },
     revision: ledger.state.revision,
     projectRoot: ledger.state.projectRoot,
-    inputs: (ledger.state.inputs ?? []).map(item => ({ id: item.id, name: item.name, mimeType: item.mimeType, sha256: item.sha256, uploadedAt: item.uploadedAt, url: `/api/tasks/${ledger.state.id}/inputs/${item.id}` })),
+    inputs: (ledger.state.inputs ?? []).map(item => ({ id: item.id, name: item.name, mimeType: item.mimeType, size: item.size ?? null, sha256: item.sha256, uploadedAt: item.uploadedAt, url: `/api/tasks/${ledger.state.id}/inputs/${item.id}` })),
+    capabilities: ledger.state.capabilities ?? null,
     modelSelector: ledger.state.modelSelector ?? null,
     meta: taskMeta[ledger.state.id] ?? {},
     running: active?.ledger?.state.id === ledger.state.id,
+    queued,
     acceptsGuidance: active?.ledger?.state.id === ledger.state.id && !!active.steer,
     pending: ledger.completionGaps(),
+    pendingCount: ledger.completionGaps().length,
     criteria: ledger.state.criteria,
     contractHistory: ledger.state.contractHistory ?? [],
     guidanceHistory: ledger.state.guidanceHistory ?? [],
+    cognition: ledger.state.cognition ?? null,
+    development: ledger.state.development ?? null,
     runs: ledger.state.runs ?? [],
     lastFailure: ledger.state.lastFailure ?? null,
     reopenReason: ledger.state.reopenReason ?? null,
     pendingQuestion: ledger.state.pendingQuestion ?? null,
     blockedService: ledger.state.blockedService ?? null,
+    checkpoint: ledger.state.checkpoint ?? null,
+    checkpointError: ledger.state.checkpointError ?? null,
+    checkpointStatus: ledger.state.checkpointStatus ?? (ledger.state.checkpoint ? "committed" : null),
     latestRun: ledger.state.runs?.at(-1) ?? null,
     evidence: ledger.state.evidence.map(item => ({ id: item.id, attemptId: item.attemptId ?? null, criterionId: item.criterionId, kind: item.kind, passed: item.passed, source: item.source, contentHash: item.contentHash ?? null, referenceIds: item.referenceIds ?? [], recordedAt: item.recordedAt, contractVersion: item.contractVersion ?? 1, revision: item.revision, previewId: item.previewId ?? null, current: latestEvidence.has(item.id) })),
     screenshotUrl: preview && evidence.some(item => item.kind === "browser") ? `/api/tasks/${ledger.state.id}/screenshot` : null,
@@ -215,6 +257,14 @@ async function listTasks(): Promise<TaskLedger[]> {
   const names = (await readdir(join(dataRoot, "tasks")).catch(() => [] as string[])).filter(name => /^[0-9a-f-]{36}\.json$/.test(name));
   const ledgers = (await Promise.all(names.map(name => TaskLedger.load(join(dataRoot, "tasks", name)).catch(() => null)))).filter((ledger): ledger is TaskLedger => ledger !== null);
   return ledgers.sort((a, b) => b.state.updatedAt.localeCompare(a.state.updatedAt));
+}
+
+async function pauseTasksForProjectChange(projectId: string, version: number): Promise<void> {
+  for (const ledger of await listTasks()) {
+    if (ledger.state.projectId !== projectId || (ledger.state.projectVersion ?? 0) >= version || ledger.state.status !== "active") continue;
+    await ledger.needInput("项目目录范围已变化，请重新检查后继续", "project");
+    emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+  }
 }
 
 async function protectedPreviewIds(): Promise<Set<string>> {
@@ -249,7 +299,7 @@ async function diagnostics() {
   };
 }
 
-function taskSummary(ledger: TaskLedger) {
+function taskSummary(ledger: TaskLedger, queued = false) {
   return {
     id: ledger.state.id,
     projectId: ledger.state.projectId ?? null,
@@ -261,9 +311,12 @@ function taskSummary(ledger: TaskLedger) {
     originalObjective: ledger.state.contractHistory?.[0]?.objective ?? ledger.state.objective,
     contractVersion: ledger.state.contractVersion ?? 1,
     status: ledger.state.status,
+    phase: ledger.state.phase ?? "execute",
+    goal: ledger.state.goal ?? { enabled: false },
     modelSelector: ledger.state.modelSelector ?? null,
     meta: taskMeta[ledger.state.id] ?? {},
     running: active?.ledger?.state.id === ledger.state.id,
+    queued,
     pendingCount: ledger.completionGaps().length,
     createdAt: ledger.state.createdAt,
     updatedAt: ledger.state.updatedAt,
@@ -356,7 +409,7 @@ async function verifyTaskBrowser(ledger: TaskLedger, signal: AbortSignal): Promi
   const cdpPort = process.env.ALPHA_CDP_PORT;
   if (!cdpPort || !/^\d+$/.test(cdpPort)) throw new Error("Desktop browser debugging port is unavailable");
   if (await Bun.file(join(ledger.state.projectRoot, "alpha-verification.json")).exists()) {
-    await verifyBrowserPlan(ledger, Number(cdpPort), dataRoot, signal);
+    await verifyBrowserPlan(ledger, Number(cdpPort), dataRoot, signal, webKernel, false);
     return;
   }
   if (!/素材清单|inventory/i.test(ledger.state.objective)) throw new Error("Verification plan is missing: alpha-verification.json");
@@ -375,7 +428,7 @@ async function verifyTaskBrowser(ledger: TaskLedger, signal: AbortSignal): Promi
 }
 
 async function controlledVerification(ledger: TaskLedger, signal: AbortSignal, lease: OperationLease): Promise<void> {
-  if (controlHolder !== "alpha") throw new Error("User controls the visible browser");
+  if (webKernel.controlHolder !== "alpha") throw new Error("User controls the visible browser");
   if (verification) throw new Error("Another browser verification is running");
   const controller = new AbortController();
   verification = { taskId: ledger.state.id, controller };
@@ -424,129 +477,225 @@ function sessionHooks(runId: string) {
 }
 
 /** Run options taken from the workbench settings; read when each operation starts, so changes apply to the next run. */
-async function configuredRun(taskModel?: string) {
+async function configuredRun(taskModel?: string, ledger?: TaskLedger) {
   const settings = await settingsStore.get();
+  const budget = ledger?.state.goal?.enabled ? ledger.state.goal.budget : undefined;
   return {
     // A task keeps its own model; otherwise it follows the workbench default, then Alpha's built-in default.
     modelSelector: taskModel ?? settings.model.default ?? DEFAULT_MODEL,
-    maxToolCalls: settings.budget.maxToolCalls,
-    wallTimeMs: settings.budget.wallTimeMinutes * 60_000,
-    maxTotalToolCalls: settings.budget.maxTotalToolCalls,
-    totalWallTimeMs: settings.budget.totalWallTimeMinutes * 60_000,
+    maxToolCalls: budget?.maxToolCalls ?? settings.budget.maxToolCalls,
+    wallTimeMs: budget?.wallTimeMs ?? settings.budget.wallTimeMinutes * 60_000,
+    maxTotalToolCalls: budget?.maxTotalToolCalls ?? settings.budget.maxTotalToolCalls,
+    totalWallTimeMs: budget?.totalWallTimeMs ?? settings.budget.totalWallTimeMinutes * 60_000,
     comfyUrl: settings.generation.comfyUrl,
     generation: { image: settings.generation.image, voice: settings.generation.voice, video: settings.generation.video },
     plugins: settings.plugins,
   };
 }
 
-async function execute(runId: string, objective: string, projectRoot: string, controller: AbortController, lease: OperationLease, existingLedger?: TaskLedger, newTaskModel?: string): Promise<void> {
+function startOptions(mode: unknown, continuation: unknown): { startMode: "plan" | "execute"; continueUntilAccepted: boolean } | null {
+  if (mode !== undefined && mode !== "plan" && mode !== "execute") return null;
+  if (continuation !== undefined && typeof continuation !== "boolean") return null;
+  return { startMode: mode === "plan" ? "plan" : "execute", continueUntilAccepted: continuation === true };
+}
+
+async function selectedCapabilities(skillIds: unknown, pluginIds: unknown, direct: boolean): Promise<NonNullable<TaskLedger["state"]["capabilities"]>> {
+  if (!Array.isArray(skillIds) || !Array.isArray(pluginIds) || skillIds.length > 20 || pluginIds.length > 20 ||
+    !skillIds.every(id => typeof id === "string") || !pluginIds.every(id => typeof id === "string") ||
+    new Set(skillIds).size !== skillIds.length || new Set(pluginIds).size !== pluginIds.length) throw new Error("Invalid task capability selection");
+  if (direct && pluginIds.length) throw new Error("Direct project Hook/MCP execution is unavailable inside the native sandbox");
+  const installed = await skillPluginStore.list();
+  const skills = await skillPluginStore.loadSkills(skillIds as string[]);
+  return {
+    plugins: (pluginIds as string[]).map(id => {
+      const plugin = installed.find(item => item.id === id);
+      if (!plugin?.enabled || !(plugin.hooksEnabled || plugin.mcpEnabled)) throw new Error(`Plugin is disabled or has no enabled Hook/MCP: ${id}`);
+      return { id, revision: plugin.revision };
+    }),
+    skills: await Promise.all((skillIds as string[]).map(async id => {
+      const skill = skills.find(item => item.name === id);
+      const plugin = installed.find(item => id.startsWith(`${item.id}:`));
+      if (!skill || !plugin?.enabled) throw new Error(`Skill is unavailable: ${id}`);
+      return { id, revision: plugin.revision, hash: await hashSkillDirectory(skill.baseDir) };
+    })),
+  };
+}
+
+async function uploadedFiles(items: FormDataEntryValue[]): Promise<UploadedInput[]> {
+  return Promise.all(items.map(async item => {
+    if (!(item instanceof File)) throw new Error("Input must be a file");
+    return { name: item.name, mimeType: item.type, bytes: new Uint8Array(await item.arrayBuffer()) };
+  }));
+}
+
+async function execute(runId: string, objective: string, projectRoot: string, controller: AbortController, lease: OperationLease, existingLedger?: TaskLedger, newTaskModel?: string, designatedExpertId?: string, launch = { startMode: "execute" as "plan" | "execute", continueUntilAccepted: false }): Promise<void> {
   let beforeSource: Awaited<ReturnType<typeof snapshotSource>> | null = null;
+  let beforeHashes: Awaited<ReturnType<typeof snapshotSourceHashes>> | null = null;
   let runError: string | null = null;
+  let projectTurn: ProjectTurn | null = null;
+  let writingToolObserved = false;
   const emitRun = (message: Record<string, unknown>) => emit({ ...message, taskId: active?.runId === runId ? active.ledger?.state.id : existingLedger?.state.id });
   const modelRun = async (options: RunOptions): Promise<TaskLedger> => {
     const preview = options.existingLedger?.state.preview;
     const port = process.env.ALPHA_CDP_PORT;
-    const browser = !options.existingLedger?.state.projectId && preview && previews.has(preview.id) && controlHolder === "alpha" && port && /^\d+$/.test(port)
-      ? await VisibleBrowser.connect(`http://127.0.0.1:${port}`, preview.url).catch(() => undefined)
+    const browser = options.existingLedger?.state.workspaceOrigin?.kind !== "direct" && preview && previews.has(preview.id) && webKernel.controlHolder === "alpha" && port && /^\d+$/.test(port)
+      ? await webKernel.connectPreview(options.existingLedger!.state.id, preview.url, controller.signal).catch(() => undefined)
       : undefined;
-    if (browser) modelBrowser = browser;
     if (browser && options.existingLedger) operationManager.update(lease, { browserTaskId: options.existingLedger.state.id });
     try {
-      return await runTask({ ...options, browser, browserUrl: preview?.url, browserAccess: () => controlHolder === "alpha" && operationManager.snapshot()?.id === lease.id });
+      return await runDevelopmentWorkflow({ ...options, browser, webKernel, browserUrl: preview?.url, browserAccess: () => webKernel.controlHolder === "alpha" && operationManager.snapshot()?.id === lease.id });
     } finally {
-      await browser?.disconnect();
-      if (modelBrowser === browser) modelBrowser = null;
+      if (browser && options.existingLedger) await webKernel.detachPreview(options.existingLedger.state.id);
       operationManager.update(lease, { browserTaskId: null });
     }
   };
   try {
-    if (existingLedger?.state.projectId) await projectStore.roots(existingLedger.state.projectId, existingLedger.state.projectVersion ?? 0);
-    const configured = await configuredRun(existingLedger?.state.modelSelector ?? newTaskModel);
+    if (existingLedger?.state.projectId) {
+      try { await projectStore.roots(existingLedger.state.projectId, existingLedger.state.projectVersion ?? 0); }
+      catch (error) {
+        if (existingLedger.state.status === "active") await existingLedger.needInput(`项目目录已变化，需要重新检查：${error instanceof Error ? error.message : String(error)}`, "project");
+        throw error;
+      }
+    }
+    if (existingLedger?.state.workspaceOrigin?.kind === "direct" && existingLedger.state.projectId) {
+      const roots = await projectStore.roots(existingLedger.state.projectId, existingLedger.state.projectVersion ?? 0);
+      await verifySandbox({ cwd: projectRoot, roots, dataRoot, signal: controller.signal });
+    }
+    projectTurn = await prepareProjectTurn({ dataRoot, projectRoot, runId, ledger: existingLedger });
+    const configured = await configuredRun(existingLedger?.state.modelSelector ?? newTaskModel, existingLedger);
+    if (existingLedger?.state.goal?.enabled && !existingLedger.state.goal.budget) await existingLedger.setGoal(true, { maxToolCalls: configured.maxToolCalls, wallTimeMs: configured.wallTimeMs, maxTotalToolCalls: configured.maxTotalToolCalls, totalWallTimeMs: configured.totalWallTimeMs });
+    else if (existingLedger?.state.goal?.enabled && existingLedger.state.goal.stopReason) await existingLedger.setGoalProgress(0);
     beforeSource = await snapshotSource(projectRoot);
+    beforeHashes = await snapshotSourceHashes(projectRoot);
     emitRun({ type: "status", phase: "构建中", runId });
     const forwardEvent = (event: RunEvent) => {
+      if (event.type === "tool-start" && mayWriteProject(event.value)) writingToolObserved = true;
       if (event.type === "text") emitRun({ type: "text", value: event.value });
       else if (event.type === "status") emitRun({ type: "status", phase: event.value, runId });
       else emitRun({ type: "tool", name: event.value, state: event.type === "tool-start" ? "开始" : "结束", error: event.error, callId: event.callId, target: event.target, intent: event.intent });
     };
+    let currentLedger = existingLedger;
+    let currentInstruction = objective;
+    while (true) {
+    const beforeProgress = currentLedger ? progressSignature(currentLedger) : null;
+    const cycleOptions = currentLedger ? await configuredRun(currentLedger.state.modelSelector, currentLedger) : configured;
     const ledger = await modelRun({
-      ...configured,
+      ...cycleOptions,
       taskModel: newTaskModel,
-      projectRoot, objective, dataRoot, signal: controller.signal, existingLedger,
+      designatedExpertId,
+      startMode: launch.startMode,
+      continueUntilAccepted: launch.continueUntilAccepted,
+      projectRoot, objective: currentInstruction, dataRoot, signal: controller.signal, existingLedger: currentLedger,
       onNeedsInput: reason => controller.abort(new Error(reason)),
       onEvent: forwardEvent,
+      onWorkerState: changed => emitRun({ type: "task", task: taskView(changed) }),
       async onLedger(created) {
+        if (projectTurn) await bindProjectTurn(projectTurn, created);
         await operationJournal.start(created.state.id, runId);
         if (active?.runId === runId) active.ledger = created;
         operationManager.update(lease, { taskId: created.state.id });
         setContext(created);
         operations.set(created.state.id, runId);
-        if (!existingLedger) appendActivity(created.state.id, "status", "任务已创建", runId);
+        if (!currentLedger) appendActivity(created.state.id, "status", "任务已创建", runId);
         emitRun({ type: "task", task: taskView(created) });
       },
       ...sessionHooks(runId),
     });
+    const verifyCycle = async (): Promise<TaskLedger> => {
     if (active?.runId === runId) active.ledger = ledger;
     emitRun({ type: "task", task: taskView(ledger) });
     if (controller.signal.aborted) {
       emitRun({ type: "status", phase: "已停止", runId, pending: ledger.completionGaps() });
-      return;
+      return ledger;
+    }
+    if (ledger.state.phase === "plan") {
+      try { await ledger.submitPlanForReview(); emitRun({ type: "status", phase: "计划待审阅", runId }); }
+      catch (error) { await ledger.recordFailure(error instanceof Error ? error.message : String(error)); emitRun({ type: "status", phase: "继续规划", runId }); }
+      emitRun({ type: "task", task: taskView(ledger) });
+      return ledger;
+    }
+    if (ledger.state.phase === "plan-review") {
+      emitRun({ type: "status", phase: "计划待审阅", runId });
+      return ledger;
+    }
+    if (ledger.state.status !== "active" || ledger.completionGaps().includes("worker-integration")) {
+      emitRun({ type: "status", phase: ledger.state.status === "needs-input" ? "需要回答" : "子实例待集成", runId, pending: ledger.completionGaps() });
+      return ledger;
+    }
+    if (ledger.state.taskType === "general") {
+      const changed = sourceChanges(beforeHashes ?? {}, await snapshotSourceHashes(projectRoot)).map(item => item.path);
+      const hasManifest = await Bun.file(join(projectRoot, "alpha-deliverable.json")).exists() &&
+        (changed.some(path => path === "alpha-deliverable.json" || path.startsWith("outputs/")) || ledger.state.criteria.some(item => item.id === "deliverable"));
+      const hasWebPlan = await Bun.file(join(projectRoot, "alpha-verification.json")).exists() &&
+        (changed.some(path => path !== "alpha-deliverable.json" && !path.startsWith("outputs/")) || ledger.state.criteria.some(item => item.id === "user-path"));
+      const codeChanged = changed.some(path => path !== "alpha-deliverable.json" && path !== "alpha-verification.json" && !path.startsWith("outputs/"));
+      const criteria: TaskLedger["state"]["criteria"] = [
+        ...(hasManifest ? [{ id: "deliverable", description: "交付文件已核查", kind: "artifact" as const }] : []),
+        ...(hasWebPlan ? [{ id: "build", description: "产品构建", kind: "build" as const }, { id: "user-path", description: "浏览器关键路径", kind: "browser" as const }] : []),
+        ...(!hasWebPlan && codeChanged ? [{ id: "change", description: "源码变更可审阅", kind: "asset" as const }, { id: "check", description: "项目检查通过", kind: "test" as const }] : []),
+      ];
+      await ledger.setCriteria(criteria);
+      if (hasManifest) {
+        await verifyGeneralDeliverable(ledger, dataRoot, false);
+        if (!hasWebPlan && !codeChanged) {
+          emitRun({ type: "task", task: taskView(ledger) });
+          emitRun({ type: "status", phase: "已验收", runId, pending: [] });
+          return ledger;
+        }
+      }
+      if (hasWebPlan) {
+        if (ledger.state.workspaceOrigin?.kind === "direct") throw new Error("Direct-project web build is unavailable inside the native sandbox");
+      } else {
+        if (codeChanged) {
+          const accepted = await acceptCodeChange({ ledger, dataRoot, runId, signal: controller.signal, complete: false, onCheck: name => emitRun({ type: "status", phase: `检查 ${name}`, runId }) });
+          emitRun({ type: "task", task: taskView(ledger) });
+          emitRun({ type: "status", phase: accepted ? "已验收" : "待验收", runId, pending: ledger.completionGaps() });
+          return ledger;
+        }
+        flushText(ledger.state.id);
+        const answer = (await activityFor(ledger.state.id).read()).filter(item => item.operationId === runId && item.kind === "text" && item.value.trim()).map(item => item.value).join("\n").trim();
+        if (!answer) throw new Error("Task returned without an answer or reviewable output");
+        if (/(制作|生成|创建|输出|交付|导出|写一份|做一份).{0,30}(文件|文档|PDF|DOCX|XLSX|CSV|PPT|表格|报告|图片|视频|音频)/i.test(ledger.state.objective)) throw new Error("Requested deliverable is missing");
+        if (/(修复|修改|重构|实现|新增|编写|开发).{0,30}(代码|bug|项目|模块|功能|组件)/i.test(ledger.state.objective)) throw new Error("Requested source change is missing");
+        if (/(创建|制作|开发|构建).{0,30}(网页|网站|web|页面|应用)/i.test(ledger.state.objective)) throw new Error("Requested web product is missing");
+        emitRun({ type: "task", task: taskView(ledger) });
+        emitRun({ type: "status", phase: "已验收", runId, pending: [] });
+        return ledger;
+      }
     }
     if (ledger.state.taskType === "code-change") {
-      const baselineFile = join(directBaselineRoot, `${ledger.state.id}.json`);
-      const baseline = ledger.state.workspaceOrigin?.kind === "direct"
-        ? await readFile(baselineFile, "utf8").then(value => JSON.parse(value) as Record<string, string>).catch(() => null)
-        : null;
-      const afterHashes = baseline ? Object.fromEntries(Object.entries(await snapshotSource(projectRoot)).map(([path, value]) => [path, createHash("sha256").update(value).digest("hex")])) : null;
-      const review = ledger.state.workspaceOrigin?.kind === "direct"
-        ? { changes: sourceChanges(baseline ?? beforeSource ?? {}, afterHashes ?? await snapshotSource(projectRoot)).map(change => ({ path: change.path, action: change.before === null ? "added" : change.after === null ? "removed" : "modified", conflict: false })) }
-        : await reviewCodeApply(ledger, dataRoot);
-      const reviewPath = join(dataRoot, "evidence", `${ledger.state.id}-${runId}-code-review.json`);
-      await mkdir(join(dataRoot, "evidence"), { recursive: true });
-      await writeFile(reviewPath, JSON.stringify(review, null, 2), { flag: "wx" });
-      if (review.changes.length) await ledger.recordEvidence({ criterionId: "change", kind: "asset", revision: ledger.state.revision!, passed: true, source: reviewPath });
-      const checks = ledger.state.workspaceOrigin?.checks ?? [];
-      const checkResults: Array<{ name: string; passed: boolean; logPath: string }> = [];
-      if (!checks.length) {
-        const approved = (await commandApprovals.list(ledger.state.id)).findLast(item => item.purpose === "check" && item.status === "complete" && item.result?.exitCode === 0 && item.result.revision === ledger.state.revision);
-        if (!approved?.result) throw new Error("No configured project check; approve and run a check command before technical completion");
-        checkResults.push({ name: approved.argv.join(" "), passed: true, logPath: approved.result.logPath });
+      let accepted = false;
+        try { accepted = await acceptCodeChange({ ledger, dataRoot, runId: ledger.state.goal?.enabled ? randomUUID() : runId, signal: controller.signal, complete: false, onCheck: name => emitRun({ type: "status", phase: `检查 ${name}`, runId }) }); }
+      catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        if (!ledger.state.goal?.enabled || !reason.startsWith("Configured check failed:")) throw error;
+        await ledger.recordFailure(reason);
       }
-      for (const check of checks) {
-        emitRun({ type: "status", phase: `检查 ${check.name}`, runId });
-        const permission = ledger.state.projectId
-          ? { mode: ledger.state.permissionMode ?? "ask", roots: await projectStore.roots(ledger.state.projectId, ledger.state.projectVersion ?? 0) }
-          : undefined;
-        const result = await runCodeCheck(projectRoot, dataRoot, ledger.state.id, check.name, checks, controller.signal, permission);
-        checkResults.push({ name: check.name, passed: result.passed, logPath: result.logPath });
-        if (!result.passed) break;
-      }
-      if (await fingerprintSource(projectRoot) !== ledger.state.revision) throw new Error("Project source changed during checks; review and rerun");
-      const checkPath = join(dataRoot, "evidence", `${ledger.state.id}-${runId}-checks.json`);
-      await writeFile(checkPath, JSON.stringify({ checks: checkResults }, null, 2), { flag: "wx" });
-      const passed = checkResults.length === Math.max(1, checks.length) && checkResults.every(item => item.passed);
-      await ledger.recordEvidence({ criterionId: "check", kind: "test", revision: ledger.state.revision!, passed, source: checkPath });
-      if (!passed) throw new Error(`Configured check failed: ${checkResults.find(item => !item.passed)?.name}`);
-      if (ledger.completionGaps().length) {
+      if (!accepted) {
         emitRun({ type: "status", phase: "待验收", runId, pending: ledger.completionGaps() });
-        return;
+        return ledger;
       }
-      if (ledger.state.projectId) await projectStore.roots(ledger.state.projectId, ledger.state.projectVersion ?? 0);
-      await ledger.complete();
       emitRun({ type: "task", task: taskView(ledger) });
       emitRun({ type: "status", phase: "已验收", runId, pending: [] });
-      return;
+      return ledger;
     }
     if (ledger.state.taskType === "research" || ledger.state.taskType === "file-work") {
-      await verifyGeneralDeliverable(ledger, dataRoot);
+      try { await verifyGeneralDeliverable(ledger, dataRoot, false); }
+      catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        if (!ledger.state.goal?.enabled || /Input changed|Workspace changed|outside|source unavailable/i.test(reason)) throw error;
+        await ledger.recordFailure(reason);
+        emitRun({ type: "status", phase: "待验收", runId, pending: ledger.completionGaps() });
+        return ledger;
+      }
       emitRun({ type: "task", task: taskView(ledger) });
       emitRun({ type: "status", phase: "已验收", runId, pending: [] });
-      return;
+      return ledger;
     }
     emitRun({ type: "status", phase: "验证构建", runId });
     if (!(await build(projectRoot, ledger, controller.signal))) {
       emitRun({ type: "status", phase: controller.signal.aborted ? "已停止" : "失败", runId, pending: ledger.completionGaps() });
-      return;
+      return ledger;
     }
     emitRun({ type: "status", phase: "发布本机预览", runId });
     await publishPreview(ledger, projectRoot);
@@ -558,12 +707,12 @@ async function execute(runId: string, objective: string, projectRoot: string, co
           const verified = await TaskLedger.load(ledger.file);
           emitRun({ type: "task", task: taskView(verified) });
           emitRun({ type: "tool", name: "browser", state: "通过" });
-          emitRun({ type: "status", phase: "已验收", runId, pending: verified.completionGaps() });
-          return;
+          emitRun({ type: "status", phase: verified.completionGaps().length ? "待验收" : "已验收", runId, pending: verified.completionGaps() });
+          return verified;
         } catch (error) {
-          if (controlHolder === "user") {
+          if (webKernel.controlHolder === "user") {
             emitRun({ type: "status", phase: "用户接管", runId, pending: (await TaskLedger.load(ledger.file)).completionGaps() });
-            return;
+            return await TaskLedger.load(ledger.file);
           }
           const reason = error instanceof Error ? error.message : String(error);
           emitRun({ type: "tool", name: "browser", state: `验收失败：${reason.slice(0, 400)}`, error: true });
@@ -574,7 +723,7 @@ async function execute(runId: string, objective: string, projectRoot: string, co
           emitRun({ type: "status", phase: "修复中", runId, pending: current.completionGaps() });
           const failedRevision = current.state.revision;
           const repaired = await modelRun({
-            ...await configuredRun(current.state.modelSelector),
+            ...await configuredRun(current.state.modelSelector, current),
             projectRoot, dataRoot, signal: controller.signal, existingLedger: current,
             objective: `Visible browser acceptance failed: ${reason}. Read the failure evidence and inspect the exact failing step. Decide whether the product or the verification plan is wrong; preserve the original requirements and do not change product code to fix an invalid test selector. Then rebuild.`,
             onEvent: forwardEvent,
@@ -591,12 +740,31 @@ async function execute(runId: string, objective: string, projectRoot: string, co
     }
     const current = await TaskLedger.load(ledger.file);
     emitRun({ type: "status", phase: "待验收", runId, pending: current.completionGaps() });
+    return current;
+    };
+    const verified = await verifyCycle();
+    currentLedger = await TaskLedger.load(verified.file);
+    const continuation = nextGoalCycle(currentLedger, beforeProgress, controller.signal.aborted, webKernel.controlHolder === "user");
+    if (!continuation.continue && continuation.stopReason !== "no-progress") return;
+    if (continuation.stopReason === "no-progress") {
+      await currentLedger.recordFailure("Two consecutive goal cycles made no source, deliverable, or verified-evidence progress");
+      await currentLedger.setGoalProgress(continuation.noProgressRuns, "no-progress");
+      await currentLedger.stop();
+      emitRun({ type: "task", task: taskView(currentLedger) });
+      emitRun({ type: "status", phase: "无实际进展，已停止", runId, pending: currentLedger.completionGaps() });
+      return;
+    }
+    await currentLedger.setGoalProgress(continuation.noProgressRuns);
+    currentInstruction = `Continue the current task toward acceptance. Inspect the latest failed checks and evidence, choose the next justified action, and stop to ask for input if blocked. Pending: ${currentLedger.completionGaps().join(", ")}.`;
+    emitRun({ type: "status", phase: "目标继续推进", runId, pending: currentLedger.completionGaps() });
+    }
   } catch (error) {
     runError = error instanceof Error ? error.message : String(error);
     const current = active?.runId === runId && active.ledger ? await TaskLedger.load(active.ledger.file).catch(() => null) : null;
     if (current) {
       if (current.state.status === "active") {
         if (error instanceof SandboxUnavailableError) await current.needInput(error.message, "windows-sandbox");
+        else if (/^Authenticated model is unavailable:/.test(error instanceof Error ? error.message : String(error))) await current.needInput(error instanceof Error ? error.message : String(error), "model");
         else await current.recordFailure(error instanceof Error ? error.message : String(error));
       }
       emitRun({ type: "task", task: taskView(current) });
@@ -605,6 +773,16 @@ async function execute(runId: string, objective: string, projectRoot: string, co
     emitRun({ type: "status", phase: current?.state.status === "needs-input" ? "需要回答" : controller.signal.aborted ? "已停止" : "失败", runId });
   } finally {
     const ledger = active?.runId === runId ? active.ledger : existingLedger;
+    if (ledger) {
+      try {
+        const current = await TaskLedger.load(ledger.file);
+        const reason = goalStopReason(current, controller.signal.aborted, webKernel.controlHolder === "user", runError);
+        if (reason && current.state.goal?.stopReason !== reason) {
+          await current.setGoalProgress(current.state.goal?.noProgressRuns ?? 0, reason);
+          emitRun({ type: "task", task: taskView(current) });
+        }
+      } catch (error) { console.error("ALPHA_GOAL_STOP_RECORD_FAILED", error); }
+    }
     if (beforeSource && ledger) {
       try {
         await writeSourceReview(dataRoot, { taskId: ledger.state.id, operationId: runId, contractVersion: ledger.state.contractVersion ?? 1, revision: ledger.state.revision, before: beforeSource, after: await snapshotSource(projectRoot) });
@@ -614,6 +792,22 @@ async function execute(runId: string, objective: string, projectRoot: string, co
     if (controller.signal.aborted && active?.runId === runId && active.ledger) {
       const current = await TaskLedger.load(active.ledger.file).catch(() => null);
       if (current?.state.status === "active") await current.stop();
+    }
+    if (projectTurn && ledger) {
+      try {
+        const current = await TaskLedger.load(ledger.file);
+        await finalizeProjectTurn(projectTurn, current, writingToolObserved);
+        if (!runError && !controller.signal.aborted && current.state.status === "active" && current.state.phase === "execute" && !current.completionGaps().length) await current.complete();
+        emitRun({ type: "task", task: taskView(current) });
+      } catch (error) {
+        const reason = `项目状态收尾失败：${error instanceof Error ? error.message : String(error)}`;
+        runError = runError ?? reason;
+        const current = await TaskLedger.load(ledger.file).catch(() => null);
+        if (current) await current.recordCheckpointFailure(reason);
+        if (current?.state.status === "active") await current.needInput(reason, "project-state");
+        if (current) emitRun({ type: "task", task: taskView(current) });
+        emitRun({ type: "error", message: reason });
+      }
     }
     if (ledger) await operationJournal.finish(ledger.state.id, runId);
     const queueItemId = queuedRuns.get(runId);
@@ -669,15 +863,18 @@ const server = Bun.serve({
   idleTimeout: 120,
   async fetch(request, server) {
     const url = new URL(request.url);
+    // Check every mutating route before dispatch, including queue and worker controls.
+    if (request.method !== "GET" && request.method !== "HEAD" && request.headers.get("origin") && request.headers.get("origin") !== `http://127.0.0.1:${server.port}`) return new Response("Forbidden", { status: 403 });
     if (url.pathname === "/events") {
       if (request.headers.get("origin") !== `http://127.0.0.1:${server.port}`) return new Response("Forbidden", { status: 403 });
       return server.upgrade(request) ? undefined : new Response("Upgrade failed", { status: 400 });
     }
     if (url.pathname === "/health") return Response.json({ ok: true });
     if (url.pathname.startsWith("/ui")) return serveUi(url.pathname);
-    if (url.pathname === "/api/browser/control" && request.method === "GET") return Response.json({ holder: controlHolder });
+    if (url.pathname === "/api/browser/control" && request.method === "GET") return Response.json({ holder: webKernel.controlHolder });
     if (url.pathname === "/api/tasks" && request.method === "GET") {
-      return Response.json({ tasks: (await listTasks()).map(taskSummary), activeTaskId: active?.ledger?.state.id ?? null, activeRunId: active?.runId ?? null, operation: operationManager.snapshot() });
+      const queued = new Set((await taskQueue.all()).items.filter(item => item.status === "pending").map(item => item.taskId));
+      return Response.json({ tasks: (await listTasks()).map(ledger => taskSummary(ledger, queued.has(ledger.state.id))), activeTaskId: active?.ledger?.state.id ?? null, activeRunId: active?.runId ?? null, operation: operationManager.snapshot() });
     }
     if (url.pathname === "/api/queue" && request.method === "GET") return Response.json(await taskQueue.all());
     if (url.pathname === "/api/queue" && request.method === "POST") {
@@ -700,12 +897,40 @@ const server = Bun.serve({
     if (scheduleDelete && request.method === "DELETE") { await taskQueue.disable(scheduleDelete[1]); return Response.json({ disabled: true }); }
     if (url.pathname === "/api/tasks/latest" && request.method === "GET") {
       const ledgers = await listTasks();
-      return Response.json({ task: ledgers[0] ? taskView(ledgers[0]) : null });
+      const queued = new Set((await taskQueue.all()).items.filter(item => item.status === "pending").map(item => item.taskId));
+      return Response.json({ task: ledgers[0] ? taskView(ledgers[0], queued.has(ledgers[0].state.id)) : null });
+    }
+    const taskMemory = /^\/api\/tasks\/([0-9a-f-]{36})\/memory$/.exec(url.pathname);
+    if (taskMemory && request.method === "GET") {
+      const ledger = await loadLedger(taskMemory[1]);
+      if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+      return Response.json({ ...await readProjectMemorySnapshot(dataRoot, ledger.state.projectRoot, ledger), checkpoint: ledger.state.checkpoint ?? null, error: ledger.state.checkpointError ?? null });
     }
     const getTask = /^\/api\/tasks\/([0-9a-f-]{36})$/.exec(url.pathname);
     if (getTask && request.method === "GET") {
       const ledger = await loadLedger(getTask[1]);
-      return ledger ? Response.json({ task: taskView(ledger) }) : Response.json({ error: "Task not found" }, { status: 404 });
+      const queued = ledger && (await taskQueue.all()).items.some(item => item.taskId === ledger.state.id && item.status === "pending");
+      return ledger ? Response.json({ task: taskView(ledger, !!queued) }) : Response.json({ error: "Task not found" }, { status: 404 });
+    }
+    const workerDetail = /^\/api\/tasks\/([0-9a-f-]{36})\/workers\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (workerDetail && request.method === "GET") {
+      const ledger = await loadLedger(workerDetail[1]);
+      if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+      try { return Response.json(await inspectWorkerAttempt(ledger, dataRoot, workerDetail[2])); }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 404 }); }
+    }
+    const workerCancel = /^\/api\/tasks\/([0-9a-f-]{36})\/workers\/([0-9a-f-]{36})\/cancel$/.exec(url.pathname);
+    if (workerCancel && request.method === "POST") {
+      const supervisor = WorkerSupervisor.forTask(workerCancel[1]);
+      if (!supervisor) {
+        const ledger = await loadLedger(workerCancel[1]);
+        const instance = ledger?.state.cognition?.instances?.find(item => item.id === workerCancel[2]);
+        if (!ledger || instance?.status !== "returned" || operationManager.snapshot()?.taskId === workerCancel[1]) return Response.json({ error: "Worker is not active in this runtime" }, { status: 409 });
+        await ledger.updateWorker(workerCancel[2], "cancelled", { findings: ["Result discarded by user"] });
+        return Response.json({ task: taskView(ledger) });
+      }
+      try { await supervisor.cancel(workerCancel[2]); return Response.json({ task: taskView(supervisor.ledger) }); }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 }); }
     }
     const activity = /^\/api\/tasks\/([0-9a-f-]{36})\/activity$/.exec(url.pathname);
     if (activity && request.method === "GET") {
@@ -745,22 +970,26 @@ const server = Bun.serve({
       const screenshot = typeof detail.screenshot === "string" ? await safeEvidencePath(detail.screenshot) : null;
       return screenshot && extname(screenshot).toLowerCase() === ".png" ? new Response(Bun.file(screenshot), { headers: { "content-type": "image/png" } }) : new Response("Not found", { status: 404 });
     }
+    const taskInput = /^\/api\/tasks\/([0-9a-f-]{36})\/inputs\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (taskInput && request.method === "GET") {
+      const ledger = await loadLedger(taskInput[1]);
+      const item = ledger?.state.inputs?.find(input => input.id === taskInput[2]);
+      if (!item) return new Response("Not found", { status: 404 });
+      const path = await realpath(item.path).catch(() => null);
+      const allowed = [join(dataRoot, "task-inputs", ledger!.state.id), join(ledger!.state.projectRoot, "inputs")];
+      if (!path || !allowed.some(root => path.startsWith(root + sep))) return new Response("Not found", { status: 404 });
+      const bytes = await readFile(path);
+      if (createHash("sha256").update(bytes).digest("hex") !== item.sha256) return new Response("Input changed", { status: 409 });
+      return new Response(bytes, { headers: { "content-type": item.mimeType || "application/octet-stream", "content-disposition": `attachment; filename="${encodeURIComponent(item.name)}"` } });
+    }
     const artifact = /^\/api\/tasks\/([0-9a-f-]{36})\/artifacts\/([0-9a-f-]{36})$/.exec(url.pathname);
     if (artifact && request.method === "GET") {
       const ledger = await loadLedger(artifact[1]);
       const file = ledger ? await safeArtifactPath(ledger, artifact[2]) : null;
       if (!file) return new Response("Not found", { status: 404 });
-      const type = { ".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".md": "text/markdown; charset=utf-8" }[extname(file).toLowerCase()] ?? "application/octet-stream";
-      return new Response(Bun.file(file), { headers: { "content-type": type, "content-disposition": `attachment; filename="${encodeURIComponent(file.split(sep).at(-1) ?? "artifact")}"` } });
-    }
-    const taskInput = /^\/api\/tasks\/([0-9a-f-]{36})\/inputs\/([0-9a-f-]{36})$/.exec(url.pathname);
-    if (taskInput && request.method === "GET") {
-      const ledger = await loadLedger(taskInput[1]);
-      const input = ledger?.state.inputs?.find(item => item.id === taskInput[2]);
-      const root = ledger ? await realpath(join(ledger.state.projectRoot, "inputs")).catch(() => null) : null;
-      const file = input ? await realpath(input.path).catch(() => null) : null;
-      if (!input || !root || !file || !file.startsWith(root + sep) || createHash("sha256").update(await readFile(file)).digest("hex") !== input.sha256) return new Response("Not found", { status: 404 });
-      return new Response(Bun.file(file), { headers: { "content-type": input.mimeType || "application/octet-stream", "content-disposition": `attachment; filename="${encodeURIComponent(input.name)}"` } });
+      const type = { ".pdf": "application/pdf", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".md": "text/markdown; charset=utf-8", ".txt": "text/plain; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg" }[extname(file).toLowerCase()] ?? "application/octet-stream";
+      const disposition = url.searchParams.get("inline") === "1" && ["application/pdf", "image/png", "image/jpeg", "text/plain; charset=utf-8"].includes(type) ? "inline" : "attachment";
+      return new Response(Bun.file(file), { headers: { "content-type": type, "content-disposition": `${disposition}; filename="${encodeURIComponent(file.split(sep).at(-1) ?? "artifact")}"` } });
     }
     const screenshot = /^\/api\/tasks\/([0-9a-f-]{36})\/screenshot$/.exec(url.pathname);
     if (screenshot && request.method === "GET") {
@@ -786,20 +1015,89 @@ const server = Bun.serve({
       const presets = (await agentPresetStore.list()).map(({ instructions: _instructions, ...item }) => item);
       return Response.json({ presets });
     }
+    if (url.pathname === "/api/agent-presets/templates" && request.method === "GET") {
+      return Response.json({ presets: (await agentPresetStore.templates()).map(({ instructions: _instructions, ...item }) => item) });
+    }
     const presetDetail = /^\/api\/agent-presets\/([a-z][a-z0-9-]{0,63})$/.exec(url.pathname);
     if (presetDetail && request.method === "GET") {
       try { return Response.json({ preset: await agentPresetStore.get(presetDetail[1]) }); }
       catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 404 }); }
     }
     if (url.pathname === "/api/plugins" && request.method === "GET") return Response.json({ plugins: await skillPluginStore.list() });
+    if (url.pathname === "/api/capabilities" && request.method === "GET") {
+      const [plugins, skills] = await Promise.all([skillPluginStore.list(), skillPluginStore.loadSkills()]);
+      return Response.json({ plugins, skills: skills.map(item => ({ id: item.name, name: item.name.split(":").at(-1), description: item.description })) });
+    }
     if (url.pathname === "/api/models" && request.method === "GET") {
       const settings = await settingsStore.get();
       return Response.json({ ...await listModels(), default: settings.model.default, builtin: DEFAULT_MODEL });
     }
+    if (url.pathname === "/api/web/providers" && request.method === "GET") {
+      const providers = await Promise.all((["tavily", "firecrawl"] as const).map(async provider => ({ id: provider, configured: !!(process.env[provider === "tavily" ? "TAVILY_API_KEY" : "FIRECRAWL_API_KEY"] || await browserBridge?.key(provider).catch(() => null)), source: process.env[provider === "tavily" ? "TAVILY_API_KEY" : "FIRECRAWL_API_KEY"] ? "environment" : "desktop" })));
+      return Response.json({ providers, desktopBrowser: !!browserBridge });
+    }
+    const webSources = /^\/api\/tasks\/([0-9a-f-]{36})\/web-sources$/.exec(url.pathname);
+    if (webSources && request.method === "GET") {
+      if (!await loadLedger(webSources[1])) return Response.json({ error: "Task not found" }, { status: 404 });
+      return Response.json({ sources: await listResearchSources(dataRoot, webSources[1]), jobs: await webRetrieval.jobs(webSources[1]) });
+    }
+    const webApprovals = /^\/api\/tasks\/([0-9a-f-]{36})\/web-approvals$/.exec(url.pathname);
+    if (webApprovals && request.method === "GET") {
+      if (!await loadLedger(webApprovals[1])) return Response.json({ error: "Task not found" }, { status: 404 });
+      return Response.json({ approvals: await webPermissions.list(webApprovals[1]) });
+    }
+    const webTabs = /^\/api\/tasks\/([0-9a-f-]{36})\/web-tabs$/.exec(url.pathname);
+    if (webTabs && request.method === "GET") {
+      if (!await loadLedger(webTabs[1])) return Response.json({ error: "Task not found" }, { status: 404 });
+      return Response.json({ tabs: await Promise.all(webKernel.tabs(webTabs[1]).map(tab => webKernel.currentTab(webTabs[1], tab.tabId))) });
+    }
     if (url.pathname === "/api/diagnostics" && request.method === "GET") return Response.json(await diagnostics());
     if (url.pathname === "/api/storage" && request.method === "GET") return Response.json(await storageReport(dataRoot, productsRoot, await protectedPreviewIds()));
-    // Every state-changing request must come from the workbench page itself.
-    if (request.method !== "GET" && request.method !== "HEAD" && request.headers.get("origin") && request.headers.get("origin") !== `http://127.0.0.1:${server.port}`) return new Response("Forbidden", { status: 403 });
+    const webProviderKey = /^\/api\/web\/providers\/(tavily|firecrawl)\/key$/.exec(url.pathname);
+    if (webProviderKey && (request.method === "PUT" || request.method === "DELETE")) {
+      if (!browserBridge) return Response.json({ error: "Desktop key store is unavailable; configure an environment variable" }, { status: 409 });
+      try {
+        if (request.method === "DELETE") return Response.json(await browserBridge.removeKey(webProviderKey[1] as WebProvider));
+        const body = await request.json().catch(() => ({})) as { key?: unknown };
+        return Response.json(await browserBridge.setKey(webProviderKey[1] as WebProvider, typeof body.key === "string" ? body.key : ""));
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
+    const webDecision = /^\/api\/tasks\/([0-9a-f-]{36})\/web-approvals\/([0-9a-f-]{36})\/decision$/.exec(url.pathname);
+    if (webDecision && request.method === "POST") {
+      if (!await loadLedger(webDecision[1])) return Response.json({ error: "Task not found" }, { status: 404 });
+      const body = await request.json().catch(() => ({})) as { approved?: unknown };
+      if (typeof body.approved !== "boolean") return Response.json({ error: "Approval decision is required" }, { status: 400 });
+      try {
+        const approval = await webPermissions.decide(webDecision[1], webDecision[2], body.approved);
+        appendActivity(webDecision[1], "status", `网页${approval.kind === "read" ? "读取" : "动作"}${body.approved ? "已批准" : "已拒绝"}：${approval.scope}`);
+        return Response.json({ approval });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 }); }
+    }
+    const webTabOpen = /^\/api\/tasks\/([0-9a-f-]{36})\/web-tabs$/.exec(url.pathname);
+    if (webTabOpen && request.method === "POST") {
+      if (!await loadLedger(webTabOpen[1])) return Response.json({ error: "Task not found" }, { status: 404 });
+      const body = await request.json().catch(() => ({})) as { url?: unknown };
+      try {
+        const tab = await webKernel.openTab(webTabOpen[1], String(body.url ?? ""), undefined, true);
+        await webPermissions.grantRead(webTabOpen[1], `domain:${new URL(tab.url).hostname}`);
+        return Response.json({ tab });
+      }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
+    const webTabAction = /^\/api\/tasks\/([0-9a-f-]{36})\/web-tabs\/([0-9a-f-]{36})\/(focus|close)$/.exec(url.pathname);
+    if (webTabAction && request.method === "POST") {
+      try {
+        if (webTabAction[3] === "focus") await webKernel.focusTab(webTabAction[1], webTabAction[2]);
+        else await webKernel.closeTab(webTabAction[1], webTabAction[2]);
+        return Response.json({ ok: true });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 }); }
+    }
+    if (url.pathname === "/api/agent-presets" && request.method === "POST") {
+      try {
+        const body = await request.json() as { name?: unknown; description?: unknown; instructions?: unknown; skillIds?: unknown };
+        return Response.json({ preset: await agentPresetStore.create(body) });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
     const presetCopy = /^\/api\/agent-presets\/([a-z][a-z0-9-]{0,63})\/copy$/.exec(url.pathname);
     if (presetCopy && request.method === "POST") {
       try { return Response.json({ preset: await agentPresetStore.copy(presetCopy[1]) }); }
@@ -813,8 +1111,36 @@ const server = Bun.serve({
     }
     if (presetDetail && request.method === "PUT") {
       try {
-        const body = await request.json() as { name?: unknown; description?: unknown; instructions?: unknown };
+        const body = await request.json() as { name?: unknown; description?: unknown; instructions?: unknown; skillIds?: unknown };
         return Response.json({ preset: await agentPresetStore.update(presetDetail[1], body) });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
+    if (presetDetail && request.method === "DELETE") {
+      try { await agentPresetStore.delete(presetDetail[1]); return Response.json({ deleted: true }); }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
+    const skillDecision = /^\/api\/tasks\/([0-9a-f-]{36})\/skills\/([0-9a-f-]{36})\/decision$/.exec(url.pathname);
+    if (skillDecision && request.method === "POST") {
+      try {
+        const body = await request.json() as { decision?: unknown };
+        if (body.decision !== "install" && body.decision !== "reject") throw new SkillPluginError("Skill 提案决定无效");
+        let ledger = active?.ledger?.state.id === skillDecision[1] ? active.ledger : await loadLedger(skillDecision[1]);
+        if (!ledger) return Response.json({ error: "任务不存在" }, { status: 404 });
+        if (!await taskRootAllowed(ledger)) return Response.json({ error: "Task workspace is unavailable" }, { status: 403 });
+        const proposal = ledger.state.cognition?.skillProposals?.find(item => item.id === skillDecision[2] && item.status === "pending");
+        if (!proposal) throw new SkillPluginError("Skill 提案不存在或已处理");
+        const installedSkillId = body.decision === "install" ? (await skillPluginStore.installSelectedSkill(proposal)).skillId : undefined;
+        try { await ledger.decideSkillProposal(proposal.id, body.decision === "install" ? "installed" : "rejected", installedSkillId); }
+        catch (error) {
+          if (!(error instanceof Error) || !error.message.includes("Task ledger changed in another operation") || active?.ledger?.state.id === skillDecision[1]) throw error;
+          const latest = await loadLedger(skillDecision[1]);
+          const pending = latest?.state.cognition?.skillProposals?.find(item => item.id === proposal.id && item.status === "pending");
+          if (!latest || !pending || pending.source !== proposal.source || pending.revision !== proposal.revision || pending.path !== proposal.path) throw new SkillPluginError("任务或提案已变化；请刷新后重新决定");
+          await latest.decideSkillProposal(proposal.id, body.decision === "install" ? "installed" : "rejected", installedSkillId);
+          ledger = latest;
+        }
+        emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+        return Response.json({ task: taskView(ledger) });
       } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
     }
     if (url.pathname === "/api/storage/cleanup-previews" && request.method === "POST") {
@@ -967,17 +1293,23 @@ const server = Bun.serve({
       try { return Response.json({ project: await projectStore.create(body.name as string) }, { status: 201 }); }
       catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
     }
+    const projectSettings = /^\/api\/projects\/([0-9a-f-]{36})\/settings$/.exec(url.pathname);
+    if (projectSettings && request.method === "PATCH") {
+      const body = await request.json().catch(() => ({})) as { permissionMode?: unknown };
+      try { return Response.json({ project: await projectStore.setPermission(projectSettings[1], body.permissionMode as "ask" | "auto" | "full") }); }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
     const projectMounts = /^\/api\/projects\/([0-9a-f-]{36})\/mounts$/.exec(url.pathname);
     if (projectMounts && request.method === "POST") {
       if (active || operationManager.snapshot()) return Response.json({ error: "Wait for the current operation before changing mounts" }, { status: 409 });
       const body = await request.json().catch(() => ({})) as { path?: unknown };
-      try { return Response.json({ project: await projectStore.mount(projectMounts[1], body.path as string) }); }
+      try { const project = await projectStore.mount(projectMounts[1], body.path as string); await pauseTasksForProjectChange(project.id, project.version); return Response.json({ project }); }
       catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
     }
     const projectUnmount = /^\/api\/projects\/([0-9a-f-]{36})\/mounts\/([0-9a-f-]{36})$/.exec(url.pathname);
     if (projectUnmount && request.method === "DELETE") {
       if (active || operationManager.snapshot()) return Response.json({ error: "Wait for the current operation before changing mounts" }, { status: 409 });
-      try { return Response.json({ project: await projectStore.unmount(projectUnmount[1], projectUnmount[2]) }); }
+      try { const project = await projectStore.unmount(projectUnmount[1], projectUnmount[2]); await pauseTasksForProjectChange(project.id, project.version); return Response.json({ project }); }
       catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
     }
     const projectTask = /^\/api\/projects\/([0-9a-f-]{36})\/tasks$/.exec(url.pathname);
@@ -997,12 +1329,33 @@ const server = Bun.serve({
       } catch (error) { return Response.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 503 }); }
       finally { operationManager.release(lease); }
     }
+    const projectRecheck = /^\/api\/tasks\/([0-9a-f-]{36})\/project\/recheck$/.exec(url.pathname);
+    if (projectRecheck && request.method === "POST") {
+      const lease = operationManager.claim("sandbox-check", projectRecheck[1]);
+      if (!lease) return Response.json({ error: "Another operation is running" }, { status: 409 });
+      try {
+        const ledger = await loadLedger(projectRecheck[1]);
+        const project = ledger?.state.projectId ? await projectStore.get(ledger.state.projectId) : null;
+        if (!ledger || !project) return Response.json({ error: "Project task not found" }, { status: 404 });
+        const roots = await projectStore.roots(project.id, project.version);
+        if (ledger.state.workspaceOrigin?.kind === "direct") {
+          if (!roots.some(root => root.toLowerCase() === ledger.state.projectRoot.toLowerCase())) return Response.json({ error: "The original working directory is no longer mounted; create a new task in the replacement directory" }, { status: 409 });
+          await verifySandbox({ cwd: ledger.state.projectRoot, roots, dataRoot, signal: lease.controller.signal });
+        }
+        await ledger.confirmProjectVersion(project.version);
+        emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+        return Response.json({ task: taskView(ledger) });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 503 }); }
+      finally { operationManager.release(lease); }
+    }
     if (projectTask && request.method === "POST") {
       const lease = operationManager.claim("run");
       if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
       let launched = false;
       try {
-        const body = await request.json().catch(() => ({})) as { mountId?: unknown; objective?: unknown; model?: unknown; permissionMode?: unknown };
+        const body = await request.json().catch(() => ({})) as { mountId?: unknown; objective?: unknown; model?: unknown; permissionMode?: unknown; expertId?: unknown; startMode?: unknown; continueUntilAccepted?: unknown };
+        const launch = startOptions(body.startMode, body.continueUntilAccepted);
+        if (!launch) return Response.json({ error: "Invalid task start options" }, { status: 400 });
         const project = await projectStore.get(projectTask[1]);
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
         const mount = project.mounts.find(item => item.id === body.mountId);
@@ -1012,13 +1365,16 @@ const server = Bun.serve({
         if (body.model !== undefined && body.model !== null && !isModelSelector(body.model)) return Response.json({ error: "模型格式不正确" }, { status: 400 });
         const model = typeof body.model === "string" ? body.model : undefined;
         if (model && !(await isModelAvailable(model))) return Response.json({ error: "这个模型没有可用的认证" }, { status: 400 });
+        const expertId = typeof body.expertId === "string" && body.expertId ? body.expertId : undefined;
+        if (body.expertId != null && body.expertId !== "" && (!expertId || !(await agentPresetStore.enabled()).some(item => item.id === expertId))) return Response.json({ error: "指定专家不存在或未启用" }, { status: 400 });
         const ledger = await TaskLedger.create(dataRoot, { objective, projectRoot: mount.path, taskType: "code-change", projectId: project.id, projectVersion: project.version,
-          permissionMode: body.permissionMode as "ask" | "auto" | "full", workspaceOrigin: { kind: "direct", checks: await configuredChecks(mount.path) }, modelSelector: model,
+          permissionMode: body.permissionMode as "ask" | "auto" | "full", workspaceOrigin: { kind: "direct", checks: await configuredChecks(mount.path) }, modelSelector: model, designatedExpertId: expertId,
+          ...launch,
           criteria: [{ id: "change", description: "Source changes are reviewable", kind: "asset" }, { id: "check", description: "Configured project checks pass", kind: "test" }],
         });
-        const baseline = Object.fromEntries(Object.entries(await snapshotSource(mount.path)).map(([path, value]) => [path, createHash("sha256").update(value).digest("hex")]));
+        const baseline = await snapshotSourceHashes(mount.path);
         await mkdir(directBaselineRoot, { recursive: true });
-        await writeFile(join(directBaselineRoot, `${ledger.state.id}.json`), JSON.stringify(baseline), { flag: "wx" });
+        await writeFile(join(directBaselineRoot, `${ledger.state.id}.json`), JSON.stringify({ format: 2, files: baseline }), { flag: "wx" });
         operationManager.update(lease, { taskId: ledger.state.id });
         if (lease.controller.signal.aborted) { await ledger.stop(); return Response.json({ error: "Task was cancelled", taskId: ledger.state.id }, { status: 409 }); }
         const runId = randomUUID();
@@ -1036,14 +1392,18 @@ const server = Bun.serve({
       if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
       let launched = false;
       try {
-        const body = await request.json().catch(() => ({})) as { sourcePath?: unknown; objective?: unknown; model?: unknown };
+        const body = await request.json().catch(() => ({})) as { sourcePath?: unknown; objective?: unknown; model?: unknown; expertId?: unknown; startMode?: unknown; continueUntilAccepted?: unknown };
+        const launch = startOptions(body.startMode, body.continueUntilAccepted);
+        if (!launch) return Response.json({ error: "Invalid task start options" }, { status: 400 });
         const sourcePath = typeof body.sourcePath === "string" ? body.sourcePath.trim() : "";
         const objective = typeof body.objective === "string" ? body.objective.trim() : "";
         if (!sourcePath || !objective) return Response.json({ error: "Source path and objective are required" }, { status: 400 });
         if (body.model !== undefined && body.model !== null && !isModelSelector(body.model)) return Response.json({ error: "模型格式不正确" }, { status: 400 });
         const model = typeof body.model === "string" ? body.model : undefined;
         if (model && !(await isModelAvailable(model))) return Response.json({ error: "这个模型没有可用的认证" }, { status: 400 });
-        const ledger = await importCodeWorkspace({ sourcePath, productsRoot, dataRoot, objective, modelSelector: model });
+        const expertId = typeof body.expertId === "string" && body.expertId ? body.expertId : undefined;
+        if (body.expertId != null && body.expertId !== "" && (!expertId || !(await agentPresetStore.enabled()).some(item => item.id === expertId))) return Response.json({ error: "指定专家不存在或未启用" }, { status: 400 });
+        const ledger = await importCodeWorkspace({ sourcePath, productsRoot, dataRoot, objective, modelSelector: model, designatedExpertId: expertId, ...launch });
         operationManager.update(lease, { taskId: ledger.state.id });
         if (lease.controller.signal.aborted) { await ledger.stop(); return Response.json({ error: "Import was cancelled", taskId: ledger.state.id }, { status: 409 }); }
         const runId = randomUUID();
@@ -1065,6 +1425,8 @@ const server = Bun.serve({
         const taskType = form.get("taskType");
         const objective = form.get("objective");
         const modelValue = form.get("model");
+        const launch = startOptions(form.get("startMode") ?? undefined, form.has("continueUntilAccepted") ? form.get("continueUntilAccepted") === "true" : undefined);
+        if (!launch || form.has("continueUntilAccepted") && !["true", "false"].includes(String(form.get("continueUntilAccepted")))) return Response.json({ error: "Invalid task start options" }, { status: 400 });
         if (taskType !== "research" && taskType !== "file-work" || typeof objective !== "string" || !objective.trim()) return Response.json({ error: "Task type and objective are required" }, { status: 400 });
         const model = typeof modelValue === "string" && modelValue ? modelValue : undefined;
         if (model && (!isModelSelector(model) || !(await isModelAvailable(model)))) return Response.json({ error: "Model is unavailable" }, { status: 400 });
@@ -1072,7 +1434,7 @@ const server = Bun.serve({
           if (!(item instanceof File)) throw new Error("Input must be a file");
           return { name: item.name, mimeType: item.type, bytes: new Uint8Array(await item.arrayBuffer()) };
         }));
-        const ledger = await createGeneralWorkspace({ taskType, objective, productsRoot, dataRoot, modelSelector: model, files });
+        const ledger = await createGeneralWorkspace({ taskType, objective, productsRoot, dataRoot, modelSelector: model, files, ...launch });
         operationManager.update(lease, { taskId: ledger.state.id });
         if (lease.controller.signal.aborted) { await ledger.stop(); return Response.json({ error: "Task was cancelled", taskId: ledger.state.id }, { status: 409 }); }
         const runId = randomUUID();
@@ -1085,16 +1447,60 @@ const server = Bun.serve({
         return Response.json({ taskId: ledger.state.id, runId });
       } finally { if (!launched) operationManager.release(lease); }
     }
+    if (url.pathname === "/api/tasks/general" && request.method === "POST") {
+      try {
+        const form = await request.formData();
+        const objective = String(form.get("objective") ?? "").trim();
+        const modelValue = form.get("model");
+        const model = typeof modelValue === "string" && modelValue ? modelValue : undefined;
+        const launch = startOptions(form.get("startMode") ?? undefined, form.has("continueUntilAccepted") ? form.get("continueUntilAccepted") === "true" : undefined);
+        if (!objective || !launch) return Response.json({ error: "Objective and valid start options are required" }, { status: 400 });
+        if (model && (!isModelSelector(model) || !(await isModelAvailable(model)))) return Response.json({ error: "Model is unavailable" }, { status: 400 });
+        const projectId = String(form.get("projectId") ?? "");
+        const mountId = String(form.get("mountId") ?? "");
+        const project = projectId ? await projectStore.get(projectId) : null;
+        if (projectId && !project) return Response.json({ error: "Project not found" }, { status: 404 });
+        const mount = project?.mounts.find(item => item.id === mountId);
+        if (mountId && !mount) return Response.json({ error: "Primary working directory is not mounted" }, { status: 400 });
+        if (project?.mounts.length && !mount) return Response.json({ error: "Choose the primary working directory" }, { status: 400 });
+        const permissionMode = form.get("permissionMode") ?? project?.permissionMode ?? "ask";
+        if (!["ask", "auto", "full"].includes(String(permissionMode))) return Response.json({ error: "Invalid permission mode" }, { status: 400 });
+        const roots = project ? await projectStore.roots(project.id, project.version) : [];
+        if (mount) {
+          await verifySandbox({ cwd: mount.path, roots, dataRoot, signal: new AbortController().signal });
+        }
+        const skillIds = JSON.parse(String(form.get("skillIds") ?? "[]")) as unknown;
+        const pluginIds = JSON.parse(String(form.get("pluginIds") ?? "[]")) as unknown;
+        const capabilities = await selectedCapabilities(skillIds, pluginIds, !!mount);
+        const files = await uploadedFiles(form.getAll("files"));
+        const projectRoot = mount?.path ?? (project ? join(productsRoot, `project-${project.id}`) : join(productsRoot, `work-${randomUUID()}`));
+        if (!mount) await mkdir(projectRoot, { recursive: true });
+        const ledger = await TaskLedger.create(dataRoot, { objective, projectRoot, taskType: "general", criteria: [],
+          workspaceOrigin: { kind: mount ? "direct" : "generated", ...(mount ? { checks: await configuredChecks(mount.path) } : {}) },
+          ...(project ? { projectId: project.id, projectVersion: project.version, permissionMode: permissionMode as "ask" | "auto" | "full" } : {}),
+          capabilities, modelSelector: model, ...launch,
+        });
+        await addTaskInputs(ledger, dataRoot, files);
+        const baseline = await snapshotSourceHashes(projectRoot);
+        await mkdir(directBaselineRoot, { recursive: true });
+        await writeFile(join(directBaselineRoot, `${ledger.state.id}.json`), JSON.stringify({ format: 2, files: baseline }), { flag: "wx" });
+        await taskQueue.enqueue(ledger.state.id, objective);
+        emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger, true) });
+        await drainQueue();
+        const runId = active?.ledger?.state.id === ledger.state.id ? active.runId : null;
+        return Response.json({ taskId: ledger.state.id, runId, queued: !runId });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
     const approvals = /^\/api\/tasks\/([0-9a-f-]{36})\/approvals$/.exec(url.pathname);
     if (approvals && request.method === "GET") {
       const ledger = await loadLedger(approvals[1]);
-      if (!ledger || ledger.state.taskType !== "code-change") return Response.json({ error: "Code task not found" }, { status: 404 });
+      if (!ledger || !["code-change", "general"].includes(ledger.state.taskType ?? "")) return Response.json({ error: "Code task not found" }, { status: 404 });
       return Response.json({ approvals: await commandApprovals.list(ledger.state.id) });
     }
     const approvalDecision = /^\/api\/tasks\/([0-9a-f-]{36})\/approvals\/([0-9a-f-]{36})\/decision$/.exec(url.pathname);
     if (approvalDecision && request.method === "POST") {
       const ledger = await loadLedger(approvalDecision[1]);
-      if (!ledger || ledger.state.taskType !== "code-change") return Response.json({ error: "Code task not found" }, { status: 404 });
+      if (!ledger || !["code-change", "general"].includes(ledger.state.taskType ?? "")) return Response.json({ error: "Code task not found" }, { status: 404 });
       const body = await request.json().catch(() => ({})) as { approved?: unknown };
       if (typeof body.approved !== "boolean") return Response.json({ error: "Approval decision is required" }, { status: 400 });
       try {
@@ -1119,7 +1525,32 @@ const server = Bun.serve({
         if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
         const body = await request.json().catch(() => ({})) as { revision?: unknown };
         if (typeof body.revision !== "string") return Response.json({ error: "Reviewed revision is required" }, { status: 400 });
-        const changes = await applyCodeChanges(ledger, dataRoot, body.revision);
+        const review = await reviewCodeApply(ledger, dataRoot);
+        const sourceRoot = ledger.state.workspaceOrigin?.sourcePath;
+        if (!sourceRoot) return Response.json({ error: "Import source is missing" }, { status: 409 });
+        const turn = await prepareProjectTurn({ dataRoot, projectRoot: sourceRoot, runId: randomUUID(), ledger });
+        await ledger.recordCheckpointStart();
+        try { assertWritablePaths(turn, review.changes.map(change => resolve(sourceRoot, change.path))); }
+        catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          await ledger.recordCheckpointFailure(reason);
+          await finalizeProjectTurn(turn, ledger).catch(() => undefined);
+          await ledger.recordCheckpointFailure(reason);
+          return Response.json({ error: reason }, { status: 409 });
+        }
+        let changes: Awaited<ReturnType<typeof applyCodeChanges>> = [];
+        let applyError: string | null = null;
+        try { changes = await applyCodeChanges(ledger, dataRoot, body.revision); }
+        catch (error) { applyError = error instanceof Error ? error.message : String(error); await ledger.recordCheckpointFailure(`应用失败：${applyError}`); }
+        try { await finalizeProjectTurn(turn, ledger); }
+        catch (error) {
+          const reason = `应用后自动提交失败：${error instanceof Error ? error.message : String(error)}`;
+          await ledger.recordCheckpointFailure(reason);
+          return Response.json({ error: reason }, { status: 409 });
+        }
+        if (applyError) await ledger.recordCheckpointFailure(`应用失败：${applyError}`);
+        emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+        if (applyError) return Response.json({ error: applyError }, { status: 409 });
         appendActivity(ledger.state.id, "status", `隔离成果已应用回原项目：${changes.length} 个文件`);
         return Response.json({ applied: changes });
       } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 }); }
@@ -1130,12 +1561,16 @@ const server = Bun.serve({
       if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
       let launched = false;
       try {
-      const body = await request.json().catch(() => ({})) as { brief?: unknown; model?: unknown };
+      const body = await request.json().catch(() => ({})) as { brief?: unknown; model?: unknown; expertId?: unknown; startMode?: unknown; continueUntilAccepted?: unknown };
+      const launch = startOptions(body.startMode, body.continueUntilAccepted);
+      if (!launch) return Response.json({ error: "Invalid task start options" }, { status: 400 });
       const brief = typeof body.brief === "string" ? body.brief.trim() : "";
       if (!brief) return Response.json({ error: "Brief is required" }, { status: 400 });
       if (body.model !== undefined && body.model !== null && !isModelSelector(body.model)) return Response.json({ error: "模型格式不正确" }, { status: 400 });
       const chosenModel = typeof body.model === "string" ? body.model : undefined;
       if (chosenModel && !(await isModelAvailable(chosenModel))) return Response.json({ error: "这个模型没有可用的认证" }, { status: 400 });
+      const expertId = typeof body.expertId === "string" && body.expertId ? body.expertId : undefined;
+      if (body.expertId != null && body.expertId !== "" && (!expertId || !(await agentPresetStore.enabled()).some(item => item.id === expertId))) return Response.json({ error: "指定专家不存在或未启用" }, { status: 400 });
       const runId = randomUUID();
       const projectRoot = join(productsRoot, runId);
       await mkdir(productsRoot, { recursive: true });
@@ -1144,7 +1579,7 @@ const server = Bun.serve({
       controller.signal.throwIfAborted();
       active = { runId, controller, steeringIds: new Set() };
       launched = true;
-      void execute(runId, brief, projectRoot, controller, lease, undefined, chosenModel);
+       void execute(runId, brief, projectRoot, controller, lease, undefined, chosenModel, expertId, launch);
       return Response.json({ runId, projectRoot });
       } finally {
         if (!launched) operationManager.release(lease);
@@ -1165,13 +1600,12 @@ const server = Bun.serve({
     if (url.pathname === "/api/browser/control" && request.method === "POST") {
       const body = await request.json().catch(() => ({})) as { holder?: unknown };
       if (body.holder !== "alpha" && body.holder !== "user") return Response.json({ error: "Invalid browser holder" }, { status: 400 });
-      controlHolder = body.holder;
-      if (controlHolder === "user") {
+      webKernel.setControl(body.holder);
+      if (webKernel.controlHolder === "user") {
         verification?.controller.abort(new Error("User took over the browser"));
-        if (modelBrowser) void modelBrowser.disconnect();
       }
-      emit({ type: "control", holder: controlHolder });
-      return Response.json({ holder: controlHolder });
+      emit({ type: "control", holder: webKernel.controlHolder });
+      return Response.json({ holder: webKernel.controlHolder });
     }
     const guidance = /^\/api\/tasks\/([0-9a-f-]{36})\/guidance$/.exec(url.pathname);
     if (guidance && request.method === "POST") {
@@ -1192,6 +1626,112 @@ const server = Bun.serve({
       }
       emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
       return Response.json({ id, status: ledger.state.guidanceHistory?.find(item => item.id === id)?.status });
+    }
+    const taskMessage = /^\/api\/tasks\/([0-9a-f-]{36})\/messages$/.exec(url.pathname);
+    if (taskMessage && request.method === "POST") {
+      const form = await request.formData();
+      const text = String(form.get("text") ?? "").trim();
+      const files = await uploadedFiles(form.getAll("files"));
+      if (!text && !files.length && active?.ledger?.state.id === taskMessage[1]) return Response.json({ error: "Message or attachments are required" }, { status: 400 });
+      const selected = form.has("skillIds") || form.has("pluginIds");
+      const live = active?.ledger?.state.id === taskMessage[1] && !!active.steer;
+      if (active && !live) return Response.json({ error: "Wait until this task can accept a message" }, { status: 409 });
+      if (live) {
+        if (selected) return Response.json({ error: "Skill and plugin changes take effect on the next run" }, { status: 409 });
+        const ledger = active!.ledger!;
+        await addTaskInputs(ledger, dataRoot, files);
+        const instruction = [text, ...files.map(file => `Attached: ${file.name}`)].filter(Boolean).join("\n");
+        const id = await ledger.recordGuidance(instruction);
+        appendActivity(ledger.state.id, "guidance", `补充要求已记录：${instruction}`);
+        await deliverGuidance(ledger, id, instruction, active!.steer!);
+        emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+        return Response.json({ taskId: ledger.state.id, delivered: true });
+      }
+      const lease = operationManager.claim("run", taskMessage[1]);
+      if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
+      let launched = false;
+      try {
+        const ledger = await loadLedger(taskMessage[1]);
+        if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+        if (!await taskRootAllowed(ledger)) return Response.json({ error: "Project folders changed; review the project before continuing" }, { status: 409 });
+        const capabilities = selected ? await selectedCapabilities(JSON.parse(String(form.get("skillIds") ?? "[]")), JSON.parse(String(form.get("pluginIds") ?? "[]")), ledger.state.workspaceOrigin?.kind === "direct") : null;
+        if (ledger.state.status === "complete" || form.get("forceRevision") === "true") {
+          if (!text) return Response.json({ error: "A modification request is required for a completed task" }, { status: 400 });
+          await ledger.reviseObjective(text);
+        }
+        if (capabilities) await ledger.setCapabilities(capabilities);
+        await addTaskInputs(ledger, dataRoot, files);
+        const instruction = [text || "Review the newly attached materials and continue the task.", ...files.map(file => `Attached: ${file.name}`)].join("\n");
+        if (ledger.state.phase === "plan-review") await ledger.enterPlan();
+        else if (ledger.state.status === "stopped" || ledger.state.status === "needs-input") await ledger.resume(instruction);
+        else if (ledger.state.status !== "complete") await ledger.recordGuidance(instruction);
+        appendActivity(ledger.state.id, "guidance", `新消息：${instruction}`);
+        const runId = randomUUID();
+        active = { runId, controller: lease.controller, ledger, steeringIds: new Set() };
+        setContext(ledger);
+        operations.set(ledger.state.id, runId);
+        emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+        launched = true;
+        void execute(runId, instruction, ledger.state.projectRoot, lease.controller, lease, ledger);
+        return Response.json({ taskId: ledger.state.id, runId, contractVersion: ledger.state.contractVersion });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+      finally { if (!launched) operationManager.release(lease); }
+    }
+    const enterPlan = /^\/api\/tasks\/([0-9a-f-]{36})\/plan\/enter$/.exec(url.pathname);
+    if (enterPlan && request.method === "POST") {
+      const lease = operationManager.claim("run", enterPlan[1]);
+      if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
+      let launched = false;
+      try {
+        const ledger = await loadLedger(enterPlan[1]);
+        if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+        if (!await taskRootAllowed(ledger)) return Response.json({ error: "Task workspace is unavailable" }, { status: 403 });
+        await ledger.enterPlan();
+        const runId = randomUUID();
+        active = { runId, controller: lease.controller, ledger, steeringIds: new Set() };
+        setContext(ledger);
+        operations.set(ledger.state.id, runId);
+        emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+        launched = true;
+        void execute(runId, "Investigate the current task and record a revised plan for user review.", ledger.state.projectRoot, lease.controller, lease, ledger);
+        return Response.json({ taskId: ledger.state.id, runId });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 }); }
+      finally { if (!launched) operationManager.release(lease); }
+    }
+    const approvePlan = /^\/api\/tasks\/([0-9a-f-]{36})\/plan\/approve$/.exec(url.pathname);
+    if (approvePlan && request.method === "POST") {
+      const lease = operationManager.claim("run", approvePlan[1]);
+      if (!lease) return Response.json({ error: "A task is already running" }, { status: 409 });
+      let launched = false;
+      try {
+        const ledger = await loadLedger(approvePlan[1]);
+        if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+        if (!await taskRootAllowed(ledger)) return Response.json({ error: "Task workspace is unavailable" }, { status: 403 });
+        const body = await request.json().catch(() => ({})) as { contractVersion?: unknown; cognitionRevision?: unknown; sourceRevision?: unknown };
+        if (!Number.isSafeInteger(body.contractVersion) || !Number.isSafeInteger(body.cognitionRevision) || typeof body.sourceRevision !== "string") return Response.json({ error: "Expected plan and source versions are required" }, { status: 400 });
+        await ledger.approvePlan({ contractVersion: body.contractVersion as number, cognitionRevision: body.cognitionRevision as number, sourceRevision: body.sourceRevision });
+        const runId = randomUUID();
+        active = { runId, controller: lease.controller, ledger, steeringIds: new Set() };
+        setContext(ledger);
+        operations.set(ledger.state.id, runId);
+        emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+        launched = true;
+        void execute(runId, "Execute the approved plan and verify the current task against its acceptance criteria.", ledger.state.projectRoot, lease.controller, lease, ledger);
+        return Response.json({ taskId: ledger.state.id, runId });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 }); }
+      finally { if (!launched) operationManager.release(lease); }
+    }
+    const goalToggle = /^\/api\/tasks\/([0-9a-f-]{36})\/goal$/.exec(url.pathname);
+    if (goalToggle && request.method === "PATCH") {
+      if (operationManager.snapshot()) return Response.json({ error: "Wait for the current operation to finish" }, { status: 409 });
+      const ledger = await loadLedger(goalToggle[1]);
+      if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+      const body = await request.json().catch(() => ({})) as { enabled?: unknown };
+      if (typeof body.enabled !== "boolean") return Response.json({ error: "Goal continuation setting is required" }, { status: 400 });
+      const configured = await configuredRun(ledger.state.modelSelector, ledger);
+      await ledger.setGoal(body.enabled, { maxToolCalls: configured.maxToolCalls, wallTimeMs: configured.wallTimeMs, maxTotalToolCalls: configured.maxTotalToolCalls, totalWallTimeMs: configured.totalWallTimeMs });
+      emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+      return Response.json({ task: taskView(ledger) });
     }
     const revise = /^\/api\/tasks\/([0-9a-f-]{36})\/revise$/.exec(url.pathname);
     if (revise && request.method === "POST") {
@@ -1236,10 +1776,11 @@ const server = Bun.serve({
       const ledger = await loadLedger(resume[1]);
       if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
       if (ledger.state.status === "complete") return Response.json({ error: "Task is already complete" }, { status: 409 });
+      if (ledger.state.phase === "plan-review") return Response.json({ error: "Review the plan before execution or return to planning" }, { status: 409 });
       const projectRoot = resolve(ledger.state.projectRoot);
       if (!await taskRootAllowed(ledger)) return Response.json({ error: "Task workspace is unavailable" }, { status: 403 });
       const body = await request.json().catch(() => ({})) as { brief?: unknown };
-      const correction = typeof body.brief === "string" && body.brief.trim() ? body.brief.trim() : "Repair the pending acceptance checks while preserving the original objective.";
+      const correction = typeof body.brief === "string" && body.brief.trim() ? body.brief.trim() : ledger.state.phase === "plan" ? "Continue investigating and revise the plan for review." : "Repair the pending acceptance checks while preserving the original objective.";
       if (ledger.state.status === "stopped" || ledger.state.status === "needs-input") await ledger.resume(correction);
       else await ledger.recordGuidance(correction);
       lease.controller.signal.throwIfAborted();
@@ -1274,6 +1815,7 @@ const server = Bun.serve({
         return Response.json(currentPreview);
       }
       if (ledger.state.status === "complete") await ledger.reopen("Local preview was republished and needs browser verification");
+      if (!ledger.state.development?.enabled && (ledger.state.taskType === "web-product" || ledger.state.taskType === "code-change")) await ledger.enableDevelopmentWorkflow();
       await ledger.refreshRevision();
        const controller = lease.controller;
       if (!(await build(projectRoot, ledger, controller.signal))) return Response.json({ error: "Build failed" }, { status: 422 });
@@ -1287,10 +1829,10 @@ const server = Bun.serve({
           const verified = await TaskLedger.load(ledger.file);
           emit({ type: "task", taskId: ledger.state.id, task: taskView(verified) });
           emit({ type: "tool", taskId: ledger.state.id, name: "browser", state: "通过" });
-          emit({ type: "status", taskId: ledger.state.id, phase: "已验收", runId: publishRunId, pending: verified.completionGaps() });
+          emit({ type: "status", taskId: ledger.state.id, phase: verified.completionGaps().length ? "待验收" : "已验收", runId: publishRunId, pending: verified.completionGaps() });
         } catch (error) {
           const current = await TaskLedger.load(ledger.file);
-          if (controlHolder === "user") {
+          if (webKernel.controlHolder === "user") {
             emit({ type: "status", taskId: ledger.state.id, phase: "用户接管", runId: publishRunId, pending: current.completionGaps() });
             return Response.json(instance.record);
           }
@@ -1314,6 +1856,8 @@ const server = Bun.serve({
       const ledger = await loadLedger(verify[1]);
       if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
       if (ledger.state.status !== "active" || !ledger.state.preview || !previews.has(ledger.state.preview.id)) return Response.json({ error: "A live active preview is required" }, { status: 409 });
+      if (!await taskRootAllowed(ledger)) return Response.json({ error: "Task workspace is unavailable" }, { status: 403 });
+      if (!ledger.state.development?.enabled && (ledger.state.taskType === "web-product" || ledger.state.taskType === "code-change")) await ledger.enableDevelopmentWorkflow();
       setContext(ledger);
       const verifyRunId = randomUUID();
       operations.set(ledger.state.id, verifyRunId);
@@ -1323,11 +1867,11 @@ const server = Bun.serve({
         const verified = await TaskLedger.load(ledger.file);
         emit({ type: "task", taskId: ledger.state.id, task: taskView(verified) });
         emit({ type: "tool", taskId: ledger.state.id, name: "browser", state: "通过" });
-        emit({ type: "status", taskId: ledger.state.id, phase: "已验收", runId: verifyRunId, pending: verified.completionGaps() });
+        emit({ type: "status", taskId: ledger.state.id, phase: verified.completionGaps().length ? "待验收" : "已验收", runId: verifyRunId, pending: verified.completionGaps() });
         return Response.json({ task: taskView(verified) });
       } catch (error) {
         const current = await TaskLedger.load(ledger.file);
-        if (controlHolder === "user") {
+        if (webKernel.controlHolder === "user") {
           emit({ type: "status", taskId: ledger.state.id, phase: "用户接管", runId: verifyRunId, pending: current.completionGaps() });
           return Response.json({ paused: true, task: taskView(current) }, { status: 202 });
         }

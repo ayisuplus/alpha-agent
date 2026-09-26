@@ -3,18 +3,23 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentPresetStore } from "../src/runtime/agent-presets";
+import { TaskLedger } from "../src/runtime/task-ledger";
 import { workerSystemPrompt } from "../src/runtime/omp-runner";
 import { resolveWorkOrders } from "../src/runtime/work-order-tool";
 import { fingerprintSource } from "../src/runtime/task-ledger";
 import { executeWorkOrders, type WorkOrder } from "../src/runtime/work-orders";
+import { SkillPluginStore } from "../src/plugins/third-party";
+import { snapshotSkills } from "../src/runtime/model-workers";
+import { loadWorkerSkillSnapshots } from "../src/runtime/skill-snapshot";
 
-test("role copies persist, edits create a new snapshot, and disabled roles leave the next catalog", async () => {
+test("templates are optional, user experts persist, and deleted experts leave frozen snapshots intact", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-presets-"));
   try {
     const store = new AgentPresetStore(root);
     const initial = await store.list();
-    expect(initial.map(item => item.id)).toEqual(["general", "frontend", "backend", "ui-designer", "test-automation"]);
-    expect(initial.find(item => item.id === "frontend")?.source?.revision).toBe("053ddbbf392a1688fc7043d81529f47ef2cf86c8");
+    expect(initial).toEqual([]);
+    expect((await store.templates()).map(item => item.id)).toEqual(["frontend", "backend", "ui-designer", "test-automation"]);
+    expect((await store.get("frontend")).source?.revision).toBe("053ddbbf392a1688fc7043d81529f47ef2cf86c8");
     const original = await store.get("frontend");
     const copy = await store.copy("frontend");
     expect(copy.hash).not.toBe(original.hash);
@@ -26,10 +31,13 @@ test("role copies persist, edits create a new snapshot, and disabled roles leave
     expect(frozen.instructions).toBe(original.instructions);
     expect((await store.get("frontend")).hash).toBe(original.hash);
     expect((await new AgentPresetStore(root).get(copy.id)).name).toBe("项目前端");
-    await Promise.all([store.setEnabled("frontend", false), store.setEnabled("backend", false)]);
-    expect((await new AgentPresetStore(root).enabled()).map(item => item.id)).not.toContain("frontend");
-    expect((await new AgentPresetStore(root).enabled()).map(item => item.id)).not.toContain("backend");
-    await expect(store.setEnabled("general", false)).rejects.toThrow("必须保持可用");
+    await store.setEnabled(copy.id, false);
+    expect((await new AgentPresetStore(root).enabled())).toEqual([]);
+    const created = await store.create({ name: "审查", description: "复核源码", instructions: "检查实际差异。", skillIds: [] });
+    expect((await store.enabled()).map(item => item.id)).toEqual([created.id]);
+    await store.delete(created.id);
+    expect((await store.list()).map(item => item.id)).toEqual([copy.id]);
+    expect(frozen.hash).not.toBe(changed.hash);
     await expect(store.update("frontend", { instructions: "改掉内置内容" })).rejects.toThrow("先复制");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -41,17 +49,20 @@ test("worker receives only its selected full role and merge records the frozen v
     await mkdir(join(product, "src"), { recursive: true });
     await writeFile(join(product, "src", "front.txt"), "old");
     await writeFile(join(product, "src", "back.txt"), "old");
-    const presets = await new AgentPresetStore(join(root, "state")).enabled();
+    const store = new AgentPresetStore(join(root, "state"));
+    const front = await store.copy("frontend");
+    const back = await store.copy("backend");
+    const presets = await store.enabled();
     const orders: WorkOrder[] = resolveWorkOrders([
-      { id: "front", objective: "Edit frontend", ownedPaths: ["src/front.txt"], resources: ["front"], presetId: "frontend" },
-      { id: "back", objective: "Edit backend", ownedPaths: ["src/back.txt"], resources: ["back"], presetId: "backend" },
-    ], presets);
+      { id: "front", objective: "Edit frontend", ownedPaths: ["src/front.txt"], resources: ["front"], expertId: front.id },
+      { id: "back", objective: "Edit backend", ownedPaths: ["src/back.txt"], resources: ["back"], expertId: back.id },
+    ], presets).map(order => ({ ...order, fullAccess: true }));
     const frontPrompt = workerSystemPrompt(orders[0], orders[0].preset).join("\n");
     expect(frontPrompt).toContain(orders[0].preset!.instructions);
     expect(frontPrompt).not.toContain(orders[1].preset!.instructions);
     expect(frontPrompt).toContain("src/front.txt");
-    expect(frontPrompt).toContain("Do not edit alpha-verification.json");
-    expect(() => resolveWorkOrders([{ ...orders[0], presetId: "missing" }], presets)).toThrow("不存在或未启用");
+    expect(frontPrompt).toContain("task hints, not access limits");
+    expect(() => resolveWorkOrders([{ ...orders[0], expertId: "missing" }], presets)).toThrow("不存在或未启用");
     expect(() => workerSystemPrompt(orders[0])).toThrow("快照缺失");
     const report = await executeWorkOrders({
       projectRoot: product, dataRoot: join(root, "state"), taskId: "11111111-1111-4111-8111-111111111111", baseRevision: await fingerprintSource(product), orders,
@@ -62,8 +73,64 @@ test("worker receives only its selected full role and merge records the frozen v
     });
     expect(report.status).toBe("merged");
     expect(report.presets?.front.hash).toBe(orders[0].preset!.hash);
-    expect(report.presets?.back.id).toBe("backend");
-    expect(await readFile(join(product, "src", "front.txt"), "utf8")).toBe("前端开发");
+    expect(report.presets?.back.id).toBe(back.id);
+    expect(await readFile(join(product, "src", "front.txt"), "utf8")).toBe(front.name);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("expert package keeps a persona file and private Skill snapshot without global loading", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-expert-package-"));
+  try {
+    const pack = join(root, "plugin-packs", "sample");
+    await mkdir(join(pack, "skills", "proof"), { recursive: true });
+    await writeFile(join(pack, "skills", "proof", "SKILL.md"), "---\nname: proof\ndescription: Check evidence\n---\n\nVerify the claim.\n");
+    await writeFile(join(pack, "skills", "proof", "reference.txt"), "fixed reference");
+    await writeFile(join(root, "plugin-packs", "installed.json"), JSON.stringify({ plugins: [{ id: "sample", name: "sample", source: "https://github.com/a/sample.git", revision: "a".repeat(40), enabled: true, skillCount: 1 }] }));
+    const experts = new AgentPresetStore(root);
+    const created = await experts.create({ name: "Evidence reviewer", description: "Review changes", instructions: "Check concrete evidence.", skillIds: ["sample:proof"] });
+    const frozen = (await experts.enabled())[0];
+    const packageRoot = join(root, "expert-packs", created.id, created.package!.revision);
+    expect(await readFile(join(packageRoot, "PERSONA.md"), "utf8")).toContain("Check concrete evidence.");
+    expect(await readFile(join(packageRoot, "skills", "sample", "proof", "reference.txt"), "utf8")).toBe("fixed reference");
+    await new SkillPluginStore(root).setEnabled("sample", false);
+    expect(await new SkillPluginStore(root).loadSkills()).toEqual([]);
+    expect((await experts.loadBundledSkills(frozen)).map(item => item.name)).toEqual(["sample:proof"]);
+    const [order] = resolveWorkOrders([{ id: "review", objective: "Review proof", mode: "review", ownedPaths: [], readPaths: ["app.ts"], resources: [], expertId: created.id }], [frozen]);
+    const isolated = join(root, "isolated-worker");
+    const dispatched = await snapshotSkills(root, isolated, order);
+    expect(dispatched.skillSnapshots).toMatchObject([{ id: "sample:proof", hash: created.package!.skills[0].hash }]);
+    expect((await new SkillPluginStore(isolated).loadSkills()).map(item => item.name)).toEqual(["sample:proof"]);
+    const updated = await experts.update(created.id, { instructions: "Inspect actual diffs." });
+    expect(updated.package?.revision).not.toBe(frozen.package?.revision);
+    expect((await experts.loadBundledSkills(frozen)).map(item => item.name)).toEqual(["sample:proof"]);
+    await experts.delete(created.id);
+    expect((await experts.loadBundledSkills(frozen)).map(item => item.name)).toEqual(["sample:proof"]);
+    await writeFile(join(packageRoot, "PERSONA.md"), "tampered");
+    await expect(experts.loadBundledSkills(frozen)).rejects.toThrow("人设文件与快照不一致");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("local expert import keeps bundled Skills private and worker reads its exact snapshot", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-local-expert-"));
+  try {
+    const source = join(root, "source-skill");
+    const state = join(root, "state");
+    await mkdir(source, { recursive: true });
+    await writeFile(join(source, "SKILL.md"), "---\nname: A WorkBuddy name with spaces\ndescription: Check the result\n---\n\nCheck actual output.\n");
+    const store = new AgentPresetStore(state);
+    const record = { id: "wb-local-review", name: "Local reviewer", description: "Review source", instructions: "Inspect concrete changes.", source: { url: root, revision: "source-v1", path: "review/agents/reviewer.md" }, skills: [{ id: "wb-pack:proof", source }] };
+    const [expert] = await store.importLocalBatch([record]);
+    expect((await new SkillPluginStore(state).loadSkills())).toEqual([]);
+    expect((await store.loadBundledSkills(expert)).map(item => item.name)).toEqual(["wb-pack:proof"]);
+    const [order] = resolveWorkOrders([{ id: "review", objective: "Review", mode: "review", ownedPaths: [], readPaths: ["app.ts"], resources: [], expertId: expert.id }], [expert]);
+    const isolated = join(root, "worker-state");
+    const dispatched = await snapshotSkills(state, isolated, order);
+    expect((await loadWorkerSkillSnapshots(isolated, dispatched)).map(item => item.name)).toEqual(["wb-pack:proof"]);
+    await store.update(expert.id, { name: "Edited reviewer" });
+    const [reimported] = await store.importLocalBatch([record]);
+    expect(reimported.name).toBe("Edited reviewer");
+    await writeFile(join(isolated, "plugin-packs", "wb-pack", "skills", "proof", "SKILL.md"), "changed");
+    await expect(loadWorkerSkillSnapshots(isolated, dispatched)).rejects.toThrow("snapshot changed");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -91,7 +158,9 @@ test("workbench API lists, copies and edits roles while rejecting another origin
     const base = `http://127.0.0.1:${port}`;
     const json = { "content-type": "application/json", origin: base };
     const listed = await fetch(`${base}/api/agent-presets`).then(response => response.json()) as { presets: Array<{ id: string; instructions?: string }> };
-    expect(listed.presets.find(item => item.id === "frontend")?.instructions).toBeUndefined();
+    expect(listed.presets).toEqual([]);
+    const templates = await fetch(`${base}/api/agent-presets/templates`).then(response => response.json()) as { presets: Array<{ id: string; instructions?: string }> };
+    expect(templates.presets.find(item => item.id === "frontend")?.instructions).toBeUndefined();
     const detail = await fetch(`${base}/api/agent-presets/frontend`).then(response => response.json()) as { preset: { instructions: string } };
     expect(detail.preset.instructions).toContain("页面逻辑");
     const copied = await fetch(`${base}/api/agent-presets/frontend/copy`, { method: "POST", headers: json, body: "{}" }).then(response => response.json()) as { preset: { id: string } };
@@ -104,6 +173,24 @@ test("workbench API lists, copies and edits roles while rejecting another origin
     expect(toggled.status).toBe(200);
     const restored = await new AgentPresetStore(join(root, ".alpha")).get(id);
     expect(restored).toMatchObject({ name: "产品前端", enabled: false, instructions: "详细的项目角色要求" });
+    const removed = await fetch(`${base}/api/agent-presets/${id}`, { method: "DELETE", headers: json });
+    expect(removed.status).toBe(200);
+    expect((await new AgentPresetStore(join(root, ".alpha")).list())).toEqual([]);
+    const projectRoot = join(root, "products", "skill-task");
+    await mkdir(projectRoot, { recursive: true });
+    const ledger = await TaskLedger.create(join(root, ".alpha"), { objective: "Inspect a Skill proposal", projectRoot, taskType: "code-change", criteria: [{ id: "check", description: "Check", kind: "test" }] });
+    await ledger.recordCapabilityGap("method", "Need a testing method");
+    await ledger.recordSkillSearch({ key: "testing", gapDescription: "Need a testing method", query: "testing", proposals: [{ name: "testing", description: "Testing method", source: "https://github.com/example/skills", revision: "a".repeat(40), path: "skills/testing/SKILL.md", installs: 1 }] });
+    const proposalId = ledger.state.cognition!.skillProposals![0].id;
+    const decisionPath = `${base}/api/tasks/${ledger.state.id}/skills/${proposalId}/decision`;
+    expect((await fetch(decisionPath, { method: "POST", headers: { ...json, origin: "http://other.invalid" }, body: JSON.stringify({ decision: "reject" }) })).status).toBe(403);
+    const decided = await fetch(decisionPath, { method: "POST", headers: json, body: JSON.stringify({ decision: "reject" }) });
+    expect(decided.status).toBe(200);
+    const view = await decided.json() as { task: { cognition: { skillProposals: Array<{ status: string }> }; pending: string[] } };
+    expect(view.task.cognition.skillProposals[0].status).toBe("rejected");
+    expect(view.task.pending).toContain("capability-gap");
+    expect((await TaskLedger.load(ledger.file)).state.cognition?.skillProposals?.[0].status).toBe("rejected");
+    expect((await fetch(decisionPath, { method: "POST", headers: json, body: JSON.stringify({ decision: "reject" }) })).status).toBe(400);
   } finally {
     child?.kill();
     if (child) await child.exited;

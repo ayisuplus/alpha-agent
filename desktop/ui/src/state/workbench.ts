@@ -1,19 +1,20 @@
 import { api } from "../api/client";
 import { connectEvents, type ConnectionState } from "../api/events";
-import type { ActivityEntry, ControlHolder, ModelCatalog, OperationSnapshot, ReviewSummary, ServerMessage, Settings, SettingsPatch, TaskList, TaskMeta, TaskSummary, TaskView } from "../api/types";
+import type { ActivityEntry, ControlHolder, ModelCatalog, OperationSnapshot, ProjectRecord, ReviewSummary, ServerMessage, Settings, SettingsPatch, TaskList, TaskMeta, TaskSummary, TaskView } from "../api/types";
 import { TERMINAL_PHASES, taskTitle } from "./labels";
 import { buildTaskReport } from "./report";
 import { createStore } from "./store";
 import { mergeActivity } from "./timeline";
 
-export type Detail = { kind: "diff"; operationId: string } | { kind: "evidence"; criterionId?: string; evidenceId?: string };
-export type PendingAction = "start" | "resume" | "revise" | "guidance" | "stop" | "publish" | "verify" | "control";
+export type Detail = { kind: "diff"; operationId: string } | { kind: "evidence"; criterionId?: string; evidenceId?: string } | { kind: "info" };
+export type PendingAction = "start" | "resume" | "revise" | "guidance" | "stop" | "publish" | "verify" | "control" | "plan" | "approve" | "goal";
 export type SettingsSection = "model" | "run" | "agents" | "generation" | "interface" | "workspace" | "diagnostics" | "shortcuts";
 export type Panel = { kind: "settings"; section: SettingsSection };
 
 export interface AppState {
   loaded: boolean;
   tasks: TaskSummary[];
+  projects: ProjectRecord[];
   /** The task whose model run holds the single execution slot, as reported by the server. */
   activeTaskId: string | null;
   activeRunId: string | null;
@@ -33,6 +34,8 @@ export interface AppState {
   starting: { brief: string; error: string | null } | null;
   notice: { id: number; tone: "error" | "info"; text: string } | null;
   detail: Detail | null;
+  workspaceView: "closed" | "preview" | "detail" | "terminal";
+  browserTabId: string | null;
   /** A workbench-level page shown in the middle column instead of the task (currently only settings). */
   panel: Panel | null;
   settings: Settings | null;
@@ -44,6 +47,7 @@ export interface AppState {
 export const store = createStore<AppState>({
   loaded: false,
   tasks: [],
+  projects: [],
   activeTaskId: null,
   activeRunId: null,
   serverOperation: null,
@@ -60,6 +64,8 @@ export const store = createStore<AppState>({
   starting: null,
   notice: null,
   detail: null,
+  workspaceView: "closed",
+  browserTabId: null,
   panel: null,
   settings: null,
   models: null,
@@ -99,7 +105,9 @@ function upsertSummary(tasks: TaskSummary[], task: TaskView): TaskSummary[] {
   const summary: TaskSummary = {
     id: task.id, objective: task.objective, originalObjective: task.originalObjective, contractVersion: task.contractVersion,
     status: task.status, running: task.running, pendingCount: task.pending.length, createdAt: task.createdAt, updatedAt: task.updatedAt,
-    modelSelector: task.modelSelector, meta: task.meta,
+    modelSelector: task.modelSelector, meta: task.meta, projectId: task.projectId, projectVersion: task.projectVersion,
+    permissionMode: task.permissionMode, taskType: task.taskType, workspaceOrigin: task.workspaceOrigin,
+    designatedExpertId: task.designatedExpertId, phase: task.phase, goal: task.goal, queued: task.queued,
   };
   const index = tasks.findIndex(item => item.id === task.id);
   if (index < 0) return [summary, ...tasks];
@@ -114,9 +122,13 @@ async function loadRunningPreview(id: string): Promise<void> {
   if (task?.preview?.live && (state.serverOperation?.browserTaskId ?? state.serverOperation?.taskId ?? state.activeTaskId) === id) store.set({ runningPreview: { taskId: id, url: task.preview.url } });
 }
 
+let tasksRequestVersion = 0;
+let selectedRequestVersion = 0;
 export async function refreshTasks(): Promise<TaskList | null> {
+  const version = ++tasksRequestVersion;
   let list: TaskList;
   try { list = await api.tasks(); } catch { return null; }
+  if (version !== tasksRequestVersion) return null;
   const previous = store.get();
   store.set({
     loaded: true, tasks: list.tasks, activeTaskId: list.activeTaskId, activeRunId: list.activeRunId,
@@ -131,6 +143,11 @@ export async function refreshTasks(): Promise<TaskList | null> {
   return list;
 }
 
+export async function refreshProjects(): Promise<void> {
+  try { store.set({ projects: await api.projects() }); }
+  catch { /* Project navigation remains usable with the last loaded list. */ }
+}
+
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleTasksRefresh(): void {
   clearTimeout(refreshTimer);
@@ -139,8 +156,9 @@ function scheduleTasksRefresh(): void {
 
 /** Refetches the selected task; results for a task that is no longer selected are dropped. */
 export async function syncSelected(id: string): Promise<void> {
+  const version = ++selectedRequestVersion;
   const [task, activity, reviews] = await Promise.allSettled([api.task(id), api.activity(id), api.reviews(id)]);
-  if (store.get().selectedId !== id) return;
+  if (store.get().selectedId !== id || version !== selectedRequestVersion) return;
   store.set(state => ({
     task: task.status === "fulfilled" ? task.value : state.task,
     activity: activity.status === "fulfilled" ? mergeActivity(state.activity, activity.value) : state.activity,
@@ -152,19 +170,47 @@ export async function syncSelected(id: string): Promise<void> {
 export async function openTask(id: string): Promise<void> {
   const state = store.get();
   if (state.selectedId !== id) {
-    store.set({ selectedId: id, task: null, activity: [], reviews: [], liveText: "", detail: null, starting: null, panel: null, paletteOpen: false });
+    store.set({ selectedId: id, task: null, activity: [], reviews: [], liveText: "", detail: null, workspaceView: previewLocked(state) ? "preview" : state.workspaceView === "closed" ? "detail" : state.workspaceView, browserTabId: previewLocked(state) ? state.browserTabId : null, starting: null, panel: null, paletteOpen: false });
   } else store.set({ starting: null, panel: null, paletteOpen: false });
   remember(id);
   await syncSelected(id);
 }
 
 export function newTask(): void {
-  store.set({ selectedId: null, task: null, activity: [], reviews: [], liveText: "", detail: null, starting: null, panel: null, paletteOpen: false });
+  store.set(state => ({ selectedId: null, task: null, activity: [], reviews: [], liveText: "", detail: null, workspaceView: previewLocked(state) ? "preview" : "closed", browserTabId: previewLocked(state) ? state.browserTabId : null, starting: null, panel: null, paletteOpen: false }));
   remember(null);
 }
 
 export function openDetail(detail: AppState["detail"]): void {
-  store.set({ detail });
+  store.set(state => ({ detail, workspaceView: detail ? browserPreviewOccupied(state) ? "preview" : "detail" : state.workspaceView === "detail" ? "closed" : state.workspaceView }));
+}
+
+export function showPreview(): void {
+  store.set({ workspaceView: "preview", detail: null });
+}
+
+export function selectBrowserTab(tabId: string | null): void {
+  if (tabId && browserPreviewOccupied(store.get())) {
+    notify("本机预览正在使用浏览器，完成后再切换网页", "info");
+    return;
+  }
+  store.set({ workspaceView: "preview", browserTabId: tabId, detail: null });
+}
+
+export function showReview(): void {
+  store.set(state => browserPreviewOccupied(state) ? { detail: { kind: "info" } } : { workspaceView: "detail", detail: null });
+}
+
+export function showTerminal(): void {
+  if (browserPreviewOccupied(store.get())) {
+    notify("浏览器正在使用预览，完成后再切换终端", "info");
+    return;
+  }
+  store.set({ workspaceView: "terminal", detail: null });
+}
+
+export function closeWorkspace(): void {
+  store.set(state => previewLocked(state) && state.workspaceView === "preview" ? state : { workspaceView: "closed", detail: null });
 }
 
 let modelsRequest: Promise<ModelCatalog | null> | null = null;
@@ -312,7 +358,10 @@ async function flushSettings(): Promise<boolean> {
     } catch (error) {
       notify(messageOf(error));
       const current = await api.settings().catch(() => null);
-      if (current) acceptSettings(current);
+      if (current) {
+        inFlightSettings = {};
+        acceptSettings(current);
+      }
       return false;
     } finally {
       inFlightSettings = {};
@@ -338,11 +387,15 @@ export function updateSettings(patch: SettingsPatch, options: { debounce?: boole
 
 /** Publication and verification need the visible preview, so a collapsed preview pane opens itself for them. */
 function revealPreviewForBrowserWork(): void {
-  if (store.get().settings?.ui.previewCollapsed) void updateSettings({ ui: { previewCollapsed: false } }, { debounce: true });
+  store.set({ workspaceView: "preview", browserTabId: null });
 }
 
 export function previewLocked(state: AppState): boolean {
   return state.controlHolder === "user" || state.serverOperation !== null || state.operation !== null;
+}
+
+function browserPreviewOccupied(state: AppState): boolean {
+  return state.controlHolder === "user" || !!state.serverOperation?.browserTaskId || ["发布本机预览", "浏览器验收"].includes(state.operation?.phase ?? "");
 }
 
 const notifiedPhases = new Set<string>();
@@ -365,6 +418,7 @@ function notifyStatus(message: Extract<ServerMessage, { type: "status" }>): void
 
 function handleMessage(message: ServerMessage): void {
   const state = store.get();
+  if (message.type === "task" || message.type === "operation" || message.type === "status") tasksRequestVersion++;
   switch (message.type) {
     case "operation":
       store.set({ serverOperation: message.operation, operation: message.operation ? { taskId: message.operation.taskId, phase: message.operation.phase } : null });
@@ -382,6 +436,7 @@ function handleMessage(message: ServerMessage): void {
       break;
     case "task": {
       const task = message.task;
+      if (task.id === state.selectedId) selectedRequestVersion++;
       store.set(current => ({
         tasks: upsertSummary(current.tasks, task),
         task: current.selectedId === task.id ? task : current.task,
@@ -432,7 +487,7 @@ async function loadSettings(): Promise<void> {
 }
 
 async function resync(): Promise<void> {
-  await Promise.all([refreshTasks(), loadSettings()]);
+  await Promise.all([refreshTasks(), refreshProjects(), loadSettings()]);
   const id = store.get().selectedId;
   if (id) await syncSelected(id);
   const holder = await api.control().catch(() => null);
@@ -441,6 +496,14 @@ async function resync(): Promise<void> {
 
 export function startWorkbench(): () => void {
   const stopNotificationClick = window.alpha?.onOpenTask?.(id => { void openTask(id); });
+  const stopWebTabRequest = window.alpha?.onWebTabRequested?.(({ taskId, tabId }) => {
+    if (store.get().selectedId === taskId) selectBrowserTab(tabId);
+    else if (!store.get().selectedId) void openTask(taskId).then(() => { if (store.get().selectedId === taskId) selectBrowserTab(tabId); });
+    else notify("网页已在另一任务中打开，切换到该任务查看", "info");
+  });
+  const stopWebTabClosed = window.alpha?.onWebTabClosed?.(tabId => {
+    if (store.get().browserTabId === tabId) store.set({ browserTabId: null });
+  });
   const disconnect = connectEvents({
     onMessage: handleMessage,
     onState: connection => store.set({ connection }),
@@ -451,10 +514,10 @@ export function startWorkbench(): () => void {
     },
   });
   void (async () => {
-    const [list] = await Promise.all([refreshTasks(), loadSettings()]);
+    const [list] = await Promise.all([refreshTasks(), refreshProjects(), loadSettings()]);
     const saved = recalled();
     const id = list?.tasks.find(task => task.id === saved)?.id ?? list?.activeTaskId ?? list?.tasks[0]?.id;
-    if (id) void openTask(id);
+    if (id && !store.get().selectedId) void openTask(id);
     const holder = await api.control().catch(() => null);
     if (holder) store.set({ controlHolder: holder });
   })();
@@ -473,6 +536,8 @@ export function startWorkbench(): () => void {
   window.addEventListener("beforeunload", onUnload);
   return () => {
     stopNotificationClick?.();
+    stopWebTabRequest?.();
+    stopWebTabClosed?.();
     window.removeEventListener("beforeunload", onUnload);
     disconnect();
     clearInterval(poll);
@@ -493,12 +558,12 @@ async function perform<T>(action: PendingAction, work: () => Promise<T>): Promis
   }
 }
 
-export async function startTask(brief: string, model: string | null = null): Promise<void> {
+export async function startTask(brief: string, model: string | null = null, expertId: string | null = null, startMode: "plan" | "execute" = "execute", continueUntilAccepted = false): Promise<void> {
   const text = brief.trim();
   if (!text || store.get().pending) return;
   store.set({ pending: "start", starting: { brief: text, error: null } });
   try {
-    const { runId } = await api.start(text, model);
+    const { runId } = await api.start(text, model, expertId, startMode, continueUntilAccepted);
     store.set({ activeRunId: runId });
   } catch (error) {
     store.set({ starting: { brief: text, error: messageOf(error) } });
@@ -507,12 +572,24 @@ export async function startTask(brief: string, model: string | null = null): Pro
   }
 }
 
-export async function importTask(sourcePath: string, objective: string, model: string | null = null): Promise<void> {
+export async function startGeneralTask(input: Parameters<typeof api.startGeneral>[0]): Promise<void> {
+  const text = input.objective.trim();
+  if (!text || store.get().pending) return;
+  store.set({ pending: "start", starting: { brief: text, error: null } });
+  try {
+    const { taskId, runId } = await api.startGeneral(input);
+    if (runId) store.set({ activeRunId: runId, activeTaskId: taskId });
+    await Promise.all([refreshTasks(), openTask(taskId)]);
+  } catch (error) { store.set({ starting: { brief: text, error: messageOf(error) } }); }
+  finally { store.set({ pending: null }); }
+}
+
+export async function importTask(sourcePath: string, objective: string, model: string | null = null, expertId: string | null = null, startMode: "plan" | "execute" = "execute", continueUntilAccepted = false): Promise<void> {
   const text = objective.trim();
   if (!sourcePath.trim() || !text || store.get().pending) return;
   store.set({ pending: "start", starting: { brief: text, error: null } });
   try {
-    const { taskId, runId } = await api.importWorkspace(sourcePath.trim(), text, model);
+    const { taskId, runId } = await api.importWorkspace(sourcePath.trim(), text, model, expertId, startMode, continueUntilAccepted);
     store.set({ activeRunId: runId, activeTaskId: taskId });
     await Promise.all([refreshTasks(), openTask(taskId)]);
   } catch (error) {
@@ -520,12 +597,12 @@ export async function importTask(sourcePath: string, objective: string, model: s
   } finally { store.set({ pending: null }); }
 }
 
-export async function startProjectTask(projectId: string, mountId: string, objective: string, permissionMode: import("../api/types").PermissionMode, model: string | null = null): Promise<void> {
+export async function startProjectTask(projectId: string, mountId: string, objective: string, permissionMode: import("../api/types").PermissionMode, model: string | null = null, expertId: string | null = null, startMode: "plan" | "execute" = "execute", continueUntilAccepted = false): Promise<void> {
   const text = objective.trim();
   if (!projectId || !mountId || !text || store.get().pending) return;
   store.set({ pending: "start", starting: { brief: text, error: null } });
   try {
-    const { taskId, runId } = await api.startProjectTask(projectId, mountId, text, permissionMode, model);
+    const { taskId, runId } = await api.startProjectTask(projectId, mountId, text, permissionMode, model, expertId, startMode, continueUntilAccepted);
     store.set({ activeRunId: runId, activeTaskId: taskId });
     await Promise.all([refreshTasks(), openTask(taskId)]);
   } catch (error) {
@@ -533,12 +610,12 @@ export async function startProjectTask(projectId: string, mountId: string, objec
   } finally { store.set({ pending: null }); }
 }
 
-export async function startWorkflow(taskType: "research" | "file-work", objective: string, files: File[], model: string | null = null): Promise<void> {
+export async function startWorkflow(taskType: "research" | "file-work", objective: string, files: File[], model: string | null = null, startMode: "plan" | "execute" = "execute", continueUntilAccepted = false): Promise<void> {
   const text = objective.trim();
   if (!text || store.get().pending) return;
   store.set({ pending: "start", starting: { brief: text, error: null } });
   try {
-    const { taskId, runId } = await api.startWorkflow(taskType, text, files, model);
+    const { taskId, runId } = await api.startWorkflow(taskType, text, files, model, startMode, continueUntilAccepted);
     store.set({ activeRunId: runId, activeTaskId: taskId });
     await Promise.all([refreshTasks(), openTask(taskId)]);
   } catch (error) {
@@ -555,12 +632,39 @@ async function afterLaunch(taskId: string, runId: string): Promise<void> {
   await Promise.all([refreshTasks(), syncSelected(taskId)]);
 }
 
-export async function resumeTask(instruction: string): Promise<boolean> {
-  const task = store.get().task;
+export async function resumeTask(instruction: string, taskId?: string): Promise<boolean> {
+  const task = taskId ? (store.get().task?.id === taskId ? store.get().task : await api.task(taskId)) : store.get().task;
   if (!task) return false;
   const result = await perform("resume", () => api.resume(task.id, instruction.trim()));
   if (!result) return false;
   await afterLaunch(task.id, result.runId);
+  return true;
+}
+
+export async function enterPlanning(): Promise<boolean> {
+  const task = store.get().task;
+  if (!task) return false;
+  const result = await perform("plan", () => api.enterPlan(task.id));
+  if (!result) return false;
+  await afterLaunch(task.id, result.runId);
+  return true;
+}
+
+export async function approveTaskPlan(): Promise<boolean> {
+  const task = store.get().task;
+  if (!task?.cognition || task.phase !== "plan-review" || !task.revision) return false;
+  const result = await perform("approve", () => api.approvePlan(task.id, { contractVersion: task.contractVersion, cognitionRevision: task.cognition!.revision, sourceRevision: task.revision! }));
+  if (!result) return false;
+  await afterLaunch(task.id, result.runId);
+  return true;
+}
+
+export async function setGoalContinuation(enabled: boolean): Promise<boolean> {
+  const task = store.get().task;
+  if (!task) return false;
+  const result = await perform("goal", () => api.setGoal(task.id, enabled));
+  if (!result) return false;
+  await syncSelected(task.id);
   return true;
 }
 
@@ -571,6 +675,16 @@ export async function reviseTask(objective: string): Promise<boolean> {
   const result = await perform("revise", () => api.revise(task.id, text));
   if (!result) return false;
   await afterLaunch(task.id, result.runId);
+  return true;
+}
+
+export async function sendTaskMessage(input: Parameters<typeof api.sendMessage>[1]): Promise<boolean> {
+  const task = store.get().task;
+  if (!task) return false;
+  const result = await perform(task.running ? "guidance" : task.status === "complete" ? "revise" : "resume", () => api.sendMessage(task.id, input));
+  if (!result) return false;
+  if (result.runId) await afterLaunch(task.id, result.runId);
+  else await syncSelected(task.id);
   return true;
 }
 

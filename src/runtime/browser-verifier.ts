@@ -2,7 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { TaskLedger, fingerprintSource } from "./task-ledger";
-import { VisibleBrowser, type BrowserObservation } from "./visible-browser";
+import { VisibleBrowser, type BrowserObservation, type BrowserSession } from "./visible-browser";
+import type { BrowserKernel } from "./browser-kernel";
 
 type Step =
   | { action: "fill" | "select"; selector: string; value: string }
@@ -81,7 +82,7 @@ function substitute(value: string, nonce: string): string {
   return value.replaceAll("{{nonce}}", nonce);
 }
 
-async function waitForText(browser: VisibleBrowser, expected: string, present: boolean, selector?: string): Promise<BrowserObservation> {
+async function waitForText(browser: BrowserSession, expected: string, present: boolean, selector?: string): Promise<BrowserObservation> {
   for (let attempt = 0; attempt < 20; attempt++) {
     const observation = await browser.observe();
     const actual = selector ? await browser.textOf(selector) : observation.text;
@@ -91,7 +92,7 @@ async function waitForText(browser: VisibleBrowser, expected: string, present: b
   throw new Error(`Text assertion failed: ${present ? "expected" : "forbidden"} ${expected}`);
 }
 
-async function waitForValue(browser: VisibleBrowser, selector: string, expected: string): Promise<BrowserObservation> {
+async function waitForValue(browser: BrowserSession, selector: string, expected: string): Promise<BrowserObservation> {
   for (let attempt = 0; attempt < 20; attempt++) {
     const observation = await browser.observe();
     if (await browser.valueOf(selector) === expected) return observation;
@@ -100,7 +101,7 @@ async function waitForValue(browser: VisibleBrowser, selector: string, expected:
   throw new Error(`Value assertion failed at ${selector}: expected ${expected}`);
 }
 
-export async function verifyBrowserPlan(ledger: TaskLedger, cdpPort: number, dataRoot: string, signal?: AbortSignal): Promise<void> {
+export async function verifyBrowserPlan(ledger: TaskLedger, cdpPort: number, dataRoot: string, signal?: AbortSignal, kernel?: BrowserKernel, complete = true): Promise<void> {
   signal?.throwIfAborted();
   if (ledger.state.status !== "active") throw new Error("Only active tasks can be verified");
   const preview = ledger.state.preview;
@@ -133,9 +134,10 @@ export async function verifyBrowserPlan(ledger: TaskLedger, cdpPort: number, dat
   }
   await saveProgress(progressFile, progress);
   const { nonce, results } = progress;
-  let browser: VisibleBrowser | undefined;
+  let browser: BrowserSession | undefined;
   for (let attempt = 0; attempt < 40 && !browser; attempt++) {
-    browser = await VisibleBrowser.connect(`http://127.0.0.1:${cdpPort}`, preview.url).catch(() => undefined);
+    signal?.throwIfAborted();
+    browser = await (kernel ? kernel.connectPreview(ledger.state.id, preview.url, signal) : VisibleBrowser.connect(`http://127.0.0.1:${cdpPort}`, preview.url)).catch(() => undefined);
     if (!browser) await Bun.sleep(250);
   }
   if (!browser) throw new Error(`Visible preview did not open: ${preview.url}`);
@@ -199,7 +201,7 @@ export async function verifyBrowserPlan(ledger: TaskLedger, cdpPort: number, dat
     await assertCurrent();
     await writeFile(evidencePath, JSON.stringify({ attemptId, taskId: ledger.state.id, previewId: preview.id, revision: preview.revision, planHash, nonce, results, screenshot }, null, 2), { flag: "wx" });
     await ledger.recordEvidence({ attemptId, criterionId: "user-path", kind: "browser", previewId: preview.id, revision: preview.revision, passed: true, source: evidencePath });
-    await ledger.complete();
+    if (complete && !ledger.completionGaps().length) await ledger.complete();
     await unlink(progressFile).catch(() => undefined);
   } catch (error) {
     if (signal?.aborted) throw error;
@@ -215,6 +217,7 @@ export async function verifyBrowserPlan(ledger: TaskLedger, cdpPort: number, dat
     }
     throw error;
   } finally {
-    await browser.disconnect();
+    if (kernel) await kernel.detachPreview(ledger.state.id);
+    else await (browser as VisibleBrowser).disconnect();
   }
 }

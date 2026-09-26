@@ -49,7 +49,6 @@ try {
   const evidencePath = join(evidenceDir, `${ledger.state.id}-${preview.id}-browser.json`);
   await writeFile(evidencePath, JSON.stringify({ taskId: ledger.state.id, previewId: preview.id, revision: preview.revision, names: [nameA, nameB], checked: ["empty", "add", "filter", "refresh", "narrow-overflow", "button-contrast", "item-contrast", "console", "network"], screenshot }, null, 2));
   await ledger.recordEvidence({ criterionId: "user-path", kind: "browser", revision: preview.revision, previewId: preview.id, passed: true, source: evidencePath });
-  await ledger.complete();
   console.log(JSON.stringify({ taskId: ledger.state.id, status: ledger.state.status, checked: 9, evidencePath, screenshot }));
 } catch (error) {
   await mkdir(evidenceDir, { recursive: true });

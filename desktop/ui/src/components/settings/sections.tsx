@@ -4,9 +4,10 @@ import { api } from "../../api/client";
 import type { Settings, SkillPlugin } from "../../api/types";
 import { SCALE_STEPS, SHORTCUTS } from "../../state/shortcuts";
 import { useStore } from "../../state/store";
-import { notify, previewLocked, store, updateSettings } from "../../state/workbench";
+import { closeWorkspace, notify, previewLocked, showPreview, store, updateSettings } from "../../state/workbench";
 import { Badge, Button } from "../ui";
 import { Field, NumberInput, SectionTitle, Segmented, Toggle } from "./controls";
+import { WebSettings } from "./WebSettings";
 
 function useSettings(): Settings {
   return useStore(store, state => state.settings)!;
@@ -32,6 +33,7 @@ export function RunSettings() {
       <NumberInput label="任务总模型时长上限" value={settings.budget.totalWallTimeMinutes} min={1} max={1440} step={10} unit="分钟"
         onCommit={value => void updateSettings({ budget: { totalWallTimeMinutes: value } })} />
     </Field>
+    <WebSettings />
   </section>;
 }
 
@@ -120,11 +122,11 @@ export function GenerationSettings() {
       {skillPlugins.map(plugin => <div className="provider-row" key={plugin.id}>
         <div className="provider-main">
           <strong className="provider-name">{plugin.name}</strong>
-          <span className="provider-meta">{plugin.skillCount} 个 Skills · {plugin.hookCount} 个 Pi Hook · {plugin.mcpCount} 个 MCP 服务 · {plugin.revision.slice(0, 8)} · {plugin.source}</span>
+          <span className="provider-meta">{plugin.internalized ? "开发流程已由 Alpha 内置；此历史插件不再装载" : `${plugin.skillCount} 个 Skills · ${plugin.hookCount} 个 Pi Hook · ${plugin.mcpCount} 个 MCP 服务`} · {plugin.revision.slice(0, 8)} · {plugin.source}</span>
         </div>
-        <span className="provider-meta">插件</span><Toggle label={`启用 ${plugin.name} 插件`} checked={plugin.enabled} onChange={value => void togglePlugin(plugin, value)} />
-        {plugin.hookCount > 0 && <><span className="provider-meta">Hook</span><Toggle label={`启用 ${plugin.name} Hook`} checked={plugin.hooksEnabled} disabled={!plugin.enabled} onChange={value => void toggleHooks(plugin, value)} /></>}
-        {plugin.mcpCount > 0 && <><span className="provider-meta">MCP</span><Toggle label={`启用 ${plugin.name} MCP`} checked={plugin.mcpEnabled} disabled={!plugin.enabled} onChange={value => void toggleMCP(plugin, value)} />{plugin.mcpEnabled && <Button size="sm" onClick={() => void checkMCP(plugin)}>检测</Button>}</>}
+        {!plugin.internalized && <><span className="provider-meta">插件</span><Toggle label={`启用 ${plugin.name} 插件`} checked={plugin.enabled} onChange={value => void togglePlugin(plugin, value)} /></>}
+        {!plugin.internalized && plugin.hookCount > 0 && <><span className="provider-meta">Hook</span><Toggle label={`启用 ${plugin.name} Hook`} checked={plugin.hooksEnabled} disabled={!plugin.enabled} onChange={value => void toggleHooks(plugin, value)} /></>}
+        {!plugin.internalized && plugin.mcpCount > 0 && <><span className="provider-meta">MCP</span><Toggle label={`启用 ${plugin.name} MCP`} checked={plugin.mcpEnabled} disabled={!plugin.enabled} onChange={value => void toggleMCP(plugin, value)} />{plugin.mcpEnabled && <Button size="sm" onClick={() => void checkMCP(plugin)}>检测</Button>}</>}
         {(mcpTools[plugin.id] ?? []).map(tool => <label className="provider-meta" key={tool}>{tool}：
           <select aria-label={`${tool} 权限`} value={mcpPermissions[tool] ?? "deny"} onChange={event => {
             const permission = event.target.value as "deny" | "read" | "write";
@@ -158,6 +160,7 @@ export function GenerationSettings() {
 
 export function InterfaceSettings() {
   const settings = useSettings();
+  const workspaceView = useStore(store, state => state.workspaceView);
   const ui = settings.ui;
   return <section>
     <SectionTitle title="界面" description="只影响工作台本身；产品预览始终按原始大小显示，避免干扰浏览器验收。" />
@@ -175,14 +178,15 @@ export function InterfaceSettings() {
     <Field label="收起任务栏" description="Ctrl + B。窗口较窄时会自动收起。">
       <Toggle label="收起任务栏" checked={ui.sidebarCollapsed} onChange={value => void updateSettings({ ui: { sidebarCollapsed: value } })} />
     </Field>
-    <Field label="收起预览栏" description="Ctrl + Shift + B。发布预览或浏览器验收时会自动展开。">
-      <Toggle label="收起预览栏" checked={ui.previewCollapsed} onChange={value => {
+    <Field label="收起右侧工作区" description="Ctrl + Shift + B 控制预览；发布或验收时会自动显示浏览器。">
+      <Toggle label="收起右侧工作区" checked={workspaceView === "closed"} onChange={value => {
         if (value && previewLocked(store.get())) notify("浏览器正在使用预览，操作结束后才能收起", "info");
-        else void updateSettings({ ui: { previewCollapsed: value } });
+        else if (value) closeWorkspace();
+        else showPreview();
       }} />
     </Field>
-    <Field label="恢复默认布局" description="100% 缩放、标准字号、两侧展开，预览宽度复位。">
-      <Button size="sm" icon={RotateCcw} onClick={() => void updateSettings({ ui: { scale: 1, fontSize: "md", sidebarCollapsed: false, previewCollapsed: false, previewRatio: 0.46 } })}>恢复</Button>
+    <Field label="恢复默认布局" description="100% 缩放、标准字号、展开任务栏，关闭右侧工作区。">
+      <Button size="sm" icon={RotateCcw} onClick={() => { closeWorkspace(); void updateSettings({ ui: { scale: 1, fontSize: "md", sidebarCollapsed: false, previewRatio: 0.46 } }); }}>恢复</Button>
     </Field>
   </section>;
 }

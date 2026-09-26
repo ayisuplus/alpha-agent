@@ -3,11 +3,12 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskActivity } from "../src/runtime/task-activity";
-import { readSourceReviews, snapshotSource, writeSourceReview } from "../src/runtime/source-review";
-import { TaskLedger } from "../src/runtime/task-ledger";
+import { readSourceReviews, snapshotSource, snapshotSourceHashes, sourceChanges, writeSourceReview } from "../src/runtime/source-review";
+import { TaskLedger, fingerprintSource } from "../src/runtime/task-ledger";
 import { createGeneralWorkspace, verifyGeneralDeliverable } from "../src/runtime/general-work";
 import { createDocument } from "../src/runtime/document-tool";
 import { relative } from "node:path";
+import { acceptCodeChange } from "../src/runtime/code-acceptance";
 
 test("task activity survives a new reader and stays attached to its task", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-activity-"));
@@ -43,6 +44,43 @@ test("source review records text changes without bundling builds or binary media
     expect(restored).toHaveLength(1);
     expect(restored[0].changes).toEqual([{ path: "src/app.js", before: "document.title = 'before';\n", after: "document.title = 'after';\n" }]);
     expect(restored[0].contractVersion).toBe(2);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("acceptance hashes detect Python and long-file edits while ignoring generated coverage", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-source-hashes-"));
+  try {
+    await writeFile(join(root, "script.py"), "value = 1\n");
+    await writeFile(join(root, "large.ts"), "x".repeat(260_000) + "old");
+    const before = await snapshotSourceHashes(root);
+    await writeFile(join(root, "script.py"), "value = 2\n");
+    await writeFile(join(root, "large.ts"), "x".repeat(260_000) + "new");
+    expect(sourceChanges(before, await snapshotSourceHashes(root)).map(item => item.path)).toEqual(["large.ts", "script.py"]);
+    const revision = await fingerprintSource(root);
+    await mkdir(join(root, "coverage"));
+    await writeFile(join(root, "coverage", "result.json"), "{}");
+    expect(await fingerprintSource(root)).toBe(revision);
+    await mkdir(join(root, "src", "build"), { recursive: true });
+    await writeFile(join(root, "src", "build", "index.ts"), "export const ready = true;\n");
+    expect(await fingerprintSource(root)).not.toBe(revision);
+    expect((await snapshotSourceHashes(root))["src/build/index.ts"]).toBeDefined();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("legacy display snapshots cannot be accepted as complete source baselines", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-legacy-baseline-"));
+  try {
+    const product = join(root, "product");
+    const dataRoot = join(root, "state");
+    await mkdir(product);
+    await writeFile(join(product, "script.py"), "value = 1\n");
+    const ledger = await TaskLedger.create(dataRoot, { objective: "Change Python code", projectRoot: product, taskType: "code-change", workspaceOrigin: { kind: "direct" }, criteria: [{ id: "change", description: "Source changed", kind: "asset" }] });
+    await mkdir(join(dataRoot, "direct-baselines"));
+    await writeFile(join(dataRoot, "direct-baselines", `${ledger.state.id}.json`), JSON.stringify(await snapshotSource(product)));
+    await writeFile(join(product, "script.py"), "value = 2\n");
+    await ledger.refreshRevision();
+    await expect(acceptCodeChange({ ledger, dataRoot, runId: "legacy" })).rejects.toThrow("obsolete format");
+    expect(ledger.state.status).toBe("active");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -201,6 +239,9 @@ test("workbench serves frozen file evidence and saves a local schedule", async (
     const nextRunAt = new Date(Date.now() + 60_000).toISOString();
     const scheduled = await fetch(`${base}/api/schedules`, { method: "POST", headers: { "content-type": "application/json", origin: base }, body: JSON.stringify({ taskId: ledger.state.id, instruction: "Update document", nextRunAt, intervalMinutes: null }) });
     expect(scheduled.status).toBe(200);
+    expect((await fetch(`${base}/api/queue`, { method: "POST", headers: { origin: "http://untrusted.example", "content-type": "text/plain" }, body: JSON.stringify({ taskId: "invalid", instruction: "ignored" }) })).status).toBe(403);
+    expect((await fetch(`${base}/api/schedules`, { method: "POST", headers: { origin: "http://untrusted.example", "content-type": "text/plain" }, body: JSON.stringify({ taskId: "invalid", instruction: "ignored", nextRunAt, intervalMinutes: null }) })).status).toBe(403);
+    expect((await fetch(`${base}/api/tasks/11111111-1111-4111-8111-111111111111/workers/22222222-2222-4222-8222-222222222222/cancel`, { method: "POST", headers: { origin: "http://untrusted.example" } })).status).toBe(403);
     expect((await fetch(`${base}/api/schedules`).then(response => response.json()) as { schedules: Array<{ taskId: string; nextRunAt: string }> }).schedules[0]).toMatchObject({ taskId: ledger.state.id, nextRunAt });
   } finally { child?.kill(); if (child) await child.exited; await rm(root, { recursive: true, force: true }); }
 });
@@ -224,7 +265,9 @@ test("model endpoints work against an isolated OMP store and never return keys",
     type Catalog = { models: Array<{ selector: string; provider: string; available: boolean }>; providers: Array<{ id: string; origin: string | null; storedKey: boolean; models: number }>; builtin: string };
 
     const catalog = await fetch(`${base}/api/models`).then(response => response.json()) as Catalog;
-    expect(catalog.builtin).toBe("alibaba-token-plan/qwen3.6-flash");
+    expect(catalog.builtin).toBe("xiaomi-token-plan-cn/mimo-v2.6-flash");
+    expect(catalog.providers.map(item => item.id).sort()).toEqual(["deepseek", "xiaomi-token-plan-cn"]);
+    expect(catalog.models.every(item => ["deepseek", "xiaomi-token-plan-cn"].includes(item.provider))).toBe(true);
     const provider = catalog.providers.find(item => item.origin === null && item.models > 0);
     expect(provider).toBeDefined();
     const key = "sk-alpha-test-0123456789";
@@ -245,6 +288,8 @@ test("model endpoints work against an isolated OMP store and never return keys",
     expect((await setModel(selector)).status).toBe(200);
     expect((await TaskLedger.load(ledger.file)).state.modelSelector).toBe(selector);
     expect((await setModel(`${provider!.id}/not-a-real-model`)).status).toBe(400);
+    expect((await setModel("alibaba-token-plan/qwen3.6-flash")).status).toBe(400);
+    expect((await fetch(`${base}/api/providers/alibaba-token-plan/key`, { method: "PUT", headers: json, body: JSON.stringify({ apiKey: key }) })).status).toBe(400);
     expect((await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ model: { default: `${provider!.id}/not-a-real-model` } }) })).status).toBe(400);
     expect((await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ model: { translation: `${provider!.id}/not-a-real-model` } }) })).status).toBe(400);
     expect((await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ model: { default: selector } }) })).status).toBe(200);

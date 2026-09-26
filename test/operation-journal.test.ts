@@ -25,6 +25,7 @@ test("an interrupted run reconciles source and stops before another model run", 
   await mkdir(project, { recursive: true });
   await writeFile(join(project, "note.txt"), "before");
   const ledger = await TaskLedger.create(join(root, "data"), { objective: "Change note", projectRoot: project, criteria: [{ id: "artifact", description: "Result", kind: "artifact" }] });
+  await ledger.recordDispatch({ id: "interrupted-worker", orderId: "change", mode: "implement", skills: [] });
   const journal = new OperationJournal(join(root, "data"));
   await journal.start(ledger.state.id, "run-1");
   await writeFile(join(project, "note.txt"), "after");
@@ -33,6 +34,7 @@ test("an interrupted run reconciles source and stops before another model run", 
   const loaded = await TaskLedger.load(ledger.file);
   expect(loaded.state.status).toBe("stopped");
   expect(loaded.state.revision).toBe(await fingerprintSource(project));
+  expect(loaded.state.cognition?.instances?.[0].status).toBe("failed");
   expect(await journal.reconcile()).toEqual([]);
 });
 

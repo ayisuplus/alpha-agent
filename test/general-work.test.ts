@@ -25,7 +25,7 @@ test("file-work keeps input and artifact hashes and completes without a web prev
   expect(createHash("sha256").update(await readFile(input.path)).digest("hex")).toBe(input.sha256);
 });
 
-test("research needs archived citations and rejects changed input", async () => {
+test("research validates supplied citations and permits local-only material", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-general-research-"));
   const productsRoot = join(root, "products");
   const dataRoot = join(root, "data");
@@ -34,7 +34,7 @@ test("research needs archived citations and rejects changed input", async () => 
   await writeFile(join(ledger.state.projectRoot, "outputs", "report.md"), "Report");
   await writeFile(join(ledger.state.projectRoot, "alpha-deliverable.json"), JSON.stringify({ outputs: [{ path: "outputs/report.md", sourceIds: ["missing"] }] }));
   await ledger.refreshRevision();
-  await expect(verifyGeneralDeliverable(ledger, dataRoot)).rejects.toThrow("archived web sources");
+  await expect(verifyGeneralDeliverable(ledger, dataRoot)).rejects.toThrow("unknown source");
   const sourceId = "12345678-1234-1234-1234-123456789012";
   await mkdir(join(dataRoot, "sources", ledger.state.id), { recursive: true });
   await writeFile(join(dataRoot, "sources", ledger.state.id, `${sourceId}.json`), JSON.stringify({ id: sourceId, taskId: ledger.state.id, url: "https://example.org", visitedAt: new Date().toISOString(), title: "Example", text: "Evidence", sha256: createHash("sha256").update("Evidence").digest("hex"), rawSha256: "a".repeat(64) }));
@@ -42,4 +42,11 @@ test("research needs archived citations and rejects changed input", async () => 
   await ledger.refreshRevision();
   await verifyGeneralDeliverable(ledger, dataRoot);
   expect(ledger.state.status).toBe("complete");
+
+  const local = await createGeneralWorkspace({ taskType: "research", objective: "Summarize local notes", productsRoot, dataRoot, files: [{ name: "notes.txt", mimeType: "text/plain", bytes: new TextEncoder().encode("local") }] });
+  await writeFile(join(local.state.projectRoot, "outputs", "summary.csv"), "finding,source\nlocal,notes.txt\n");
+  await writeFile(join(local.state.projectRoot, "alpha-deliverable.json"), JSON.stringify({ outputs: [{ path: "outputs/summary.csv" }] }));
+  await local.refreshRevision();
+  await verifyGeneralDeliverable(local, dataRoot);
+  expect(local.state.status).toBe("complete");
 });

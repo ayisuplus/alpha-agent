@@ -16,7 +16,7 @@ const ctrl = (event: KeyboardEvent) => (event.ctrlKey || event.metaKey) && !even
 export const SHORTCUTS: Shortcut[] = [
   { id: "new-task", keys: ["Ctrl", "N"], label: "新建任务", group: "任务", match: event => ctrl(event) && !event.shiftKey && event.code === "KeyN" },
   { id: "palette", keys: ["Ctrl", "K"], label: "命令面板：搜索任务和执行动作", group: "任务", match: event => ctrl(event) && !event.shiftKey && event.code === "KeyK" },
-  { id: "send", keys: ["Ctrl", "Enter"], label: "发送 / 开始构建", group: "输入" },
+  { id: "send", keys: ["Ctrl", "Enter"], label: "发送 / 开始任务", group: "输入" },
   { id: "close", keys: ["Esc"], label: "关闭详情、设置或浮层", group: "输入" },
   { id: "toggle-sidebar", keys: ["Ctrl", "B"], label: "收起 / 展开任务栏", group: "界面", match: event => ctrl(event) && !event.shiftKey && event.code === "KeyB" },
   { id: "toggle-preview", keys: ["Ctrl", "Shift", "B"], label: "收起 / 展开预览栏", group: "界面", match: event => ctrl(event) && event.shiftKey && event.code === "KeyB" },

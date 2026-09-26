@@ -8,6 +8,7 @@ export interface ProjectRecord {
   name: string;
   version: number;
   mounts: ProjectMount[];
+  permissionMode?: "ask" | "auto" | "full";
   createdAt: string;
   updatedAt: string;
 }
@@ -72,7 +73,7 @@ export class ProjectStore {
     return this.serial(async () => {
       const projects = await this.read();
       const now = new Date().toISOString();
-      const project: ProjectRecord = { id: randomUUID(), name: clean, version: 1, mounts: [], createdAt: now, updatedAt: now };
+      const project: ProjectRecord = { id: randomUUID(), name: clean, version: 1, mounts: [], permissionMode: "ask", createdAt: now, updatedAt: now };
       projects.push(project);
       await this.save(projects);
       return project;
@@ -105,6 +106,19 @@ export class ProjectStore {
       project.mounts = project.mounts.filter(item => item.id !== mountId);
       if (project.mounts.length === before) throw new Error("Mount not found");
       project.version++;
+      project.updatedAt = new Date().toISOString();
+      await this.save(projects);
+      return project;
+    });
+  }
+
+  setPermission(id: string, permissionMode: "ask" | "auto" | "full"): Promise<ProjectRecord> {
+    if (!["ask", "auto", "full"].includes(permissionMode)) throw new Error("Invalid project permission mode");
+    return this.serial(async () => {
+      const projects = await this.read();
+      const project = projects.find(item => item.id === id);
+      if (!project) throw new Error("Project not found");
+      project.permissionMode = permissionMode;
       project.updatedAt = new Date().toISOString();
       await this.save(projects);
       return project;

@@ -28,7 +28,7 @@ function usePreviewTarget(): Shown | "keep" {
   return task.preview?.live ? { taskId: task.id, url: task.preview.url } : null;
 }
 
-export function PreviewPane({ layoutKey, collapsed, locked, onToggle }: { layoutKey: string; collapsed: boolean; locked: boolean; onToggle(): void }) {
+export function PreviewPane({ layoutKey, collapsed, locked, onToggle, showClose = true }: { layoutKey: string; collapsed: boolean; locked: boolean; onToggle(): void; showClose?: boolean }) {
   const target = usePreviewTarget();
   const [shown, setShown] = useState<Shown>(null);
   const slot = useRef<HTMLDivElement>(null);
@@ -144,12 +144,12 @@ export function PreviewPane({ layoutKey, collapsed, locked, onToggle }: { layout
         {shown && (userControls
           ? <Button size="sm" variant="primary" icon={Undo2} onClick={() => void toggleControl()} busy={pending === "control"}>交回 Alpha</Button>
           : <Button size="sm" icon={Hand} onClick={() => void toggleControl()} busy={pending === "control"} title="暂停 Alpha 的浏览器操作，由你直接操作预览">接管操作</Button>)}
-        <IconButton icon={PanelRightClose} label={locked ? "浏览器正在使用预览，暂时不能收起" : "收起预览栏 (Ctrl+Shift+B)"} onClick={onToggle} disabled={locked} />
+        {showClose && <IconButton icon={PanelRightClose} label={locked ? "浏览器正在使用预览，暂时不能收起" : "收起预览栏 (Ctrl+Shift+B)"} onClick={onToggle} disabled={locked} />}
       </span>
     </header>
     <div className="preview-slot" ref={slot} data-testid="preview-slot">
       {shown && !bridge
-        ? <iframe className="preview-frame" src={shown.url} title="产品预览" />
+        ? <div className="preview-empty"><MonitorOff size={26} aria-hidden /><strong>内置预览仅在 Alpha 桌面版中显示</strong></div>
         : !shown && <div className="preview-empty">
           {task?.running && !owner ? <Spinner size={22} /> : task?.preview && !task.preview.live ? <MonitorOff size={26} aria-hidden /> : <MonitorPlay size={26} aria-hidden />}
           <strong>{emptyTitle}</strong>

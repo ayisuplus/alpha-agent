@@ -1,55 +1,57 @@
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 
-  /* OMP titanium: neutral metal surfaces, electric blue, and a small warm-gold detail. */
-  --bg-app: #151820;
-  --bg-sidebar: #11151b;
-  --bg-surface: #1a1e26;
-  --bg-elevated: #222832;
-  --bg-hover: #2a3038;
-  --bg-active: #20313d;
-  --bg-inset: #0f1216;
+  --bg-app: #faf9f6;
+  --bg-sidebar: #f2f0ec;
+  --bg-surface: #ffffff;
+  --bg-elevated: #f7f5f0;
+  --bg-hover: #eaece8;
+  --bg-active: #ddf2ee;
+  --bg-inset: #f5f5f1;
 
-  --border-subtle: #1f252d;
-  --border: #2a3038;
-  --border-strong: #46505c;
+  --border-subtle: #e9e7e1;
+  --border: #deddd6;
+  --border-strong: #b6c2bd;
 
-  --text: #e8ecf4;
-  --text-secondary: #c0c7d2;
-  --text-muted: #9ca3b0;
-  --text-faint: #858e9c;
+  --text: #252d2b;
+  --text-secondary: #46534f;
+  --text-muted: #66716d;
+  --text-faint: #78837e;
 
-  --accent: #00b4ff;
-  --accent-strong: #5acbff;
-  --accent-deep: #0082b3;
-  --accent-gold: #d4c090;
-  --accent-bg: rgba(0, 180, 255, 0.1);
-  --accent-border: rgba(0, 180, 255, 0.38);
-  --on-accent: #0f1216;
+  --accent: #256b64;
+  --accent-strong: #175850;
+  --accent-deep: #164f49;
+  --accent-soft: #80d1c8;
+  --accent-gold: #8b603c;
+  --accent-warm: #ffd4a9;
+  --accent-bg: #e1f3ef;
+  --accent-border: #80d1c8;
+  --on-accent: #183531;
 
-  --success: #4ddc98;
-  --success-bg: rgba(0, 255, 136, 0.1);
-  --success-border: rgba(0, 255, 136, 0.3);
-  --warning: #e9b366;
-  --warning-bg: rgba(255, 179, 71, 0.1);
-  --warning-border: rgba(255, 179, 71, 0.32);
-  --danger: #f16b78;
-  --danger-bg: rgba(255, 71, 87, 0.1);
-  --danger-border: rgba(255, 71, 87, 0.32);
+  --success: #216947;
+  --success-bg: #e8f4e9;
+  --success-border: #add5b6;
+  --warning: #886019;
+  --warning-bg: #fff4dc;
+  --warning-border: #e5c987;
+  --danger: #a23d43;
+  --danger-bg: #fff0ed;
+  --danger-border: #e7aaa7;
 
-  --diff-add-bg: rgba(0, 255, 136, 0.1);
-  --diff-add-gutter: rgba(0, 255, 136, 0.18);
-  --diff-del-bg: rgba(255, 71, 87, 0.1);
-  --diff-del-gutter: rgba(255, 71, 87, 0.18);
+  --diff-add-bg: #e9f5eb;
+  --diff-add-gutter: #d9ecdd;
+  --diff-del-bg: #fff0ed;
+  --diff-del-gutter: #f5deda;
 
-  --font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --font-sans: "Noto Sans", "Noto Sans SC", "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+  --font-display: Georgia, "Noto Serif SC", "Songti SC", serif;
   --font-mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", Consolas, "Microsoft YaHei UI", monospace;
 
   --text-xs: 12px;
   --text-sm: 13px;
-  --text-md: 14px;
-  --text-lg: 16px;
-  --text-xl: 20px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 21px;
 
   --space-1: 4px;
   --space-2: 8px;
@@ -58,11 +60,11 @@
   --space-5: 24px;
   --space-6: 32px;
 
-  --radius-sm: 3px;
-  --radius: 4px;
-  --radius-lg: 6px;
+  --radius-sm: 2px;
+  --radius: 3px;
+  --radius-lg: 5px;
 
-  --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --shadow-pop: 0 12px 32px rgba(34, 53, 45, 0.14);
   --focus-ring: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent-border);
 
   --sidebar-width: 256px;

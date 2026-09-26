@@ -1,4 +1,11 @@
 const { contextBridge, ipcRenderer } = require("electron");
+const pendingWebTabs = new Map();
+let webTabListener = null;
+ipcRenderer.on("alpha:web-tab-request", (_event, request) => {
+  if (webTabListener) webTabListener(request);
+  else pendingWebTabs.set(request.tabId, request);
+});
+ipcRenderer.on("alpha:web-tab-closed", (_event, tabId) => pendingWebTabs.delete(tabId));
 
 contextBridge.exposeInMainWorld("alpha", {
   loadPreview(url) {
@@ -9,6 +16,20 @@ contextBridge.exposeInMainWorld("alpha", {
   },
   setPreviewBounds(rect) {
     ipcRenderer.send("alpha:preview-bounds", rect);
+  },
+  setWebBounds(tabId, rect) {
+    ipcRenderer.send("alpha:web-bounds", tabId, rect);
+  },
+  onWebTabRequested(callback) {
+    webTabListener = callback;
+    for (const request of pendingWebTabs.values()) callback(request);
+    pendingWebTabs.clear();
+    return () => { if (webTabListener === callback) webTabListener = null; };
+  },
+  onWebTabClosed(callback) {
+    const listener = (_event, tabId) => callback(tabId);
+    ipcRenderer.on("alpha:web-tab-closed", listener);
+    return () => ipcRenderer.removeListener("alpha:web-tab-closed", listener);
   },
   openFolder(path) {
     return ipcRenderer.invoke("alpha:open-folder", path);

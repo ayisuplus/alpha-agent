@@ -1,16 +1,40 @@
-import { writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { get } from "node:http";
-import puppeteer, { type Browser, type Page } from "puppeteer-core";
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+import puppeteer, { type Browser, type ElementHandle, type Frame, type KeyInput, type Page } from "puppeteer-core";
+import { assertPublicWebUrl } from "./research-source";
 
 export interface BrowserObservation {
   title: string;
   url: string;
   text: string;
-  controls: Array<{ tag: string; id: string; name: string; label: string; text: string }>;
+  controls: Array<{ tag: string; id: string; name: string; label: string; text: string; role?: string; disabled?: boolean; ref?: string; frame?: string }>;
   consoleErrors: string[];
   failedRequests: string[];
   brokenImages: string[];
   viewport: { width: number; height: number; horizontalOverflow: boolean };
+  snapshotId?: string;
+}
+
+export interface BrowserSession {
+  observe(): Promise<BrowserObservation>;
+  navigate(url: string): Promise<BrowserObservation>;
+  click(selector: string): Promise<BrowserObservation>;
+  fill(selector: string, value: string): Promise<BrowserObservation>;
+  select(selector: string, value: string): Promise<BrowserObservation>;
+  press(selector: string, key: string): Promise<BrowserObservation>;
+  scroll(distance: number): Promise<BrowserObservation>;
+  wait(selector: string): Promise<BrowserObservation>;
+  upload(selector: string, filePath: string): Promise<BrowserObservation>;
+  download(selector: string, directory: string): Promise<{ observation: BrowserObservation; filePath: string; sha256: string; bytes: number }>;
+  viewport(width: number, height: number): Promise<BrowserObservation>;
+  screenshot(path: string): Promise<BrowserObservation>;
+  videoFrames(selector: string): Promise<{ duration: number; width: number; height: number; frames: string[] }>;
+  contrast(selector: string): Promise<{ foreground: string; background: string; ratio: number }>;
+  textOf(selector: string): Promise<string | null>;
+  valueOf(selector: string): Promise<string | null>;
 }
 
 function assertLoopback(url: string): void {
@@ -44,12 +68,18 @@ export function discoverBrowserWebSocket(cdpUrl: string): Promise<string> {
 }
 
 export class VisibleBrowser {
+  private readonly sessionId = randomUUID();
   private holder: "alpha" | "user" = "alpha";
   private emulatedViewport = false;
   private readonly consoleErrors: string[] = [];
   private readonly failedRequests: string[] = [];
+  private snapshot = 0;
+  private documentEpoch = 0;
+  get documentIdentity(): string { return `${this.sessionId}:${this.documentEpoch}:${this.page.url()}`; }
+  private refs = new Map<string, { frame: Frame; epoch: number; fingerprint: string }>();
 
-  private constructor(private readonly browser: Browser, private readonly page: Page) {
+  private constructor(private readonly browser: Browser, private readonly page: Page, private readonly scope: "preview" | "web") {
+    page.on("framenavigated", () => { this.documentEpoch++; this.refs.clear(); });
     page.on("console", message => {
       if (message.type() === "error") this.consoleErrors.push(message.text());
     });
@@ -61,15 +91,21 @@ export class VisibleBrowser {
     });
   }
 
-  static async connect(cdpUrl: string, target: string): Promise<VisibleBrowser> {
+  static async connect(cdpUrl: string, target: string, exactTargetId = false, scope: "preview" | "web" = "preview"): Promise<VisibleBrowser> {
     const webSocket = await discoverBrowserWebSocket(cdpUrl);
     const browser = await puppeteer.connect({ browserWSEndpoint: webSocket, defaultViewport: null, protocolTimeout: 60_000 });
     try {
       const pages = await browser.pages();
-      const matches = await Promise.all(pages.map(async page => ({ page, title: await page.title(), url: page.url() })));
-      const selected = matches.find(item => item.title.includes(target) || item.url.includes(target));
+      const matches = await Promise.all(pages.map(async page => {
+        const session = await page.createCDPSession();
+        try {
+          const info = await session.send("Target.getTargetInfo") as { targetInfo?: { targetId?: string } };
+          return { page, title: await page.title(), url: page.url(), targetId: info.targetInfo?.targetId };
+        } finally { await session.detach(); }
+      }));
+      const selected = matches.find(item => exactTargetId ? item.targetId === target : item.title.includes(target) || item.url.includes(target));
       if (!selected) throw new Error(`Visible target not found: ${target}`);
-      return new VisibleBrowser(browser, selected.page);
+      return new VisibleBrowser(browser, selected.page, scope);
     } catch (error) {
       await browser.disconnect();
       throw error;
@@ -85,17 +121,47 @@ export class VisibleBrowser {
   }
 
   async observe(): Promise<BrowserObservation> {
+    this.snapshot++;
+    const snapshot = this.snapshot;
+    this.refs.clear();
+    const main = this.page.mainFrame();
+    const origin = (() => { try { return new URL(main.url()).origin; } catch { return ""; } })();
+    const sameOrigin = (frame: Frame): boolean => {
+      if (frame === main) return true;
+      if (frame.url().startsWith("about:srcdoc")) return !!frame.parentFrame() && sameOrigin(frame.parentFrame()!);
+      try { return new URL(frame.url()).origin === origin; } catch { return false; }
+    };
+    const frames = [main, ...this.page.frames().filter(frame => frame !== main && sameOrigin(frame))];
+    const captures = await Promise.all(frames.map(async (frame, frameIndex) => {
+      try {
+        const content = await frame.evaluate(({ snapshot, frameIndex }) => {
+          const selector = "button,input,textarea,select,a,[role=button],[role=link],[contenteditable=true]";
+          const roots: Array<Document | ShadowRoot> = [document];
+          const controls: Array<{ tag: string; id: string; name: string; label: string; text: string; role: string; disabled: boolean; ref: string }> = [];
+          for (let rootIndex = 0; rootIndex < roots.length && rootIndex < 30; rootIndex++) {
+            const root = roots[rootIndex];
+            for (const element of root.querySelectorAll(selector)) {
+              if (controls.length >= 120) break;
+              if (!element.checkVisibility({ checkVisibilityCSS: true })) continue;
+              const ref = `e${snapshot}-${frameIndex}-${controls.length + 1}`;
+              element.setAttribute("data-alpha-target", `alpha-ref-${ref}`);
+              controls.push({ tag: element.tagName.toLowerCase(), id: element.id, name: element.getAttribute("name") ?? "", label: element.getAttribute("aria-label") ?? "", text: (element.textContent ?? "").trim().slice(0, 160), role: element.getAttribute("role") ?? element.tagName.toLowerCase(), disabled: element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true", ref });
+            }
+            for (const element of root.querySelectorAll("*")) if (element.shadowRoot) roots.push(element.shadowRoot);
+          }
+          const values = [...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("input,textarea,select")]
+            .filter(element => element.checkVisibility({ checkVisibilityCSS: true }) && !(element instanceof HTMLInputElement && ["password", "hidden", "file"].includes(element.type)))
+            .map(element => element.value).filter(Boolean);
+          return { text: [document.body?.innerText ?? "", ...roots.slice(1).map(root => root.textContent ?? ""), ...values].join("\n").slice(0, 12_000), controls };
+        }, { snapshot, frameIndex });
+        return { frame, content };
+      } catch { return null; }
+    }));
+    const controls = captures.flatMap(capture => capture ? capture.content.controls.map(control => {
+      this.refs.set(control.ref, { frame: capture.frame, epoch: this.documentEpoch, fingerprint: JSON.stringify([control.tag, control.id, control.name, control.label, control.text]) });
+      return { ...control, frame: capture.frame.url() };
+    }) : []).slice(0, 200);
     const content = await this.page.evaluate(() => ({
-      text: [document.body?.innerText ?? "", ...[...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("input,textarea,select")]
-        .filter(element => element.checkVisibility({ checkVisibilityCSS: true }) && !(element instanceof HTMLInputElement && ["password", "hidden", "file"].includes(element.type)))
-        .map(element => element.value).filter(Boolean)].join("\n").slice(0, 12_000),
-      controls: [...document.querySelectorAll("button,input,textarea,select,a")].slice(0, 100).map(element => ({
-        tag: element.tagName.toLowerCase(),
-        id: element.id,
-        name: element.getAttribute("name") ?? "",
-        label: element.getAttribute("aria-label") ?? "",
-        text: (element.textContent ?? "").trim().slice(0, 160),
-      })),
       viewport: { width: window.innerWidth, height: window.innerHeight, horizontalOverflow: document.documentElement.scrollWidth > window.innerWidth },
       brokenImages: [...document.images].filter(image => image.complete && image.naturalWidth === 0).map(image => image.currentSrc || image.src).slice(0, 20),
     }));
@@ -103,6 +169,9 @@ export class VisibleBrowser {
       title: await this.page.title(),
       url: this.page.url(),
       ...content,
+      text: captures.map(capture => capture?.content.text ?? "").filter(Boolean).join("\n").slice(0, 12_000),
+      controls,
+      snapshotId: `${this.documentEpoch}:${this.snapshot}`,
       consoleErrors: this.consoleErrors.slice(-50),
       failedRequests: this.failedRequests.slice(-50),
     };
@@ -110,51 +179,135 @@ export class VisibleBrowser {
 
   async navigate(url: string): Promise<BrowserObservation> {
     this.assertAlpha();
-    assertLoopback(url);
+    if (this.scope === "preview") assertLoopback(url);
+    else await assertPublicWebUrl(url);
     await this.page.goto(url, { waitUntil: "load", timeout: 10_000 });
     return this.observe();
   }
 
   async click(selector: string): Promise<BrowserObservation> {
     this.assertAlpha();
-    await this.page.$eval(selector, element => {
+    const resolved = await this.resolve(selector);
+    const handle = await resolved.frame.$(resolved.selector);
+    if (!handle) throw new Error("Element disappeared before click");
+    await handle.evaluate(element => {
       if (!element.checkVisibility({ checkVisibilityCSS: true })) throw new Error(`Element is not visible: ${element.tagName}`);
       element.scrollIntoView({ block: "center", inline: "center" });
       const rect = element.getBoundingClientRect();
       const x = rect.left + rect.width / 2;
       const y = rect.top + rect.height / 2;
-      const hit = document.elementFromPoint(x, y);
+      const root = element.getRootNode();
+      const hit = root instanceof ShadowRoot ? root.elementFromPoint(x, y) : document.elementFromPoint(x, y);
       if (!rect.width || !rect.height || !hit || (hit !== element && !element.contains(hit))) throw new Error(`Element is obscured: ${element.tagName}`);
       if (!(element instanceof HTMLElement)) throw new Error(`Element cannot be clicked: ${element.tagName}`);
-      element.click();
     });
+    const box = await handle.boundingBox();
+    if (!box) throw new Error("Element has no clickable bounds");
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await this.page.bringToFront();
+    // Move first so Chromium routes the following click into the embedded WebContentsView.
+    await this.page.mouse.move(x, y);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    await this.page.mouse.click(x, y);
     return this.observe();
   }
 
   async fill(selector: string, value: string): Promise<BrowserObservation> {
     this.assertAlpha();
-    await this.page.$eval(selector, (element, nextValue) => {
+    const resolved = await this.resolve(selector);
+    const handle = await resolved.frame.$(resolved.selector);
+    if (!handle) throw new Error("Fill control disappeared");
+    await handle.evaluate((element, nextValue) => {
       if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) throw new Error("Fill requires a text control");
       if (element.disabled || element.readOnly || !element.checkVisibility({ checkVisibilityCSS: true })) throw new Error("Fill control is unavailable");
       element.scrollIntoView({ block: "center", inline: "center" });
       const rect = element.getBoundingClientRect();
-      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const root = element.getRootNode();
+      const hit = root instanceof ShadowRoot ? root.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2) : document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
       if (!rect.width || !rect.height || hit !== element) throw new Error("Fill control is obscured");
-      const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), "value")?.set;
-      if (!setter) throw new Error("Fill control has no value setter");
-      element.focus();
-      setter.call(element, nextValue);
-      element.dispatchEvent(new InputEvent("input", { bubbles: true, data: nextValue, inputType: "insertText" }));
-      element.dispatchEvent(new Event("change", { bubbles: true }));
+      if (nextValue.length > 10_000) throw new Error("Fill value is too long");
     }, value);
+    const box = await handle.boundingBox();
+    if (!box) throw new Error("Fill control has no bounds");
+    await this.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await this.page.keyboard.down("Control");
+    await this.page.keyboard.press("A");
+    await this.page.keyboard.up("Control");
+    await this.page.keyboard.type(value);
+    if (await handle.evaluate(element => element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement ? element.value : null) !== value) throw new Error("Fill did not produce the expected value");
     return this.observe();
   }
 
   async select(selector: string, value: string): Promise<BrowserObservation> {
     this.assertAlpha();
-    const selected = await this.page.select(selector, value);
+    const resolved = await this.resolve(selector);
+    const selected = await resolved.frame.select(resolved.selector, value);
     if (!selected.includes(value)) throw new Error(`Option not found: ${value}`);
     return this.observe();
+  }
+
+  async press(selector: string, key: string): Promise<BrowserObservation> {
+    this.assertAlpha();
+    if (!/^[A-Za-z0-9+]{1,40}$/.test(key)) throw new Error("Invalid keyboard key");
+    const resolved = await this.resolve(selector);
+    await resolved.frame.focus(resolved.selector);
+    await this.page.keyboard.press(key as KeyInput);
+    return this.observe();
+  }
+
+  async scroll(distance: number): Promise<BrowserObservation> {
+    this.assertAlpha();
+    if (!Number.isFinite(distance) || Math.abs(distance) > 2000) throw new Error("Scroll distance is out of range");
+    await this.page.evaluate(amount => window.scrollBy({ top: amount, behavior: "auto" }), distance);
+    return this.observe();
+  }
+
+  async wait(selector: string): Promise<BrowserObservation> {
+    this.assertAlpha();
+    if (/^e\d+-\d+(?:-\d+)?$/.test(selector)) throw new Error("Wait requires a CSS selector; observe again for a fresh element reference");
+    await this.page.waitForSelector(selector, { visible: true, timeout: 10_000 });
+    return this.observe();
+  }
+
+  async upload(selector: string, filePath: string): Promise<BrowserObservation> {
+    this.assertAlpha();
+    const resolved = await this.resolve(selector);
+    const input = await resolved.frame.$(resolved.selector) as ElementHandle<HTMLInputElement> | null;
+    if (!input || !await input.evaluate(element => element instanceof HTMLInputElement && element.type === "file")) throw new Error("Upload requires a file input");
+    await input.uploadFile(filePath);
+    return this.observe();
+  }
+
+  async download(selector: string, directory: string): Promise<{ observation: BrowserObservation; filePath: string; sha256: string; bytes: number }> {
+    this.assertAlpha();
+    await mkdir(directory, { recursive: true });
+    const session = await this.page.createCDPSession();
+    try {
+      await session.send("Page.setDownloadBehavior", { behavior: "allow", downloadPath: directory });
+      await this.click(selector);
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        const names = await readdir(directory);
+        const finished = names.find(name => !name.endsWith(".crdownload") && !name.endsWith(".tmp"));
+        if (finished) {
+          const filePath = join(directory, finished);
+          const first = await stat(filePath);
+          if (first.size > 50_000_000) throw new Error("Browser download exceeds 50 MB");
+          await new Promise(resolve => setTimeout(resolve, 100));
+          const second = await stat(filePath);
+          if (first.size === second.size && second.isFile()) {
+            const body = await readFile(filePath);
+            return { observation: await this.observe(), filePath, sha256: createHash("sha256").update(body).digest("hex"), bytes: body.length };
+          }
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      throw new Error("Browser download did not finish within 15 seconds");
+    } finally {
+      await session.send("Page.setDownloadBehavior", { behavior: "default" }).catch(() => undefined);
+      await session.detach();
+    }
   }
 
   async viewport(width: number, height: number): Promise<BrowserObservation> {
@@ -264,5 +417,22 @@ export class VisibleBrowser {
 
   private assertAlpha(): void {
     if (this.holder !== "alpha") throw new Error("User controls the preview; Alpha must wait for returnControl");
+  }
+
+  private async resolve(selector: string): Promise<{ frame: Frame; selector: string }> {
+    const item = this.refs.get(selector);
+    if (!item) {
+      if (/^e\d+-\d+(?:-\d+)?$/.test(selector)) throw new Error("Element reference is stale; observe again");
+      const matches = await this.page.$$(selector);
+      if (matches.length !== 1) throw new Error(`Selector must match exactly one element; matched ${matches.length}`);
+      return { frame: this.page.mainFrame(), selector };
+    }
+    if (item.epoch !== this.documentEpoch) throw new Error("Element reference is stale after navigation");
+    const resolved = `pierce/[data-alpha-target="alpha-ref-${selector}"]`;
+    const target = await item.frame.$(resolved);
+    if (!target) throw new Error("Element reference is stale; observe again");
+    const same = await target.evaluate(element => JSON.stringify([element.tagName.toLowerCase(), element.id, element.getAttribute("name") ?? "", element.getAttribute("aria-label") ?? "", (element.textContent ?? "").trim().slice(0, 160)]));
+    if (same !== item.fingerprint) throw new Error("Element changed since observation; observe again");
+    return { frame: item.frame, selector: resolved };
   }
 }

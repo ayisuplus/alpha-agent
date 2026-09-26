@@ -3,30 +3,53 @@ import { copyFile, mkdir, readdir, readFile, rename, unlink, writeFile } from "n
 import { dirname, join, resolve, sep } from "node:path";
 import { fingerprintSource } from "./task-ledger";
 import type { AgentPresetSnapshot } from "./agent-presets";
+import { excludedSourceDirectory } from "./source-review";
 
 export interface WorkOrder {
   id: string;
   objective: string;
   ownedPaths: string[];
   resources: string[];
+  readPaths?: string[];
+  /** Async worktree workers may use the whole project; scopes remain scheduling hints. */
+  fullAccess?: boolean;
+  mode?: "investigate" | "implement" | "review";
+  expertId?: string;
+  skillIds?: string[];
+  skillSnapshots?: Array<{ id: string; hash: string; revision: string }>;
+  dependsOn?: string[];
+  acceptance?: string[];
+  instanceId?: string;
+  contractVersion?: number;
+  cognitionRevision?: number;
+  baseRevision?: string;
   presetId?: string;
   /** Resolved once when the parent run starts; never supplied by the model. */
   preset?: AgentPresetSnapshot;
 }
 
 export interface WorkerResult {
+  status?: "completed" | "needs-context" | "blocked" | "failed";
+  findings?: string[];
+  reviewVerdict?: "pass" | "changes-requested" | "inconclusive";
+  reviewEvidence?: Array<{ path: string; excerpt: string }>;
   evidence: string[];
+  readPaths?: string[];
   unresolved: string[];
-  usage?: { model: string; toolCalls: number; elapsedMs: number };
+  requests?: Array<{ capability: string; reason: string; details: string }>;
+  usage?: { model: string; toolCalls: number; elapsedMs: number; tokens?: RunUsage; outcome?: "returned" | "cancelled" | "budget" | "error" | "needs-input"; incomplete?: boolean };
 }
 
+type RunUsage = { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number };
+
 export interface WorkBatchReport {
-  status: "merged" | "merging" | "rejected" | "partial";
+  status: "ready" | "merged" | "merging" | "rejected" | "partial";
   elapsedMs: number;
   baseRevision: string;
   mergedRevision?: string;
   workRoot: string;
   changes: Record<string, string[]>;
+  outputHashes?: Record<string, Record<string, string | null>>;
   committed: string[];
   planned?: Record<string, { before?: string; after?: string }>;
   rolledBack?: string[];
@@ -36,12 +59,11 @@ export interface WorkBatchReport {
   reason?: string;
 }
 
-const EXCLUDED = new Set([".alpha", ".git", "node_modules", "dist"]);
 type Snapshot = Map<string, string>;
 
 function validPath(path: string): boolean {
   const parts = path.endsWith("/") ? path.slice(0, -1).split("/") : path.split("/");
-  return !path.includes("\\") && !path.startsWith("/") && !path.includes(":") && parts.every(part => part && part !== "." && part !== "..") && !EXCLUDED.has(parts[0]);
+  return !path.includes("\\") && !path.startsWith("/") && !path.includes(":") && parts.every((part, index) => part && part !== "." && part !== ".." && !excludedSourceDirectory(part, index === 0));
 }
 
 function owns(scope: string, path: string): boolean {
@@ -55,17 +77,22 @@ function overlaps(first: string, second: string): boolean {
   return first === second;
 }
 
-function validateOrders(orders: WorkOrder[]): void {
-  if (orders.length !== 2) throw new Error("Exactly two work orders are required");
+export function validateOrders(orders: WorkOrder[], maximum = 2): void {
+  if (orders.length < 1 || orders.length > maximum) throw new Error(`One to ${maximum} work orders are required`);
   const ids = new Set<string>();
   const scopes: string[] = [];
   const resources = new Set<string>();
   for (const order of orders) {
-    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(order.id) || ids.has(order.id) || !order.objective.trim() || order.ownedPaths.length === 0) throw new Error("Invalid work order");
+    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(order.id) || ids.has(order.id) || !order.objective.trim() || (!order.fullAccess && (order.mode ?? "implement") === "implement" && order.ownedPaths.length === 0)) throw new Error("Invalid work order");
+    if (order.mode && !["investigate", "implement", "review"].includes(order.mode)) throw new Error("Invalid work order mode");
+    if (!order.fullAccess && order.mode && order.mode !== "implement" && order.ownedPaths.length) throw new Error("Read-only orders cannot own source paths");
     ids.add(order.id);
     for (const scope of order.ownedPaths) {
-      if (!validPath(scope) || scope === "alpha-verification.json" || scopes.some(previous => overlaps(previous, scope))) throw new Error(`Conflicting or invalid ownership: ${scope}`);
-      scopes.push(scope);
+      if (!validPath(scope) || (!order.fullAccess && (scope === "alpha-verification.json" || scopes.some(previous => overlaps(previous, scope))))) throw new Error(`Conflicting or invalid ownership: ${scope}`);
+      if (!order.fullAccess) scopes.push(scope);
+    }
+    for (const path of order.readPaths ?? []) {
+      if (path !== "." && !validPath(path)) throw new Error(`Invalid read path: ${path}`);
     }
     for (const resource of order.resources) {
       if (!resource.trim() || resources.has(resource)) throw new Error(`Conflicting resource: ${resource}`);
@@ -78,9 +105,10 @@ async function sourceFiles(root: string, directory = root): Promise<string[]> {
   const files: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const absolute = join(directory, entry.name);
+    if (entry.name === ".git") continue;
     if (entry.isSymbolicLink()) throw new Error(`Worker source contains a symlink: ${absolute}`);
     if (entry.isDirectory()) {
-      if (!EXCLUDED.has(entry.name)) files.push(...await sourceFiles(root, absolute));
+      if (!excludedSourceDirectory(entry.name, directory === root)) files.push(...await sourceFiles(root, absolute));
     } else if (entry.isFile()) {
       files.push(absolute.slice(root.length + 1).split(sep).join("/"));
     }
@@ -101,6 +129,12 @@ async function copySnapshot(source: string, destination: string, files: Iterable
     await mkdir(dirname(target), { recursive: true });
     await copyFile(join(source, file), target);
   }
+}
+
+async function createGitWorktree(projectRoot: string, destination: string): Promise<void> {
+  const child = Bun.spawn(["git", "-C", projectRoot, "worktree", "add", "--detach", "--no-checkout", destination, "HEAD"], { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+  const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+  if (code !== 0) throw new Error(`Cannot create worker Git worktree: ${stderr.slice(0, 500)}`);
 }
 
 function changedFiles(base: Snapshot, current: Snapshot): string[] {
@@ -177,13 +211,17 @@ export async function executeWorkOrders(input: {
   baseRevision: string;
   orders: WorkOrder[];
   signal?: AbortSignal;
+  deferMerge?: boolean;
+  batchId?: string;
+  isolate?: "copy" | "git-worktree";
   runWorker: (order: WorkOrder, directory: string, signal?: AbortSignal) => Promise<WorkerResult>;
 }): Promise<WorkBatchReport> {
   const started = performance.now();
   validateOrders(input.orders);
   if (!/^[0-9a-f-]{36}$/.test(input.taskId)) throw new Error("Invalid task ID");
   const projectRoot = resolve(input.projectRoot);
-  const workRoot = join(resolve(input.dataRoot), "workers", input.taskId, randomUUID());
+  if (input.batchId && !/^[0-9a-f-]{36}$/.test(input.batchId)) throw new Error("Invalid worker batch ID");
+  const workRoot = join(resolve(input.dataRoot), "workers", input.taskId, input.batchId ?? randomUUID());
   const reportFile = join(workRoot, "merge.json");
   const report: WorkBatchReport = { status: "rejected", elapsedMs: 0, baseRevision: input.baseRevision, workRoot, changes: {}, committed: [], results: {}, presets: Object.fromEntries(input.orders.filter(order => order.preset).map(order => [order.id, { id: order.preset!.id, name: order.preset!.name, hash: order.preset!.hash, source: order.preset!.source }])) };
   const save = async () => {
@@ -193,7 +231,7 @@ export async function executeWorkOrders(input: {
   };
   await mkdir(workRoot, { recursive: true });
   try {
-    await recoverIncompleteMerges(projectRoot, input.dataRoot, input.taskId);
+    if (!input.deferMerge) await recoverIncompleteMerges(projectRoot, input.dataRoot, input.taskId);
     input.signal?.throwIfAborted();
     if ((await fingerprintSource(projectRoot)) !== input.baseRevision) throw new Error("Main project changed before workers started");
     const base = await snapshot(projectRoot);
@@ -201,20 +239,34 @@ export async function executeWorkOrders(input: {
     await copySnapshot(projectRoot, baseDir, base.keys());
     if ((await fingerprintSource(projectRoot)) !== input.baseRevision || changedFiles(base, await snapshot(baseDir)).length) throw new Error("Main project changed during worker snapshot");
     const directories = input.orders.map(order => join(workRoot, order.id));
+    if (input.isolate === "git-worktree") {
+      for (const directory of directories) await createGitWorktree(projectRoot, directory);
+    }
     await Promise.all(directories.map(directory => copySnapshot(baseDir, directory, base.keys())));
     const settled = await Promise.allSettled(input.orders.map((order, index) => input.runWorker(order, directories[index], input.signal)));
     for (const [index, outcome] of settled.entries()) {
       const order = input.orders[index];
       if (outcome.status === "rejected") throw new Error(`Worker ${order.id} failed: ${String(outcome.reason)}`);
       report.results[order.id] = outcome.value;
+      if (outcome.value.status && outcome.value.status !== "completed") throw new Error(`Worker ${order.id} ended ${outcome.value.status}`);
       if (outcome.value.unresolved.length) throw new Error(`Worker ${order.id} has unresolved items: ${outcome.value.unresolved.join("; ")}`);
-      const changes = changedFiles(base, await snapshot(directories[index]));
+      if (!order.fullAccess && order.mode === "review" && outcome.value.reviewVerdict !== "pass") throw new Error(`Review ${order.id} did not pass: ${outcome.value.reviewVerdict ?? "inconclusive"}`);
+      const workerSnapshot = await snapshot(directories[index]);
+      const changes = changedFiles(base, workerSnapshot);
       report.changes[order.id] = changes;
-      if (!changes.length) throw new Error(`Worker ${order.id} produced no source changes`);
-      const unexpected = changes.find(file => !order.ownedPaths.some(scope => owns(scope, file)));
+      (report.outputHashes ??= {})[order.id] = Object.fromEntries(changes.map(file => [file, workerSnapshot.get(file) ?? null]));
+      if (!changes.length && (order.mode ?? "implement") === "implement" && !order.fullAccess) throw new Error(`Worker ${order.id} produced no source changes`);
+      if (!order.fullAccess && changes.length && order.mode && order.mode !== "implement") throw new Error(`Read-only worker ${order.id} changed source`);
+      const unexpected = order.fullAccess ? undefined : changes.find(file => !order.ownedPaths.some(scope => owns(scope, file)));
       if (unexpected) throw new Error(`Worker ${order.id} changed unowned file: ${unexpected}`);
     }
     input.signal?.throwIfAborted();
+    if (input.deferMerge) {
+      report.status = "ready";
+      report.elapsedMs = Math.round(performance.now() - started);
+      await save();
+      return report;
+    }
     if ((await fingerprintSource(projectRoot)) !== input.baseRevision) throw new Error("Main project changed before merge");
     report.planned = {};
     for (const [index, order] of input.orders.entries()) {
@@ -260,6 +312,55 @@ export async function executeWorkOrders(input: {
     } else report.status = "rejected";
   }
   report.elapsedMs = Math.round(performance.now() - started);
+  await save();
+  return report;
+}
+
+/** Integrate one previously checked isolated result. Other, unrelated parent edits may coexist. */
+export async function integratePreparedWorkOrder(projectRoot: string, dataRoot: string, taskId: string, instanceId: string, order: WorkOrder, signal?: AbortSignal): Promise<WorkBatchReport> {
+  const root = resolve(projectRoot);
+  const workRoot = join(resolve(dataRoot), "workers", taskId, instanceId);
+  if (!/^[0-9a-f-]{36}$/.test(taskId) || !/^[0-9a-f-]{36}$/.test(instanceId)) throw new Error("Invalid worker identity");
+  const reportFile = join(workRoot, "merge.json");
+  const report = JSON.parse(await readFile(reportFile, "utf8")) as WorkBatchReport;
+  if (report.workRoot !== workRoot || report.status !== "ready" || !report.results[order.id]) throw new Error("Worker result is not ready to integrate");
+  const save = async () => { const temp = `${reportFile}.${randomUUID()}.tmp`; await writeFile(temp, JSON.stringify(report, null, 2)); await rename(temp, reportFile); };
+  const base = await snapshot(join(workRoot, "base"));
+  const worker = await snapshot(join(workRoot, order.id));
+  const changes = changedFiles(base, worker);
+  if (JSON.stringify(changes) !== JSON.stringify(report.changes[order.id]) || changes.some(file => (worker.get(file) ?? null) !== report.outputHashes?.[order.id]?.[file]) || (!order.fullAccess && changes.some(file => !order.ownedPaths.some(scope => owns(scope, file))))) throw new Error("Worker result changed after inspection");
+  const current = await snapshot(root);
+  const readScopes = [...new Set([...(order.readPaths ?? []), ...(report.results[order.id].readPaths ?? [])])];
+  const readChanges = changedFiles(base, current).filter(file => readScopes.some(scope => scope === "." || owns(scope, file)));
+  if (readChanges.length) throw new Error(`Worker read dependency changed: ${readChanges.slice(0, 5).join(", ")}`);
+  if (changes.some(file => current.get(file) !== base.get(file))) throw new Error("Worker output conflicts with main project");
+  report.planned = Object.fromEntries(changes.map(file => [file, { before: base.get(file), after: worker.get(file) }]));
+  try {
+    signal?.throwIfAborted();
+    report.status = "merging";
+    await save();
+    for (const file of changes) {
+      signal?.throwIfAborted();
+      const target = join(root, file);
+      if (await fileHash(target) !== base.get(file)) throw new Error(`Main file changed before merge: ${file}`);
+      if (worker.has(file)) {
+        await mkdir(dirname(target), { recursive: true });
+        const temporary = `${target}.${randomUUID()}.tmp`;
+        report.inFlight = { file, temporary }; await save();
+        await copyFile(join(workRoot, order.id, file), temporary);
+        await rename(temporary, target);
+      } else await unlink(target);
+      report.committed.push(file);
+      report.inFlight = undefined;
+      await save();
+    }
+    report.status = "merged";
+    report.mergedRevision = await fingerprintSource(root);
+  } catch (error) {
+    report.reason = error instanceof Error ? error.message : String(error);
+    try { await rollbackMerge(root, workRoot, report); report.status = "rejected"; }
+    catch (rollbackError) { report.status = "partial"; report.reason += `; rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`; }
+  }
   await save();
   return report;
 }

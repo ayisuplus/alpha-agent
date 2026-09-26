@@ -1,18 +1,18 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent } from "react";
 import { X } from "lucide-react";
 import type { Settings } from "../api/types";
-import { PreviewPane } from "../components/PreviewPane";
 import { CommandPalette } from "../components/CommandPalette";
 import { Sidebar } from "../components/Sidebar";
+import { WorkspacePanel, WorkspaceRail } from "../components/WorkspacePanel";
 import { matchShortcut, stepScale } from "../state/shortcuts";
 import { useStore } from "../state/store";
-import { closePalette, closePanel, dismissNotice, newTask, notify, openDetail, openPalette, openSettings, previewLocked, startWorkbench, store, updateSettings } from "../state/workbench";
+import { closePalette, closePanel, closeWorkspace, dismissNotice, newTask, notify, openDetail, openPalette, openSettings, previewLocked, showPreview, startWorkbench, store, updateSettings } from "../state/workbench";
 import { Thread } from "./Thread";
 import "./App.css";
 
 const SIDEBAR = 256;
 const RAIL = 56;
-const PREVIEW_RAIL = 44;
+const WORKSPACE_RAIL = 56;
 const SPLITTER = 6;
 const THREAD_MIN = 420;
 const PREVIEW_MIN = 360;
@@ -38,6 +38,8 @@ export function App() {
   const settings = useStore(store, state => state.settings);
   const loaded = useStore(store, state => state.loaded);
   const locked = useStore(store, previewLocked);
+  const workspaceView = useStore(store, state => state.workspaceView);
+  const selectedId = useStore(store, state => state.selectedId);
   const [innerWidth, setInnerWidth] = useState(() => window.innerWidth);
   // On a narrow window the task list folds away; expanding it by hand holds for this session only.
   const [expandedWhileNarrow, setExpandedWhileNarrow] = useState(false);
@@ -55,10 +57,13 @@ export function App() {
   const scale = ui.scale;
   const viewport = innerWidth / scale;
   const narrow = viewport < NARROW;
-  const sidebarCollapsed = ui.sidebarCollapsed || (narrow && !expandedWhileNarrow);
+  const sidebarCollapsed = ui.sidebarCollapsed || (narrow && (selectedId !== null || viewport < 900) && !expandedWhileNarrow);
   const sidebarWidth = sidebarCollapsed ? RAIL : SIDEBAR;
   const available = Math.max(0, viewport - sidebarWidth - SPLITTER);
-  const previewWidth = Math.min(Math.max(Math.round(available * ui.previewRatio), PREVIEW_MIN), Math.max(PREVIEW_MIN, available - THREAD_MIN));
+  const compactColumns = viewport < 900;
+  const previewMin = compactColumns ? 320 : PREVIEW_MIN;
+  const threadMin = compactColumns ? 320 : THREAD_MIN;
+  const previewWidth = Math.min(Math.max(Math.round(available * ui.previewRatio), previewMin), Math.max(previewMin, available - threadMin));
 
   const toggleSidebar = () => {
     if (sidebarCollapsed) {
@@ -69,11 +74,12 @@ export function App() {
   };
 
   const togglePreview = () => {
-    if (!ui.previewCollapsed && locked) {
+    if (workspaceView === "preview" && locked) {
       notify("浏览器正在使用预览，操作结束后才能收起", "info");
       return;
     }
-    void updateSettings({ ui: { previewCollapsed: !ui.previewCollapsed } }, { debounce: true });
+    if (workspaceView === "preview") closeWorkspace();
+    else showPreview();
   };
 
   const setScale = (next: number) => {
@@ -112,7 +118,8 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  if (!settings && !loaded) return <div className="workbench-loading" />;
+  const expanded = workspaceView !== "closed";
+  const showingPreview = workspaceView === "preview";
 
   const setRatio = (ratio: number) => void updateSettings({ ui: { previewRatio: Math.min(0.8, Math.max(0.2, ratio)) } }, { debounce: true });
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -133,9 +140,15 @@ export function App() {
     else if (event.key === "ArrowRight") setRatio(ui.previewRatio - 0.03);
   };
 
-  const columns = ui.previewCollapsed
-    ? `${sidebarWidth}px minmax(0, 1fr) ${PREVIEW_RAIL}px`
-    : `${sidebarWidth}px minmax(0, 1fr) ${SPLITTER}px ${previewWidth}px`;
+  const columns = expanded
+    ? `${sidebarWidth}px minmax(0, 1fr) ${SPLITTER}px ${previewWidth}px`
+    : `${sidebarWidth}px minmax(0, 1fr) ${WORKSPACE_RAIL}px`;
+
+  useEffect(() => {
+    if (!showingPreview) window.alpha?.setPreviewBounds?.({ x: 0, y: 0, width: 0, height: 0, visible: false });
+  }, [showingPreview]);
+
+  if (!settings && !loaded) return <div className="workbench-loading" />;
 
   return <div className="workbench" data-testid="workbench" data-font={ui.fontSize} style={{ gridTemplateColumns: columns, zoom: scale }}>
     <Sidebar collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
@@ -144,7 +157,7 @@ export function App() {
       <CommandPalette toggleSidebar={toggleSidebar} togglePreview={togglePreview} />
       <Toast />
     </main>
-    {!ui.previewCollapsed && <div
+    {expanded && <div
       className="splitter"
       role="separator"
       aria-orientation="vertical"
@@ -157,6 +170,8 @@ export function App() {
       onDoubleClick={() => setRatio(DEFAULT_RATIO)}
       onKeyDown={onSplitterKey}
     />}
-    <PreviewPane collapsed={ui.previewCollapsed} locked={locked} onToggle={togglePreview} layoutKey={`${sidebarWidth}:${previewWidth}:${innerWidth}:${scale}:${ui.previewCollapsed}`} />
+    {expanded
+      ? <WorkspacePanel locked={locked} layoutKey={`${sidebarWidth}:${previewWidth}:${innerWidth}:${scale}`} />
+      : <WorkspaceRail />}
   </div>;
 }

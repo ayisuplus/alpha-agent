@@ -93,7 +93,19 @@ export function ModelPicker({ value, onChange, allowDefault, defaultKind = "task
       <ChevronDown size={13} aria-hidden />
     </button>
     {open && <div className={`model-popover ${placement}`} role="dialog" aria-label={`选择${label}`}
-      onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); setOpen(false); } }}>
+      onKeyDown={event => {
+        if (event.key === "Escape") { event.stopPropagation(); setOpen(false); root.current?.querySelector<HTMLButtonElement>(".model-picker-button")?.focus(); return; }
+        if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter") return;
+        const options = [...(root.current?.querySelectorAll<HTMLButtonElement>(".model-option") ?? [])];
+        if (!options.length) return;
+        if (event.key === "Enter") {
+          if (options.includes(document.activeElement as HTMLButtonElement)) { event.preventDefault(); (document.activeElement as HTMLButtonElement).click(); }
+          return;
+        }
+        event.preventDefault();
+        const index = options.indexOf(document.activeElement as HTMLButtonElement);
+        options[index < 0 ? event.key === "ArrowDown" ? 0 : options.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length].focus();
+      }}>
       <label className="model-search">
         <Search size={13} aria-hidden />
         <input autoFocus value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索模型" />

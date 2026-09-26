@@ -1,13 +1,33 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { extname, join, relative, resolve, sep } from "node:path";
 
 const TEXT_EXTENSIONS = new Set([".css", ".html", ".js", ".json", ".md", ".ts", ".tsx"]);
-const EXCLUDED = new Set([".alpha", ".git", "dist", "node_modules"]);
+const SOURCE_EXCLUDED_DIRS = new Set([".alpha", ".git", "dist", "node_modules", ".next", ".cache", ".venv", "venv", "__pycache__"]);
+const ROOT_GENERATED_DIRS = new Set(["build", "release", "target", "coverage"]);
+export function excludedSourceDirectory(name: string, atRoot: boolean): boolean {
+  const normalized = name.toLowerCase();
+  return SOURCE_EXCLUDED_DIRS.has(normalized) || (atRoot && ROOT_GENERATED_DIRS.has(normalized));
+}
 const SENSITIVE = /^(?:\.ssh|\.aws|\.azure|\.codex|user data|\.env(?:\..*)?|credentials?(?:\..*)?|auth\.json|id_(?:rsa|ed25519)|\.npmrc|\.git-credentials)$/i;
 const MAX_FILE_BYTES = 256_000;
 
 export type SourceSnapshot = Record<string, string>;
+/** Complete hashes for change detection; UI snapshots below intentionally omit binary and long text. */
+export async function snapshotSourceHashes(root: string): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  const projectRoot = resolve(root);
+  async function walk(directory: string): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.isSymbolicLink() || SENSITIVE.test(entry.name)) continue;
+      const path = join(directory, entry.name);
+      if (entry.isDirectory() && !excludedSourceDirectory(entry.name, directory === projectRoot)) await walk(path);
+      else if (entry.isFile()) files[relative(root, path).split(sep).join("/")] = createHash("sha256").update(await readFile(path)).digest("hex");
+    }
+  }
+  await walk(projectRoot);
+  return files;
+}
 export interface SourceChange {
   path: string;
   before: string | null;
@@ -24,12 +44,13 @@ export interface SourceReview {
 
 export async function snapshotSource(root: string): Promise<SourceSnapshot> {
   const files: SourceSnapshot = {};
+  const projectRoot = resolve(root);
   async function walk(directory: string): Promise<void> {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (entry.isSymbolicLink()) continue;
       const path = join(directory, entry.name);
       if (entry.isDirectory()) {
-        if (!EXCLUDED.has(entry.name.toLowerCase()) && !SENSITIVE.test(entry.name)) await walk(path);
+        if (!excludedSourceDirectory(entry.name, directory === projectRoot) && !SENSITIVE.test(entry.name)) await walk(path);
       } else if (entry.isFile() && !SENSITIVE.test(entry.name) && TEXT_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
         const data = await readFile(path);
         if (!data.includes(0)) files[relative(root, path).split(sep).join("/")] = data.length <= MAX_FILE_BYTES
@@ -38,7 +59,7 @@ export async function snapshotSource(root: string): Promise<SourceSnapshot> {
       }
     }
   }
-  await walk(resolve(root));
+  await walk(projectRoot);
   return files;
 }
 

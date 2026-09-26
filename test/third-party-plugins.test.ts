@@ -25,6 +25,26 @@ test("a Skills pack is namespaced, readable, and absent after disabling", async 
   expect(await scanSkillPack(pack, "sample")).toHaveLength(1);
 });
 
+test("task capability filters do not load another task's Skills or Hooks", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-task-capabilities-"));
+  for (const id of ["first", "second"]) {
+    const pack = join(root, "plugin-packs", id);
+    await mkdir(join(pack, "skills", "proof"), { recursive: true });
+    await mkdir(join(pack, "extensions"), { recursive: true });
+    await writeFile(join(pack, "skills", "proof", "SKILL.md"), `---\nname: proof\ndescription: ${id} task\n---\n\n${id}\n`);
+    await writeFile(join(pack, "extensions", "hook.js"), "export default function () {}\n");
+    await writeFile(join(pack, "package.json"), JSON.stringify({ omp: { extensions: ["./extensions/hook.js"] } }));
+  }
+  await writeFile(join(root, "plugin-packs", "installed.json"), JSON.stringify({ plugins: ["first", "second"].map(id => ({
+    id, name: id, source: `https://github.com/a/${id}.git`, revision: "a".repeat(40), enabled: true, skillCount: 1, hooksEnabled: true,
+  })) }));
+  const store = new SkillPluginStore(root);
+  expect((await store.loadSkills(["first:proof"])).map(skill => skill.name)).toEqual(["first:proof"]);
+  expect((await store.loadSkills([]))).toEqual([]);
+  expect((await store.loadHooks(["first"])).map(hook => hook.path.includes("first"))).toEqual([true]);
+  expect(await store.loadHooks([])).toEqual([]);
+});
+
 test("plugin installer rejects non-GitHub and non-HTTPS sources before cloning", async () => {
   const store = new SkillPluginStore(join(tmpdir(), "alpha-source-validation"));
   await expect(store.install("http://127.0.0.1/repo.git")).rejects.toThrow("GitHub");

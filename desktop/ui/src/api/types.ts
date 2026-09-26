@@ -1,7 +1,7 @@
 export type TaskStatus = "active" | "stopped" | "complete" | "needs-input";
 export type ControlHolder = "alpha" | "user";
 export type PermissionMode = "ask" | "auto" | "full";
-export interface ProjectRecord { id: string; name: string; version: number; mounts: Array<{ id: string; path: string }>; createdAt: string; updatedAt: string }
+export interface ProjectRecord { id: string; name: string; version: number; mounts: Array<{ id: string; path: string }>; permissionMode?: PermissionMode; createdAt: string; updatedAt: string }
 export type GuidanceStatus = "recorded" | "delivered" | "processed";
 export interface TaskMeta { title?: string; pinned?: boolean; archived?: boolean }
 
@@ -10,13 +10,17 @@ export interface TaskSummary {
   projectId?: string | null;
   projectVersion?: number | null;
   permissionMode?: PermissionMode | null;
-  taskType?: "web-product" | "code-change" | "research" | "file-work";
+  taskType?: "web-product" | "code-change" | "research" | "file-work" | "general";
   workspaceOrigin?: { kind: "generated" | "git" | "copy" | "direct"; sourcePath?: string; initialRevision?: string };
   objective: string;
+  designatedExpertId?: string | null;
   originalObjective?: string;
   contractVersion: number;
   status: TaskStatus;
+  phase?: "plan" | "plan-review" | "execute";
+  goal?: { enabled: boolean; budget?: { maxToolCalls: number; wallTimeMs: number; maxTotalToolCalls: number; totalWallTimeMs: number }; noProgressRuns?: number; stopReason?: string };
   running: boolean;
+  queued?: boolean;
   pendingCount: number;
   createdAt?: string;
   updatedAt: string;
@@ -63,6 +67,20 @@ export interface CommandApproval {
   exactAction?: { tool: string; targets: string[]; arguments: Record<string, unknown>; digest: string };
   result?: { exitCode: number; logPath: string; revision: string };
 }
+export interface WebApproval {
+  id: string;
+  taskId: string;
+  kind: "read" | "write";
+  scope: string;
+  actionId?: string;
+  details?: string;
+  status: "pending" | "granted" | "approved" | "denied" | "running" | "complete" | "uncertain";
+  requestedAt: string;
+  decidedAt?: string;
+}
+export interface WebTab { tabId: string; targetId: string; url: string; title: string }
+export interface WebSource { id: string; url: string; title: string; visitedAt: string; sha256: string; rawSha256: string; kind?: string; provider?: string; text: string }
+export interface WebJob { id: string; url: string; status: string; cancelRequested: boolean; creditsUsed?: number; pages?: number }
 export interface QueueItem { id: string; taskId: string; instruction: string; status: "pending" | "running" | "complete" | "failed"; createdAt: string; scheduledFor?: string; missedCount?: number; result?: string }
 export interface LocalSchedule { id: string; taskId: string; instruction: string; intervalMinutes: number | null; nextRunAt: string; active: boolean; createdAt: string }
 
@@ -85,6 +103,24 @@ export interface RunRecord {
 }
 
 export interface TaskView extends TaskSummary {
+  planApproval?: { contractVersion: number; cognitionRevision: number; sourceRevision: string; approvedAt: string } | null;
+  cognition?: {
+    revision: number;
+    recipeVersion: number;
+    summary: string;
+    scope?: string[];
+    constraints?: string[];
+    openQuestions?: string[];
+    candidates: string[];
+    taskSkillIds?: string[];
+    steps: Array<{ id: string; objective: string; mode: "investigate" | "implement" | "review"; dependsOn: string[]; expertId?: string; skillIds: string[]; status: string; statusReason?: string }>;
+    gaps: Array<{ kind: string; description: string; resolvedAt?: string; resolution?: string; blockingReason?: string }>;
+    amendments: Array<{ revision: number; reason: string; recordedAt: string }>;
+    instances?: Array<{ id: string; parentId?: string; orderId: string; mode: string; expert?: { id: string; name: string; hash: string }; skills: Array<{ id: string; hash: string; revision: string }>; status: string; integration?: string; worktreePath?: string; startedAt?: string; endedAt?: string; findings?: string[] }>;
+    skillSearches?: Array<{ key: string; gapDescription: string; query: string; resultCount: number; error?: string }>;
+    skillProposals?: Array<{ id: string; key: string; name: string; description: string; source: string; revision: string; path: string; installs: number; requirements?: { tools: string[]; services: string[]; conflicts: string[] }; status: "pending" | "rejected" | "installed"; installedSkillId?: string }>;
+  } | null;
+  development?: { enabled: true; review?: { verdict: "pass" | "changes-requested" | "inconclusive"; findings: string[]; evidence?: Array<{ path: string; excerpt: string }>; revision: string; contractVersion: number }; repairAttempts: number } | null;
   revision: string | null;
   projectRoot?: string;
   acceptsGuidance: boolean;
@@ -97,9 +133,13 @@ export interface TaskView extends TaskSummary {
   reopenReason: string | null;
   pendingQuestion?: string | null;
   blockedService?: string | null;
+  checkpoint?: { runId: string; codeCommits: Array<{ root: string; commit: string }>; memoryCommit: string; recordedAt: string } | null;
+  checkpointError?: string | null;
+  checkpointStatus?: "pending" | "committed" | "failed" | null;
   latestRun: RunRecord | null;
   evidence: EvidenceItem[];
-  inputs?: Array<{ id: string; name: string; mimeType: string; sha256: string; uploadedAt: string; url: string }>;
+  inputs?: Array<{ id: string; name: string; mimeType: string; size?: number | null; sha256: string; uploadedAt: string; url: string }>;
+  capabilities?: { plugins: Array<{ id: string; revision: string }>; skills: Array<{ id: string; hash: string; revision: string }> } | null;
   screenshotUrl: string | null;
   preview: { id: string; url: string; live: boolean } | null;
 }
@@ -232,6 +272,7 @@ export interface Settings {
 }
 
 export interface SkillPlugin {
+  internalized?: boolean;
   id: string;
   name: string;
   source: string;
@@ -252,6 +293,8 @@ export interface AgentPresetSummary {
   enabled: boolean;
   builtin: boolean;
   basedOn?: string;
+  skillIds?: string[];
+  package?: { revision: string; skills: Array<{ id: string; hash: string }> };
   source?: { url: string; revision: string; path: string };
 }
 
@@ -287,6 +330,9 @@ declare global {
       loadPreview(url: string): void;
       clearPreview(): void;
       setPreviewBounds?(rect: PreviewRect): void;
+      setWebBounds?(tabId: string | null, rect: PreviewRect): void;
+      onWebTabRequested?(callback: (request: { taskId: string; tabId: string }) => void): () => void;
+      onWebTabClosed?(callback: (tabId: string) => void): () => void;
       openFolder?(path: string): Promise<string>;
       openExternal?(url: string): Promise<boolean>;
       saveText?(filename: string, content: string): Promise<boolean>;

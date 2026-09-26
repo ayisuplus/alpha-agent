@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { createAgentSession, discoverAuthStorage, ModelRegistry, SessionManager } from "@oh-my-pi/pi-coding-agent";
+import { isAllowedModelProvider, isAllowedModelSelector } from "./model-policy";
 
 export interface ModelInfo {
   selector: string;
@@ -42,7 +43,7 @@ export async function listModels(): Promise<{ models: ModelInfo[]; providers: Pr
   try {
     const available = new Set(modelRegistry.getAvailable().map(model => `${model.provider}/${model.id}`));
     const models: ModelInfo[] = modelRegistry.getAll("chat")
-      .filter(model => model.supportsTools !== false)
+      .filter(model => isAllowedModelProvider(model.provider) && model.supportsTools !== false)
       .map(model => ({
         selector: `${model.provider}/${model.id}`,
         provider: model.provider,
@@ -81,6 +82,7 @@ export async function listModels(): Promise<{ models: ModelInfo[]; providers: Pr
 }
 
 export async function isModelAvailable(selector: string): Promise<boolean> {
+  if (!isAllowedModelSelector(selector)) return false;
   const { authStorage, modelRegistry } = await ompRegistry();
   try { return modelRegistry.getAvailable().some(model => `${model.provider}/${model.id}` === selector); }
   finally { authStorage.close(); }
@@ -88,6 +90,7 @@ export async function isModelAvailable(selector: string): Promise<boolean> {
 
 /** One tiny prompt with no tools; costs a single short model call. */
 export async function testModel(selector: string, dataRoot: string, timeoutMs = 30_000): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
+  if (!isAllowedModelSelector(selector)) return { ok: false, latencyMs: 0, error: "Alpha 不支持这个模型服务商" };
   const { authStorage, modelRegistry } = await ompRegistry();
   const started = performance.now();
   try {
@@ -99,6 +102,7 @@ export async function testModel(selector: string, dataRoot: string, timeoutMs = 
       authStorage,
       modelRegistry,
       model,
+      thinkingLevel: model.provider === "xiaomi-token-plan-cn" ? "off" : undefined,
       sessionManager: SessionManager.inMemory(dataRoot),
       systemPrompt: "You are a connectivity check. Reply with exactly: ALPHA_OK",
       toolNames: [],
@@ -120,6 +124,9 @@ export async function testModel(selector: string, dataRoot: string, timeoutMs = 
       if (last?.stopReason === "error" || last?.stopReason === "aborted") {
         return { ok: false, latencyMs: Math.round(performance.now() - started), error: last.errorMessage ?? (last.stopReason === "aborted" ? `超过 ${timeoutMs / 1000} 秒没有响应` : "模型返回错误") };
       }
+      if (!last?.content.some(part => part.type === "text" && part.text.includes("ALPHA_OK"))) {
+        return { ok: false, latencyMs: Math.round(performance.now() - started), error: "模型未返回预期内容" };
+      }
       return { ok: true, latencyMs: Math.round(performance.now() - started) };
     } finally {
       clearTimeout(timer);
@@ -133,6 +140,7 @@ export async function testModel(selector: string, dataRoot: string, timeoutMs = 
 }
 
 async function knownProvider(provider: string) {
+  if (!isAllowedModelProvider(provider)) throw new ModelServiceError("没有这个模型服务商");
   const services = await ompRegistry();
   if (!services.modelRegistry.getAll("chat").some(model => model.provider === provider)) {
     services.authStorage.close();

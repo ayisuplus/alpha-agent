@@ -12,8 +12,8 @@ const {
 const authStorage = await discoverAuthStorage();
 const modelRegistry = new ModelRegistry(authStorage);
 const available = modelRegistry.getAvailable();
-const model = available.find(item => item.provider === "alibaba-token-plan" && item.id === "qwen3.6-flash") ?? available[0];
-if (!model) throw new Error("No authenticated OMP model is available");
+const model = available.find(item => item.provider === "xiaomi-token-plan-cn" && item.id === "mimo-v2.6-flash");
+if (!model) throw new Error("MiMo V2.6 Flash is unavailable");
 
 const workspace = await mkdtemp(join(tmpdir(), "alpha-model-probe-"));
 try {

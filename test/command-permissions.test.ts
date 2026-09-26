@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CommandApprovalStore, commandRisk } from "../src/runtime/command-approval";
+import { CommandApprovalStore, commandRisk, createCommandTool } from "../src/runtime/command-approval";
 import { configuredChecks, runCodeCheck } from "../src/runtime/code-check";
 
 const folders: string[] = [];
@@ -31,6 +31,18 @@ test("ask mode waits for a user decision", async () => {
   const approved = await store.decide("task", request.id, true);
   expect(approved.review?.reviewer).toBe("user");
   expect(approved.status).toBe("approved");
+});
+
+test("managed worker command approval pauses even without a direct-folder permission mode", async () => {
+  const folder = await mkdtemp(join(tmpdir(), "alpha-command-"));
+  folders.push(folder);
+  const store = new CommandApprovalStore(folder);
+  const questions: string[] = [];
+  const tool = createCommandTool(store, "task", folder, undefined, undefined, async question => { questions.push(question); });
+  const result = await tool.execute("call", { argv: [process.execPath, "--version"], purpose: "other" }, undefined as never, undefined as never);
+  expect(result.isError).toBe(true);
+  expect(questions).toHaveLength(1);
+  expect(questions[0]).toContain("Command approval required");
 });
 
 test("high-risk commands stay with user even in full mode", async () => {

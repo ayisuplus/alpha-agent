@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 
 /** `stacked` puts a wide control (text box, list) under its label instead of beside it. */
 export function Field({ label, description, children, disabled, stacked }: { label: string; description?: ReactNode; children: ReactNode; disabled?: boolean; stacked?: boolean }) {
@@ -18,8 +18,16 @@ export function Toggle({ checked, onChange, label, disabled }: { checked: boolea
 }
 
 export function Segmented<T extends string | number>({ value, options, onChange, label }: { value: T; options: Array<{ value: T; label: string }>; onChange(value: T): void; label: string }) {
-  return <div className="settings-segmented" role="radiogroup" aria-label={label}>
-    {options.map(option => <button key={String(option.value)} role="radio" aria-checked={option.value === value} onClick={() => onChange(option.value)}>{option.label}</button>)}
+  const move = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const current = options.findIndex(option => option.value === value);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : (current + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + options.length) % options.length;
+    onChange(options[next].value);
+    (event.currentTarget.querySelectorAll("button")[next] as HTMLButtonElement)?.focus();
+  };
+  return <div className="settings-segmented" role="radiogroup" aria-label={label} onKeyDown={move}>
+    {options.map(option => <button key={String(option.value)} role="radio" aria-checked={option.value === value} tabIndex={option.value === value ? 0 : -1} onClick={() => onChange(option.value)}>{option.label}</button>)}
   </div>;
 }
 
@@ -28,6 +36,7 @@ export function NumberInput({ value, min, max, step = 1, unit, onCommit, label }
   const [draft, setDraft] = useState(String(value));
   useEffect(() => setDraft(String(value)), [value]);
   const commit = () => {
+    if (!draft.trim()) { setDraft(String(value)); return; }
     const parsed = Number(draft);
     if (!Number.isFinite(parsed)) { setDraft(String(value)); return; }
     const next = Math.min(max, Math.max(min, Math.round(parsed / step) * step));

@@ -1,0 +1,12 @@
+.web-panel { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-surface); font-size: var(--text-sm); }
+.web-panel > summary { cursor: pointer; padding: 8px 10px; color: var(--text-secondary); }
+.web-panel-body { display: grid; gap: 12px; max-height: 360px; overflow-y: auto; padding: 10px; }
+.web-panel-body section { display: grid; gap: 6px; }
+.web-panel-row, .web-panel-item, .web-panel-actions { display: flex; align-items: center; gap: 8px; }
+.web-panel-row input { flex: 1; min-width: 100px; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text); }
+.web-panel-item { justify-content: space-between; min-width: 0; padding: 5px 0; border-bottom: 1px solid var(--border-subtle); }
+.web-panel-item > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.web-panel-item small { display: block; color: var(--text-muted); }
+.web-panel-actions { flex: none; }
+.web-panel-source { padding: 5px 0; }
+.web-panel-source pre { max-height: 150px; overflow: auto; white-space: pre-wrap; color: var(--text-secondary); }

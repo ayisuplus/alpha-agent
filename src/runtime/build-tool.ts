@@ -1,10 +1,13 @@
 import { type } from "@oh-my-pi/omptype";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
 import { buildChildEnv } from "./child-env";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { commandRisk } from "./command-approval";
 
 const parameters = type({ action: "'build'" });
 
-export function createBuildTool(projectRoot: string): CustomTool<typeof parameters> {
+export function createBuildTool(projectRoot: string, workerRestricted = false): CustomTool<typeof parameters> {
   let running = false;
   return {
     name: "alpha_build",
@@ -15,6 +18,10 @@ export function createBuildTool(projectRoot: string): CustomTool<typeof paramete
     approval: "exec",
     async execute(_toolCallId, _args, _onUpdate, _ctx, signal) {
       if (running) return { content: [{ type: "text", text: "A build is already running" }], isError: true };
+      if (workerRestricted) {
+        const manifest = await readFile(join(projectRoot, "package.json"), "utf8").then(text => JSON.parse(text) as { scripts?: { build?: unknown } }).catch(() => null);
+        if (typeof manifest?.scripts?.build === "string" && commandRisk([manifest.scripts.build]) === "high") return { content: [{ type: "text", text: "高风险构建命令须由主代理受控执行；请使用 alpha_capability_request。" }], isError: true };
+      }
       running = true;
       const child = Bun.spawn([process.execPath, "run", "build"], { cwd: projectRoot, env: buildChildEnv(), stdout: "pipe", stderr: "pipe" });
       const abort = () => child.kill();

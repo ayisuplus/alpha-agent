@@ -1,11 +1,13 @@
 import { useMemo, useState } from "react";
-import { Check, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, Square, X } from "lucide-react";
+import { Check, ChevronDown, FolderClosed, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, SlidersHorizontal, Square, X } from "lucide-react";
 import type { TaskSummary } from "../api/types";
 import { dayGroup, relativeTime, taskStatus, taskTitle } from "../state/labels";
 import { useStore } from "../state/store";
 import { newTask, openPalette, openSettings, openTask, store } from "../state/workbench";
 import { IconButton, Spinner, StatusDot } from "./ui";
 import { TaskMenu } from "./TaskMenu";
+import { selectNewTaskProject } from "../state/new-task-draft";
+import { NewTaskSetup } from "./NewTaskSetup";
 import "./Sidebar.css";
 
 function TaskIcon({ task }: { task: TaskSummary }) {
@@ -38,24 +40,39 @@ function TaskRow({ task, selected }: { task: TaskSummary; selected: boolean }) {
 
 export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(): void }) {
   const tasks = useStore(store, state => state.tasks);
+  const projects = useStore(store, state => state.projects);
   const selectedId = useStore(store, state => state.selectedId);
   const connection = useStore(store, state => state.connection);
   const loaded = useStore(store, state => state.loaded);
   const settingsOpen = useStore(store, state => state.panel?.kind === "settings");
+  const creatingTask = selectedId === null && !settingsOpen;
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
+  const [collapsedProjects, setCollapsedProjects] = useState<string[]>([]);
 
-  const groups = useMemo(() => {
+  const grouped = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
-    const visible = tasks.filter(task => (showArchived || !task.meta?.archived) && (!needle || `${taskTitle(task)} ${task.objective}`.toLocaleLowerCase().includes(needle)));
-    visible.sort((a, b) => Number(!!b.meta?.pinned) - Number(!!a.meta?.pinned) || b.updatedAt.localeCompare(a.updatedAt));
-    const result = new Map<string, TaskSummary[]>();
-    for (const task of visible) {
-      const key = task.meta?.archived ? "已归档" : task.running ? "运行中" : task.meta?.pinned ? "置顶" : dayGroup(task.updatedAt);
-      result.set(key, [...(result.get(key) ?? []), task]);
+    const matches = (task: TaskSummary) => !needle || `${taskTitle(task)} ${task.objective}`.toLocaleLowerCase().includes(needle);
+    const active = tasks.filter(task => !task.meta?.archived).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const projectIds = new Set(projects.map(project => project.id));
+    const shortcuts = new Map<string, TaskSummary[]>();
+    for (const [label, items] of [["运行中", active.filter(task => task.running)], ["置顶", active.filter(task => task.meta?.pinned && !task.running)]] as const) {
+      const shown = items.filter(matches);
+      if (shown.length) shortcuts.set(label, shown);
     }
-    return ["运行中", "置顶", "今天", "昨天", "更早", "已归档"].flatMap(key => result.has(key) ? [[key, result.get(key)!] as const] : []);
-  }, [tasks, query, showArchived]);
+    const projectGroups = projects.map(project => ({ project, items: active.filter(task => task.projectId === project.id && (matches(task) || project.name.toLocaleLowerCase().includes(needle))) }))
+      .filter(group => !needle || group.items.length || group.project.name.toLocaleLowerCase().includes(needle));
+    const independent = new Map<string, TaskSummary[]>();
+    for (const task of active.filter(task => (!task.projectId || !projectIds.has(task.projectId)) && !task.running && !task.meta?.pinned && matches(task))) {
+      const key = dayGroup(task.updatedAt);
+      independent.set(key, [...(independent.get(key) ?? []), task]);
+    }
+    if (showArchived) {
+      const archived = tasks.filter(task => task.meta?.archived && matches(task)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      if (archived.length) independent.set("已归档", archived);
+    }
+    return { shortcuts: [...shortcuts], projectGroups, independent: [...independent] };
+  }, [tasks, projects, query, showArchived]);
 
   const connectionLabel = connection === "open" ? "已连接本机服务" : connection === "connecting" ? "正在连接…" : "连接中断，正在重连";
 
@@ -65,6 +82,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
     return <nav className="sidebar collapsed" aria-label="任务">
       <IconButton icon={PanelLeftOpen} label="展开任务栏 (Ctrl+B)" onClick={onToggle} />
       <IconButton icon={Plus} label="新建任务 (Ctrl+N)" onClick={newTask} className={selectedId === null && !settingsOpen ? "active" : undefined} />
+      <IconButton icon={SlidersHorizontal} label="展开项目设置" onClick={onToggle} />
       <IconButton icon={Search} label="搜索任务和命令 (Ctrl+K)" onClick={openPalette} />
       {running && <button className={`rail-running ${running.id === selectedId && !settingsOpen ? "active" : ""}`} onClick={() => void openTask(running.id)} title={`正在运行：${taskTitle(running)}`} aria-label={`打开正在运行的任务：${taskTitle(running)}`}>
         <Spinner size={16} />
@@ -90,11 +108,30 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
       {query && <IconButton icon={X} label="清除搜索" size={14} onClick={() => setQuery("")} />}
     </label>
     <div className="task-groups">
-      {groups.map(([label, items]) => <section key={label} className="task-group">
+      <NewTaskSetup />
+      {grouped.shortcuts.map(([label, items]) => <section key={label} className="task-group">
         <h2>{label}</h2>
         {items.map(task => <TaskRow key={task.id} task={task} selected={task.id === selectedId && !settingsOpen} />)}
       </section>)}
-      {loaded && !groups.length && <p className="sidebar-empty">{query ? "没有匹配的任务" : "还没有任务。新建一个，描述你想要的产品。"}</p>}
+      {!!grouped.projectGroups.length && <div className="sidebar-section-label">项目</div>}
+      {grouped.projectGroups.map(({ project, items }) => {
+        const folded = collapsedProjects.includes(project.id);
+        return <section key={project.id} className="task-group project-group">
+          <div className="project-heading">
+            <button className="project-toggle" aria-expanded={!folded} onClick={() => setCollapsedProjects(current => folded ? current.filter(id => id !== project.id) : [...current, project.id])}>
+              <ChevronDown size={14} aria-hidden /><FolderClosed size={14} aria-hidden /><span>{project.name}</span><small>{items.length}</small>
+            </button>
+            <IconButton icon={Plus} label={`在「${project.name}」中新建任务`} size={14} onClick={() => selectNewTaskProject(project.id, project.mounts.length === 1 ? project.mounts[0]?.id : "")} />
+          </div>
+          {!folded && items.map(task => <TaskRow key={task.id} task={task} selected={task.id === selectedId && !settingsOpen} />)}
+        </section>;
+      })}
+      {!!grouped.independent.length && <div className="sidebar-section-label">独立任务</div>}
+      {grouped.independent.map(([label, items]) => <section key={label} className="task-group">
+        <h2>{label}</h2>
+        {items.map(task => <TaskRow key={task.id} task={task} selected={task.id === selectedId && !settingsOpen} />)}
+      </section>)}
+      {loaded && !grouped.shortcuts.length && !grouped.projectGroups.length && !grouped.independent.length && <p className="sidebar-empty">{query ? "没有匹配的任务" : "还没有任务。新建一个，描述你想完成的事。"}</p>}
       {tasks.some(task => task.meta?.archived) && <button className="sidebar-archived" onClick={() => setShowArchived(value => !value)}>{showArchived ? "隐藏已归档" : "显示已归档"}</button>}
     </div>
     <footer className="sidebar-footer">

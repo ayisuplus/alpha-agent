@@ -61,7 +61,7 @@ export async function runCodeCheck(projectRoot: string, dataRoot: string, taskId
   }
 }
 
-export function createCodeCheckTool(projectRoot: string, dataRoot: string, taskId: string, allowed: ConfiguredCheck[], permission?: { mode: PermissionMode; roots: string[] }, onNeedsInput?: (reason: string) => Promise<void>): CustomTool<typeof parameters> {
+export function createCodeCheckTool(projectRoot: string, dataRoot: string, taskId: string, allowed: ConfiguredCheck[], permission?: { mode: PermissionMode; roots: string[] }, onNeedsInput?: (reason: string) => Promise<void>, workerRestricted = false): CustomTool<typeof parameters> {
   return {
     name: "alpha_check",
     label: "Run configured project check",
@@ -70,6 +70,7 @@ export function createCodeCheckTool(projectRoot: string, dataRoot: string, taskI
     loadMode: "essential",
     async execute(_id, args, _update, _ctx, signal) {
       try {
+        if (workerRestricted && commandRisk([allowed.find(item => item.name === args.script)?.command ?? ""]) === "high") throw new Error("高风险检查命令须由主代理受控执行；请使用 alpha_capability_request。");
         const result = await runCodeCheck(projectRoot, dataRoot, taskId, args.script, allowed, signal, permission);
         return { content: [{ type: "text", text: `${result.output}\nlog=${result.logPath}` }], isError: !result.passed };
       } catch (error) {

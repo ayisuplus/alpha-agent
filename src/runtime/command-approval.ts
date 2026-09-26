@@ -231,7 +231,7 @@ export function createCommandTool(store: CommandApprovalStore, taskId: string, c
     async execute(_id, args, _update, _ctx, signal) {
       try {
         const result = await store.execute(taskId, cwd, args.argv, args.purpose, signal, permission, reviewer, args.network === true);
-        if (permission && result.status === "pending" && !signal?.aborted) await onNeedsInput?.(`Command approval required (${result.risk ?? "normal"}): ${result.argv.join(" ")}. ${result.reason ?? ""}`);
+        if (result.status === "pending" && !signal?.aborted) await onNeedsInput?.(`Command approval required (${result.risk ?? "normal"}): ${result.argv.join(" ")}. ${result.reason ?? ""}`);
         return { content: [{ type: "text", text: JSON.stringify(result) }], isError: result.status !== "complete" || result.result?.exitCode !== 0 };
       } catch (error) {
         if (error instanceof SandboxUnavailableError) await onNeedsInput?.(error.message);

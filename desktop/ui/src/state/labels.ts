@@ -2,7 +2,7 @@ import type { Criterion, GuidanceStatus, TaskSummary } from "../api/types";
 
 export type Tone = "neutral" | "accent" | "success" | "warning" | "danger";
 
-export const TERMINAL_PHASES = new Set(["待验收", "已验收", "用户接管", "已停止", "失败", "需要回答"]);
+export const TERMINAL_PHASES = new Set(["待验收", "已验收", "用户接管", "已停止", "失败", "需要回答", "计划待审阅", "继续规划", "无实际进展，已停止"]);
 
 /** The instruction the server substitutes when "continue repair" is sent without text. */
 export const DEFAULT_RESUME_INSTRUCTION = "Repair the pending acceptance checks while preserving the original objective.";
@@ -31,11 +31,14 @@ export function taskTitle(task: Pick<TaskSummary, "objective" | "originalObjecti
   return task.meta?.title ?? titleOf(task.originalObjective ?? task.objective);
 }
 
-export function taskStatus(task: Pick<TaskSummary, "running" | "status" | "taskType">): { label: string; tone: Tone } {
+export function taskStatus(task: Pick<TaskSummary, "running" | "queued" | "status" | "taskType" | "phase">): { label: string; tone: Tone } {
   if (task.running) return { label: "运行中", tone: "accent" };
+  if (task.queued) return { label: "排队中", tone: "accent" };
   if (task.status === "complete") return { label: task.taskType === "code-change" ? "技术完成" : "已验收", tone: "success" };
   if (task.status === "stopped") return { label: "已停止", tone: "neutral" };
   if (task.status === "needs-input") return { label: "需要回答", tone: "warning" };
+  if (task.phase === "plan-review") return { label: "计划待审", tone: "warning" };
+  if (task.phase === "plan") return { label: "规划中", tone: "accent" };
   return { label: "待验收", tone: "warning" };
 }
 

@@ -4,6 +4,7 @@
   flex-direction: column;
   gap: 6px;
   width: 100%;
+  min-width: 0;
   max-width: 860px;
   margin: 0 auto;
   padding: 0 24px 14px;
@@ -27,6 +28,7 @@
 .composer[data-mode="steer"] .composer-modes.single span { color: var(--accent-strong); }
 
 .composer-box {
+  position: relative;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border);
@@ -40,6 +42,8 @@
 .composer[data-mode="steer"] .composer-box { border-color: var(--accent-border); }
 
 .composer textarea {
+  width: 100%;
+  min-width: 0;
   field-sizing: content;
   min-height: 52px;
   max-height: 240px;
@@ -55,17 +59,20 @@
 
 .composer-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 6px 8px 8px 14px;
 }
 .composer-hint {
-  flex: 1;
+  flex: 1 1 100%;
+  order: -1;
   min-width: 0;
   color: var(--text-muted);
   font-size: var(--text-xs);
   line-height: 1.5;
 }
+.composer-bar .btn { white-space: nowrap; }
 .composer-hint .link-button { margin-left: 4px; }
 
 .composer-keys { margin: 0; color: var(--text-faint); font-size: 11px; text-align: right; }

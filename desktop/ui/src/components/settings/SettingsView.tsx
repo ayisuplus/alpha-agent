@@ -30,7 +30,7 @@ export function SettingsView({ section }: { section: SettingsSection }) {
   return <div className="settings-view" data-testid="settings-view">
     <header className="settings-header">
       <h1>设置</h1>
-      <span className="settings-header-hint">修改会立即保存，下一轮运行时生效</span>
+      <span className="settings-header-hint">一般设置自动保存；角色预设需点击保存</span>
       <IconButton icon={X} label="关闭设置 (Esc)" onClick={closePanel} />
     </header>
     <div className="settings-layout">
@@ -39,8 +39,8 @@ export function SettingsView({ section }: { section: SettingsSection }) {
           <Icon size={15} aria-hidden />{label}
         </button>)}
       </nav>
-      <div className="settings-content" key={entry.id}>
-        {settings ? <Body /> : <p className="settings-loading"><Spinner size={14} />正在读取设置…</p>}
+      <div className="settings-content">
+        {settings ? <><div hidden={entry.id !== "agents"}><AgentPresetsSettings /></div>{entry.id !== "agents" && <Body />}</> : <p className="settings-loading"><Spinner size={14} />正在读取设置…</p>}
       </div>
     </div>
   </div>;

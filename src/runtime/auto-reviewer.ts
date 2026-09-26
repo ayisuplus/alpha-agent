@@ -1,11 +1,13 @@
 import { join } from "node:path";
 import { createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent";
 import { ompRegistry } from "./models";
+import { isAllowedModelSelector } from "./model-policy";
 import type { CommandRequest, IndependentReview } from "./command-approval";
 
 /** Separate, tool-free session: its answer is a proposal, never an execution capability. */
 export function independentCommandReviewer(dataRoot: string, modelSelector: string): IndependentReview {
   return async (request: CommandRequest, signal?: AbortSignal) => {
+    if (!isAllowedModelSelector(modelSelector)) throw new Error(`Reviewer model is not supported: ${modelSelector}`);
     const { authStorage, modelRegistry } = await ompRegistry();
     try {
       const model = modelRegistry.getAvailable().find(item => `${item.provider}/${item.id}` === modelSelector);

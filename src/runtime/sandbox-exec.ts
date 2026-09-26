@@ -138,9 +138,16 @@ export async function verifySandbox(input: Pick<SandboxCommand, "cwd" | "roots" 
         const currentOutside = await readFile(outside, "utf8");
         const output = result.stdout.toLowerCase();
         const expectedIdentity = input.network ? "codexsandboxonline" : "codexsandboxoffline";
-        if (result.exitCode !== 0 || result.timedOut || currentInside !== "inside" || currentOutside !== "host" || !output.includes("inside=true outside=false secretread=false") || !output.includes("child=false") || !output.includes(`identity=`) || !output.includes(expectedIdentity) || (!input.network && !output.includes("net=false"))) {
-          throw new SandboxUnavailableError(`Windows sandbox failed its write-boundary probe: ${result.stderr.slice(0, 500) || result.stdout.slice(0, 500)}`);
-        }
+        const failures = [
+          result.exitCode !== 0 || result.timedOut ? "沙箱进程未正常完成" : null,
+          currentInside !== "inside" || !output.includes("inside=true") ? "工作目录写入失败" : null,
+          currentOutside !== "host" || !output.includes("outside=false") ? "越界写入未被拒绝" : null,
+          !output.includes("secretread=false") ? "凭据读取未被拒绝" : null,
+          !output.includes("child=false") ? "子进程越界操作未被拒绝" : null,
+          !output.includes(expectedIdentity) ? "隔离身份不符" : null,
+          !input.network && !output.includes("net=false") ? "联网未被拒绝" : null,
+        ].filter((reason): reason is string => !!reason);
+        if (failures.length) throw new SandboxUnavailableError(`Windows 沙箱隔离检查未通过：${failures.join("；")}`);
       } finally {
         if (listener.listening) await new Promise<void>(resolve => listener.close(() => resolve()));
         await rm(inside, { force: true }).catch(() => undefined);

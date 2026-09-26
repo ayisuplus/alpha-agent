@@ -163,11 +163,12 @@ test("a task remembers its own model across reloads until it is cleared", async 
   try {
     const product = join(root, "product");
     await mkdir(product);
-    const ledger = await TaskLedger.create(join(root, ".alpha"), { objective: "Build", projectRoot: product, criteria: [{ id: "build", description: "Build", kind: "build" }], modelSelector: "openrouter/anthropic/claude" });
-    expect((await TaskLedger.load(ledger.file)).state.modelSelector).toBe("openrouter/anthropic/claude");
+    const ledger = await TaskLedger.create(join(root, ".alpha"), { objective: "Build", projectRoot: product, criteria: [{ id: "build", description: "Build", kind: "build" }], modelSelector: "xiaomi-token-plan-cn/mimo-v2.6-flash" });
+    expect((await TaskLedger.load(ledger.file)).state.modelSelector).toBe("xiaomi-token-plan-cn/mimo-v2.6-flash");
     await ledger.setModel(null);
     expect((await TaskLedger.load(ledger.file)).state.modelSelector).toBeUndefined();
-    await ledger.setModel("alibaba-token-plan/qwen3.6-flash");
-    expect((await TaskLedger.load(ledger.file)).state.modelSelector).toBe("alibaba-token-plan/qwen3.6-flash");
+    await ledger.setModel("deepseek/deepseek-flash");
+    expect((await TaskLedger.load(ledger.file)).state.modelSelector).toBe("deepseek/deepseek-flash");
+    await expect(ledger.setModel("alibaba-token-plan/qwen3.6-flash")).rejects.toThrow("not supported");
   } finally { await rm(root, { recursive: true, force: true }); }
 });

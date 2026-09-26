@@ -22,9 +22,11 @@ async function openFolder(path: string): Promise<void> {
 export function WorkspaceSettings() {
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
   const [storage, setStorage] = useState<StorageReport | null>(null);
+  const [directoryError, setDirectoryError] = useState<string | null>(null);
+  const [storageError, setStorageError] = useState<string | null>(null);
   const [cleaning, setCleaning] = useState(false);
-  const refresh = () => { void api.storage().then(setStorage).catch(error => notify(String(error))); };
-  useEffect(() => { refresh(); void api.diagnostics().then(setDiagnostics).catch(error => notify(String(error))); }, []);
+  const refresh = () => { setStorageError(null); void api.storage().then(setStorage).catch(error => setStorageError(String(error))); };
+  useEffect(() => { refresh(); void api.diagnostics().then(setDiagnostics).catch(error => setDirectoryError(String(error))); }, []);
 
   const clean = async () => {
     if (!storage?.cleanup.count || !window.confirm(`清理 ${storage.cleanup.count} 个过期预览副本（约 ${bytes(storage.cleanup.bytes)}）？\n当前任务引用或正在运行的预览不会删除。`)) return;
@@ -40,7 +42,7 @@ export function WorkspaceSettings() {
   return <section>
     <SectionTitle title="工作区与数据" description="任务、验收证据和预览副本都保存在本机。清理只作用于不再使用的预览副本。" />
     <h3 className="settings-subheading">目录</h3>
-    {!diagnostics ? <p className="settings-loading"><Spinner size={14} />正在读取目录…</p>
+    {directoryError ? <p role="alert">目录读取失败：{directoryError}</p> : !diagnostics ? <p className="settings-loading"><Spinner size={14} />正在读取目录…</p>
       : Object.entries(diagnostics.paths).map(([key, path]) => <div className="settings-path" key={key}>
         <span>{({ workspace: "工作区", data: "运行数据", products: "产品项目" } as Record<string, string>)[key]}</span>
         <code title={path}>{path}</code>
@@ -48,7 +50,7 @@ export function WorkspaceSettings() {
       </div>)}
     <div className="settings-subheading-row"><h3 className="settings-subheading">磁盘占用</h3>
       <Button size="sm" icon={RefreshCw} onClick={refresh}>刷新</Button></div>
-    {!storage ? <p className="settings-loading"><Spinner size={14} />正在统计…</p>
+    {storageError ? <p role="alert">磁盘占用读取失败：{storageError}</p> : !storage ? <p className="settings-loading"><Spinner size={14} />正在统计…</p>
       : <div className="settings-storage">
         {storage.categories.map(item => <div key={item.id}><span>{item.label}</span><strong>{bytes(item.bytes)}</strong></div>)}
       </div>}
@@ -61,11 +63,13 @@ export function WorkspaceSettings() {
 
 export function DiagnosticsSettings() {
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const refresh = async () => {
     setLoading(true);
+    setError(null);
     try { setDiagnostics(await api.diagnostics()); }
-    catch (error) { notify(String(error)); }
+    catch (cause) { setError(String(cause)); }
     finally { setLoading(false); }
   };
   useEffect(() => { void refresh(); }, []);
@@ -78,7 +82,7 @@ export function DiagnosticsSettings() {
   return <section>
     <SectionTitle title="诊断" description="检查本机服务和当前配置；离线项目只显示状态，不会自动启动或更换服务。" />
     <div className="settings-subheading-row"><h3 className="settings-subheading">准备情况</h3><Button size="sm" icon={RefreshCw} onClick={() => void refresh()} busy={loading}>重新检查</Button></div>
-    {!diagnostics ? <p className="settings-loading"><Spinner size={14} />正在检查…</p>
+    {error ? <p role="alert">诊断失败：{error}</p> : !diagnostics ? <p className="settings-loading"><Spinner size={14} />正在检查…</p>
       : <>
         <div className="diagnostic-list">{diagnostics.checks.map(check => <div key={check.id}>
           <span>{check.label}<small>{check.detail}</small></span><Badge tone={check.ok ? "success" : "warning"}>{check.ok ? "可用" : "不可用"}</Badge>

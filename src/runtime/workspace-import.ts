@@ -56,7 +56,7 @@ async function sourceFiles(source: string, dataRoot: string): Promise<{ kind: "g
 }
 
 /** Imports a checked snapshot without changing source working files. Exclusions are recorded, never silently substituted. */
-export async function importCodeWorkspace(input: { sourcePath: string; productsRoot: string; dataRoot: string; objective: string; modelSelector?: string }): Promise<TaskLedger> {
+export async function importCodeWorkspace(input: { sourcePath: string; productsRoot: string; dataRoot: string; objective: string; modelSelector?: string; designatedExpertId?: string; startMode?: "plan" | "execute"; continueUntilAccepted?: boolean }): Promise<TaskLedger> {
   const sourcePath = await realpath(resolve(input.sourcePath));
   if (!(await lstat(sourcePath)).isDirectory()) throw new Error("Import source must be a directory");
   const productsRoot = resolve(input.productsRoot);
@@ -99,6 +99,9 @@ export async function importCodeWorkspace(input: { sourcePath: string; productsR
   const origin: WorkspaceOrigin = { kind: source.kind, sourcePath, snapshotFile: manifestFile, initialRevision: await fingerprintSource(managedPath), checks: await configuredChecks(managedPath) };
   const ledger = await TaskLedger.create(dataRoot, { objective: input.objective, projectRoot: managedPath, taskType: "code-change", workspaceOrigin: origin,
     modelSelector: input.modelSelector,
+    designatedExpertId: input.designatedExpertId,
+    startMode: input.startMode,
+    continueUntilAccepted: input.continueUntilAccepted,
     criteria: [{ id: "change", description: "Source changes are reviewable", kind: "asset" }, { id: "check", description: "Configured project checks pass", kind: "test" }],
   });
   return ledger;

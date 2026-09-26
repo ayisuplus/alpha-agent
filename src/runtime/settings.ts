@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { isAllowedModelSelector } from "./model-policy";
 
 export type FontSize = "sm" | "md" | "lg";
 
@@ -40,7 +41,7 @@ export class SettingsError extends Error {}
 const MODEL_SELECTOR = /^[^\s/]+\/\S+$/;
 
 export function isModelSelector(value: unknown): value is string {
-  return typeof value === "string" && MODEL_SELECTOR.test(value);
+  return typeof value === "string" && MODEL_SELECTOR.test(value) && isAllowedModelSelector(value);
 }
 
 /** ComfyUI must stay on this machine; a remote generation service is never configured from the workbench. */

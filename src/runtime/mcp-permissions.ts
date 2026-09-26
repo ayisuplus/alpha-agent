@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
 
@@ -13,7 +13,10 @@ export class MCPPermissionStore {
   constructor(dataRoot: string) { this.file = join(resolve(dataRoot), "mcp-permissions.json"); }
 
   private async read(): Promise<PolicyFile> {
-    return JSON.parse(await readFile(this.file, "utf8").catch(() => '{"permissions":{},"receipts":{}}')) as PolicyFile;
+    return JSON.parse(await readFile(this.file, "utf8").catch(error => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return '{"permissions":{},"receipts":{}}';
+      throw error;
+    })) as PolicyFile;
   }
   private async write(data: PolicyFile): Promise<void> {
     await mkdir(resolve(this.file, ".."), { recursive: true });
@@ -22,9 +25,43 @@ export class MCPPermissionStore {
     await rename(temp, this.file);
   }
   private mutate<T>(action: () => Promise<T>): Promise<T> {
-    const next = this.queue.then(action, action);
+    const next = this.queue.then(() => this.withFileLock(action), () => this.withFileLock(action));
     this.queue = next.then(() => undefined, () => undefined);
     return next;
+  }
+  private async withFileLock<T>(action: () => Promise<T>): Promise<T> {
+    await mkdir(resolve(this.file, ".."), { recursive: true });
+    const lock = `${this.file}.lock`;
+    const deadline = Date.now() + 10_000;
+    let handle: Awaited<ReturnType<typeof open>>;
+    while (true) {
+      try { handle = await open(lock, "wx"); break; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        const info = await stat(lock).catch(() => null);
+        if (info && Date.now() - info.mtimeMs > 30_000) {
+          const owner = Number(await readFile(lock, "utf8").catch(() => ""));
+          if (Number.isInteger(owner) && owner > 0) {
+            try { process.kill(owner, 0); }
+            catch (probe) {
+              if ((probe as NodeJS.ErrnoException).code === "ESRCH") {
+                await unlink(lock).catch(() => undefined);
+                continue;
+              }
+            }
+          }
+        }
+        if (Date.now() >= deadline) throw new Error("MCP permission store is locked; retry after checking the owner");
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+    }
+    try {
+      await handle.writeFile(String(process.pid));
+      return await action();
+    } finally {
+      await handle.close();
+      await unlink(lock);
+    }
   }
   async list(): Promise<Record<string, MCPPermission>> { return { ...(await this.read()).permissions }; }
   async set(tool: string, permission: MCPPermission): Promise<void> {

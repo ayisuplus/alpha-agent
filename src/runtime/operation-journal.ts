@@ -45,6 +45,7 @@ export class OperationJournal {
         await recoverIncompleteMerges(ledger.state.projectRoot, this.dataRoot, entry.taskId);
         await commandApprovalStore(this.dataRoot).reconcile(entry.taskId);
         await new MCPPermissionStore(this.dataRoot).reconcile(entry.taskId);
+        await ledger.reconcileRunningInstances("Interrupted operation was reconciled; inspect evidence before redispatch");
         if (ledger.state.status === "active") {
           await ledger.refreshRevision();
           await ledger.stop();
@@ -53,6 +54,7 @@ export class OperationJournal {
         results.push({ taskId: entry.taskId, result: "stopped-after-reconcile" });
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
+        await ledger.reconcileRunningInstances(`Recovery conflict: ${reason}`);
         if (ledger.state.status === "active") await ledger.needInput(`重启后动作对账发现冲突：${reason}。请审阅现场后再恢复。`, "recovery");
         await this.finish(entry.taskId, entry.runId);
         results.push({ taskId: entry.taskId, result: `conflict: ${reason}` });

@@ -22,7 +22,8 @@ test("settings updates are validated, clamped and persisted", async () => {
     await expect(store.update({ model: { translation: "no-slash" } })).rejects.toBeInstanceOf(SettingsError);
     await expect(store.update({ ui: { fontSize: "huge" } })).rejects.toBeInstanceOf(SettingsError);
     await expect(store.update(null)).rejects.toBeInstanceOf(SettingsError);
-    expect((await store.update({ model: { default: "openrouter/anthropic/claude" } })).model.default).toBe("openrouter/anthropic/claude");
+    await expect(store.update({ model: { default: "openrouter/anthropic/claude" } })).rejects.toBeInstanceOf(SettingsError);
+    expect((await store.update({ model: { default: "xiaomi-token-plan-cn/mimo-v2.6-flash" } })).model.default).toBe("xiaomi-token-plan-cn/mimo-v2.6-flash");
     expect((await store.update({ model: { translation: "deepseek/deepseek-flash" } })).model.translation).toBe("deepseek/deepseek-flash");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -30,10 +31,11 @@ test("settings updates are validated, clamped and persisted", async () => {
 test("a hand-edited settings file keeps its valid values and falls back for the rest", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-settings-"));
   try {
-    await writeFile(join(root, "settings.json"), JSON.stringify({ budget: { maxToolCalls: "many", wallTimeMinutes: 30 }, generation: { comfyUrl: "https://remote.example" }, ui: "broken" }));
+    await writeFile(join(root, "settings.json"), JSON.stringify({ model: { default: "alibaba-token-plan/qwen3.6-flash" }, budget: { maxToolCalls: "many", wallTimeMinutes: 30 }, generation: { comfyUrl: "https://remote.example" }, ui: "broken" }));
     const loaded = await new SettingsStore(root).get();
     expect(loaded.budget).toEqual({ maxToolCalls: 120, wallTimeMinutes: 30, maxTotalToolCalls: 1200, totalWallTimeMinutes: 120 });
     expect(loaded.generation.comfyUrl).toBe(DEFAULT_SETTINGS.generation.comfyUrl);
+    expect(loaded.model.default).toBeNull();
     expect(loaded.plugins.comfyui).toBe(true);
     expect(loaded.ui).toEqual(DEFAULT_SETTINGS.ui);
     await writeFile(join(root, "settings.json"), "{ not json");

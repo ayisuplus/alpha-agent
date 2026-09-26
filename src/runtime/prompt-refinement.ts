@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent";
 import { ompRegistry } from "./models";
+import { isAllowedModelSelector } from "./model-policy";
 
 export const PROMPT_CATEGORIES = ["software", "research", "creative", "writing", "general"] as const;
 export type PromptCategory = typeof PROMPT_CATEGORIES[number];
@@ -54,6 +55,7 @@ export function protectedTokens(source: string): string[] {
 }
 
 async function generateText(modelSelector: string, system: string, input: string, dataRoot: string, signal?: AbortSignal): Promise<string> {
+  if (!isAllowedModelSelector(modelSelector)) throw new PromptRefinementError(`模型 ${modelSelector} 不受支持`);
   const { authStorage, modelRegistry } = await ompRegistry();
   try {
     const model = modelRegistry.getAvailable().find(item => `${item.provider}/${item.id}` === modelSelector);
