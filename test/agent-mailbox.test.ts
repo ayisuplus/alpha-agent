@@ -1,0 +1,51 @@
+import { expect, test } from "bun:test";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AgentMailbox, createWorkerMailboxTools, pendingWorkerMessages } from "../src/runtime/agent-mailbox";
+import { TaskLedger } from "../src/runtime/task-ledger";
+import type { WorkOrder } from "../src/runtime/work-orders";
+import { checkFileToolCall } from "../src/runtime/file-tool-guard";
+
+test("subagent messages pass through the primary mailbox with durable IDs and explicit acknowledgements", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-agent-mailbox-"));
+  try {
+    const projectRoot = join(root, "project");
+    const dataRoot = join(root, "data");
+    await mkdir(projectRoot);
+    await writeFile(join(projectRoot, "entry.txt"), "source");
+    const ledger = await TaskLedger.create(dataRoot, { objective: "Coordinate agents", projectRoot, taskType: "code-change", criteria: [{ id: "source", description: "Source", kind: "asset" }] });
+    const agentId = crypto.randomUUID();
+    const runId = crypto.randomUUID();
+    const preset = { id: "test-expert", name: "Test expert", description: "Test", instructions: "Test", hash: "a".repeat(64), skillIds: ["test:skill"], package: { revision: "b".repeat(64), skills: [{ id: "test:skill", hash: "c".repeat(64) }] } };
+    const order: WorkOrder = { id: "research", objective: "Investigate", mode: "investigate", ownedPaths: [], readPaths: ["."], resources: ["research"], agentId, instanceId: runId, fullAccess: true, skillIds: ["test:skill"], preset };
+    const reads: string[] = [];
+    await checkFileToolCall("alpha_send", {}, projectRoot, order, [], false, undefined, path => reads.push(path));
+    await checkFileToolCall("alpha_inbox", {}, projectRoot, order, [], false, undefined, path => reads.push(path));
+    expect(reads).toEqual([]);
+    await ledger.queueWorker({ id: runId, order });
+    const stateRoot = join(dataRoot, "worker-agents", ledger.state.id, agentId, "state");
+    const [send, inbox] = createWorkerMailboxTools(stateRoot, ledger.state.id, order);
+    const first = await send.execute("call-1", { kind: "request", body: "Need the acceptance boundary" }, undefined, undefined as never);
+    expect(first.isError).toBeUndefined();
+    expect((await send.execute("call-1", { kind: "request", body: "Need the acceptance boundary" }, undefined, undefined as never)).isError).toBeUndefined();
+    const mailbox = new AgentMailbox(dataRoot, ledger);
+    expect(await mailbox.collect()).toBe(true);
+    expect(await mailbox.collect()).toBe(false);
+    const messages = await mailbox.inbox();
+    expect(messages).toHaveLength(1);
+    expect(messages[0].fromAgentId).toBe(agentId);
+    expect(messages[0].fromRunId).toBe(runId);
+    expect(messages[0].toAgentId).toBeNull();
+    const replyId = await mailbox.send(agentId, "decision", "Use the approved contract", "reply-1", messages[0].id);
+    expect(await mailbox.send(agentId, "decision", "Use the approved contract", "reply-1", messages[0].id)).toBe(replyId);
+    expect((await pendingWorkerMessages(stateRoot)).map(item => item.id)).toEqual([replyId]);
+    expect((await inbox.execute("read-1", { ack: [replyId] }, undefined, undefined as never)).isError).toBeUndefined();
+    expect(await pendingWorkerMessages(stateRoot)).toHaveLength(0);
+    expect(await mailbox.inbox([messages[0].id])).toHaveLength(0);
+    const outboxFile = join(stateRoot, "outbox", `${messages[0].id}.json`);
+    const original = await readFile(outboxFile, "utf8");
+    await writeFile(outboxFile, JSON.stringify({ ...JSON.parse(original), toAgentId: crypto.randomUUID() }));
+    await expect(mailbox.collect()).rejects.toThrow("invalid provenance");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

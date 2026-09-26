@@ -19,6 +19,8 @@ export interface WorkOrder {
   skillSnapshots?: Array<{ id: string; hash: string; revision: string }>;
   dependsOn?: string[];
   acceptance?: string[];
+  /** Stable identity within the parent task; instanceId remains one execution attempt. */
+  agentId?: string;
   instanceId?: string;
   contractVersion?: number;
   cognitionRevision?: number;
@@ -38,6 +40,7 @@ export interface WorkerResult {
   unresolved: string[];
   requests?: Array<{ capability: string; reason: string; details: string }>;
   usage?: { model: string; toolCalls: number; elapsedMs: number; tokens?: RunUsage; outcome?: "returned" | "cancelled" | "budget" | "error" | "needs-input"; incomplete?: boolean };
+  cognition?: { revision: number; understanding: string; findings: Array<{ text: string; evidence: string[] }>; openQuestions: string[]; nextActions: string[]; sourceRevision: string | null };
 }
 
 type RunUsage = { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number };
@@ -101,7 +104,7 @@ export function validateOrders(orders: WorkOrder[], maximum = 2): void {
   }
 }
 
-async function sourceFiles(root: string, directory = root): Promise<string[]> {
+export async function sourceFiles(root: string, directory = root): Promise<string[]> {
   const files: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const absolute = join(directory, entry.name);
@@ -135,6 +138,27 @@ async function createGitWorktree(projectRoot: string, destination: string): Prom
   const child = Bun.spawn(["git", "-C", projectRoot, "worktree", "add", "--detach", "--no-checkout", destination, "HEAD"], { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
   const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
   if (code !== 0) throw new Error(`Cannot create worker Git worktree: ${stderr.slice(0, 500)}`);
+}
+
+/** A subagent keeps this checkout across runs; run reports freeze separate snapshots. */
+export async function prepareAgentWorkspace(projectRoot: string, workspace: string, acceptedOutput?: string, sync = true): Promise<void> {
+  const current = await Bun.file(join(workspace, ".git")).exists();
+  if (!current) {
+    if (acceptedOutput) throw new Error("Existing subagent workspace is missing");
+    await mkdir(dirname(workspace), { recursive: true });
+    await createGitWorktree(projectRoot, workspace);
+    const files = await sourceFiles(projectRoot);
+    await copySnapshot(projectRoot, workspace, files);
+    return;
+  }
+  if (!acceptedOutput) return;
+  const accepted = await snapshot(acceptedOutput);
+  const local = await snapshot(workspace);
+  if (JSON.stringify([...accepted]) !== JSON.stringify([...local])) throw new Error("Subagent workspace changed after the accepted run");
+  if (!sync) return;
+  const parent = await snapshot(projectRoot);
+  for (const file of local.keys()) if (!parent.has(file)) await unlink(join(workspace, file));
+  await copySnapshot(projectRoot, workspace, parent.keys());
 }
 
 function changedFiles(base: Snapshot, current: Snapshot): string[] {
@@ -214,6 +238,8 @@ export async function executeWorkOrders(input: {
   deferMerge?: boolean;
   batchId?: string;
   isolate?: "copy" | "git-worktree";
+  agentWorkspace?: string;
+  mergeBaseRoot?: string;
   runWorker: (order: WorkOrder, directory: string, signal?: AbortSignal) => Promise<WorkerResult>;
 }): Promise<WorkBatchReport> {
   const started = performance.now();
@@ -234,29 +260,32 @@ export async function executeWorkOrders(input: {
     if (!input.deferMerge) await recoverIncompleteMerges(projectRoot, input.dataRoot, input.taskId);
     input.signal?.throwIfAborted();
     if ((await fingerprintSource(projectRoot)) !== input.baseRevision) throw new Error("Main project changed before workers started");
-    const base = await snapshot(projectRoot);
+    const base = await snapshot(input.mergeBaseRoot ?? projectRoot);
     const baseDir = join(workRoot, "base");
-    await copySnapshot(projectRoot, baseDir, base.keys());
+    await copySnapshot(input.mergeBaseRoot ?? projectRoot, baseDir, base.keys());
     if ((await fingerprintSource(projectRoot)) !== input.baseRevision || changedFiles(base, await snapshot(baseDir)).length) throw new Error("Main project changed during worker snapshot");
     const directories = input.orders.map(order => join(workRoot, order.id));
-    if (input.isolate === "git-worktree") {
+    if (input.agentWorkspace && input.orders.length !== 1) throw new Error("Persistent subagent runs require one work order");
+    if (input.isolate === "git-worktree" && !input.agentWorkspace) {
       for (const directory of directories) await createGitWorktree(projectRoot, directory);
     }
-    await Promise.all(directories.map(directory => copySnapshot(baseDir, directory, base.keys())));
-    const settled = await Promise.allSettled(input.orders.map((order, index) => input.runWorker(order, directories[index], input.signal)));
+    if (!input.agentWorkspace) await Promise.all(directories.map(directory => copySnapshot(baseDir, directory, base.keys())));
+    const runStart = input.agentWorkspace ? await snapshot(input.agentWorkspace) : base;
+    const settled = await Promise.allSettled(input.orders.map((order, index) => input.runWorker(order, input.agentWorkspace ?? directories[index], input.signal)));
     for (const [index, outcome] of settled.entries()) {
       const order = input.orders[index];
-      if (outcome.status === "rejected") throw new Error(`Worker ${order.id} failed: ${String(outcome.reason)}`);
-      report.results[order.id] = outcome.value;
-      if (outcome.value.status && outcome.value.status !== "completed") throw new Error(`Worker ${order.id} ended ${outcome.value.status}`);
-      if (outcome.value.unresolved.length) throw new Error(`Worker ${order.id} has unresolved items: ${outcome.value.unresolved.join("; ")}`);
-      if (!order.fullAccess && order.mode === "review" && outcome.value.reviewVerdict !== "pass") throw new Error(`Review ${order.id} did not pass: ${outcome.value.reviewVerdict ?? "inconclusive"}`);
+      if (input.agentWorkspace) await copySnapshot(input.agentWorkspace, directories[index], await sourceFiles(input.agentWorkspace));
       const workerSnapshot = await snapshot(directories[index]);
       const changes = changedFiles(base, workerSnapshot);
       report.changes[order.id] = changes;
       (report.outputHashes ??= {})[order.id] = Object.fromEntries(changes.map(file => [file, workerSnapshot.get(file) ?? null]));
+      if (outcome.status === "rejected") throw new Error(`Worker ${order.id} failed: ${String(outcome.reason)}`);
+      report.results[order.id] = outcome.value;
+      if (changedFiles(runStart, workerSnapshot).length && order.mode && order.mode !== "implement") throw new Error(`Read-only worker ${order.id} changed source`);
+      if (outcome.value.status && outcome.value.status !== "completed") throw new Error(`Worker ${order.id} ended ${outcome.value.status}`);
+      if (outcome.value.unresolved.length) throw new Error(`Worker ${order.id} has unresolved items: ${outcome.value.unresolved.join("; ")}`);
+      if (!order.fullAccess && order.mode === "review" && outcome.value.reviewVerdict !== "pass") throw new Error(`Review ${order.id} did not pass: ${outcome.value.reviewVerdict ?? "inconclusive"}`);
       if (!changes.length && (order.mode ?? "implement") === "implement" && !order.fullAccess) throw new Error(`Worker ${order.id} produced no source changes`);
-      if (!order.fullAccess && changes.length && order.mode && order.mode !== "implement") throw new Error(`Read-only worker ${order.id} changed source`);
       const unexpected = order.fullAccess ? undefined : changes.find(file => !order.ownedPaths.some(scope => owns(scope, file)));
       if (unexpected) throw new Error(`Worker ${order.id} changed unowned file: ${unexpected}`);
     }

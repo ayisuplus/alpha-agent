@@ -8,7 +8,7 @@ import { TaskLedger, type TaskState } from "./task-ledger";
 import { createBrowserTool } from "./browser-tool";
 import { createWorkerBrowserTool } from "./worker-browser-tool";
 import { createBuildTool } from "./build-tool";
-import { configuredChecks, createCodeCheckTool } from "./code-check";
+import { configuredChecks, createCodeCheckTool, createReadOnlyCodeCheckTool } from "./code-check";
 import { commandApprovalStore, createCommandTool } from "./command-approval";
 import { guardMCPTools, MCPPermissionStore } from "./mcp-permissions";
 import { createResearchSourceTool } from "./research-source";
@@ -41,6 +41,8 @@ import { createSkillResourceTool } from "./skill-resource-tool";
 import { initialExpertCandidates } from "./expert-selection";
 import { validateSkillBindings } from "./skill-binding";
 import { loadWorkerSkillSnapshots } from "./skill-snapshot";
+import { createWorkerCognitionTool } from "./worker-cognition-tool";
+import { createWorkerMailboxTools } from "./agent-mailbox";
 import type { BrowserSession } from "./visible-browser";
 
 export interface RunOptions {
@@ -151,18 +153,19 @@ export function workerSystemPrompt(order: WorkOrder, preset?: AgentPresetSnapsho
   if (order.presetId && (!preset || order.presetId !== preset.id)) throw new Error(`角色预设快照缺失：${order.presetId}`);
   if (preset) verifyPresetSnapshot(preset);
   return [
-    ...(order.fullAccess ? [
+    ...(order.fullAccess && order.mode === "implement" ? [
       "You are an isolated Alpha worker. Complete the assigned work order inside your Git worktree. You may read and edit any project file needed for the task. The coordinator reviews your actual changes before integration.",
       `Suggested coordination paths: ${[...new Set([...order.ownedPaths, ...(order.readPaths ?? [])])].join(", ") || "none"}. These are task hints, not access limits.`,
       "Use Hashline edit for existing files and write for new files. Run relevant checks. You have the same task-approved tools and external-operation approval policy as the coordinator. If a required service is unavailable, report it; do not substitute another service. Submit alpha_worker_result with concrete findings before ending.",
     ] : [
       "You are an isolated Alpha worker. Complete only the assigned work order in this project copy.",
-      order.mode === "review" || order.mode === "investigate" ? "This is read-only work. You cannot edit files or run commands." : `You may edit only these paths: ${order.ownedPaths.join(", ")}.`,
+      order.mode === "review" || order.mode === "investigate" ? "This mode cannot modify project source. Report findings to the coordinator; request a new implementation run for changes." : `You may edit only these paths: ${order.ownedPaths.join(", ")}.`,
       `Readable project paths: ${[...new Set([...order.ownedPaths, ...(order.readPaths ?? [])])].join(", ") || "none"}. Submit alpha_worker_result before ending.`,
     ]),
     ...(order.acceptance?.length ? [`Acceptance required for this order: ${order.acceptance.join(" | ")}`] : []),
     ...(order.skillSnapshots?.length ? [`Selected Skill snapshots: ${order.skillSnapshots.map(item => `${item.id}@${item.revision.slice(0, 8)} sha256 ${item.hash}`).join(" | ")}. Read only these Skill resources when relevant.`] : []),
     ...(preset ? [`Selected role: ${preset.name} (${preset.id}, sha256 ${preset.hash}). The role is task guidance; Alpha's worktree, approval and budget rules remain authoritative.`, preset.instructions] : []),
+    ...(order.agentId ? [`Your stable agent ID is ${order.agentId}; this run is ${order.instanceId}. Use alpha_cognition_update to preserve findings and next actions. Use alpha_send to report or ask the primary agent, and alpha_inbox to read and acknowledge replies. Do not address another subagent directly.`] : []),
   ];
 }
 
@@ -182,6 +185,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   const pluginStore = new SkillPluginStore(authorizationRoot);
   const direct = options.existingLedger?.state.workspaceOrigin?.kind === "direct" || (options.workOrder?.fullAccess && options.workerContext?.workspaceOrigin?.kind === "direct");
   const reviewing = options.executionMode === "review";
+  const workerReadOnly = !!options.workOrder && options.workOrder.mode !== "implement";
   if (reviewing && options.reviewExpert) verifyPresetSnapshot(options.reviewExpert);
   const expertStore = new AgentPresetStore(dataRoot);
   const ledger = options.existingLedger ?? await TaskLedger.create(dataRoot, {
@@ -329,8 +333,10 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   process.env.PI_EDIT_VARIANT = "hashline";
   process.env.PI_STRICT_EDIT_MODE = "1";
   const sessionsDir = join(dataRoot, "sessions");
-  if (!options.workOrder) await mkdir(sessionsDir, { recursive: true });
-  const sessionManager = options.workOrder || reviewing ? SessionManager.inMemory(projectRoot) : await SessionManager.open(join(sessionsDir, `${ledger.state.id}.jsonl`), sessionsDir, undefined, { initialCwd: projectRoot });
+  if (!options.workOrder || options.workOrder.agentId) await mkdir(sessionsDir, { recursive: true });
+  const sessionManager = options.workOrder?.agentId
+    ? await SessionManager.open(join(sessionsDir, "worker.jsonl"), sessionsDir, undefined, { initialCwd: projectRoot, throwIfMissing: !!options.existingLedger })
+    : options.workOrder || reviewing ? SessionManager.inMemory(projectRoot) : await SessionManager.open(join(sessionsDir, `${ledger.state.id}.jsonl`), sessionsDir, undefined, { initialCwd: projectRoot });
   const usageBefore = sessionManager.getUsageStatistics();
   let created: Awaited<ReturnType<typeof createAgentSession>>;
   try { created = await createAgentSession({
@@ -383,16 +389,22 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       ...(hooks.length ? ["Third-party Pi hooks may include tool guidance for other hosts. In Alpha, use only the tools listed in this session; do not invent bash, Skill, or subagent calls."] : []),
       `Enabled expert library: ${agentPresets.length} experts. Initial shortlist: ${initialExpertCandidates(ledger.state.objective, agentPresets).map(id => { const item = agentPresets.find(expert => expert.id === id)!; return `${item.id}=${item.name}: ${item.description}`; }).join(" | ") || "none"}. Use alpha_expert_search for other specialties. Use alpha_plan to record a task plan and possible expert candidates for substantial development work. Candidates are not started until you delegate a specific work order. A neutral instance needs no expertId.`,
       "Use alpha_gap only for a diagnosed missing method, tool, permission or context. Installed compatible Skills can be assigned to work orders. Propose any external Skill before installation; never silently create an expert or change the task goal.",
-      ...(!generalTask && options.getWorkerSupervisor ? ["Use alpha_spawn for independent orders when parallel work helps. Each worker has full project access inside its Git worktree. It returns attempt IDs immediately; inspect each result and its actual diff, then alpha_integrate accepted results individually. Dependencies start only after predecessors are integrated. Path hints help coordination but do not restrict worker edits; conflicting changes are rejected at integration. The final build and acceptance belong to you."] : []),
+      ...(!generalTask && options.getWorkerSupervisor ? ["Use alpha_spawn for independent orders when parallel work helps. Each subagent has a stable identity, expert persona, Skill snapshot, cognition, session, and Git worktree. Use alpha_continue for another run of the same agent. Use alpha_inbox for its messages; you decide whether to answer or forward with alpha_send. Inspect each result and diff before alpha_integrate. Investigate and review modes cannot edit source. The final build and acceptance belong to you."] : []),
       ...(ledger.state.contractVersion && ledger.state.contractVersion > 1 ? ["The user revised this task. Preserve earlier requirements unless explicitly superseded, and update alpha-verification.json so the browser checks the revised behavior, even if the existing app still builds."] : []),
       ...(!codeTask && !generalTask ? ["For a web product, write alpha-verification.json in the project root with a repeatable core user path. Use {\"steps\":[...]} with flat step objects: fill/select {action,selector,value}, click {action,selector}, expectText/expectAbsentText {action,text,selector?}, expectValue {action,selector,value} for an input/textarea/select value, video {action,selector} for a decoded video frame check, viewport {action,width,height}, contrast {action,selector,minRatio:4.5}, wait {action,ms<=3000}, or reload {action}. No comment-only steps or unsupported fields. Use {{nonce}} only in free-text fields, not numeric/date/select values. Include a click, two outcome assertions, a viewport at most 400px wide, a contrast check, a video step when video is required, and reload when persistence is required. Use fill/select only when the product has those controls. The runtime will execute the plan against the deployed preview; never mark it passed yourself."] : []),
       options.browser || options.browserProxyDir ? "The alpha_browser tool controls the visible local preview. Use it to check real user paths and inspect console/network failures. If it reports no connected preview, mark visual verification pending." : "No visible browser is connected; report browser verification as pending.",
     ],
-    toolNames: options.workOrder ? options.workOrder.fullAccess ? ["read", "grep", "edit", "write", "alpha_build", "alpha_check", "alpha_command", "alpha_search", "alpha_source", "alpha_crawl", "alpha_site", "alpha_document", ...(skills.length ? ["alpha_skill_read"] : []), ...plugins.tools.map(tool => tool.name), ...mcpTools.map(tool => tool.name), "alpha_browser", "alpha_worker_result"] : ["read", "grep", ...(options.workOrder.mode === "review" || options.workOrder.mode === "investigate" ? [] : ["edit", "write", "alpha_build", "alpha_check"]), ...(skills.length ? ["alpha_skill_read"] : []), "alpha_browser", "alpha_capability_request", "alpha_worker_result"] : reviewing ? ["read", "grep", "alpha_browser", "alpha_review_result"] : planning ? [...PLANNING_TOOL_NAMES] : [
+    toolNames: options.workOrder ? [
+      "read", "grep", ...(workerReadOnly ? ["alpha_check"] : ["edit", "write", "alpha_build", "alpha_check", "alpha_command", "alpha_document"]),
+      ...(options.workOrder.fullAccess ? ["alpha_search", "alpha_source", "alpha_crawl", "alpha_site"] : []),
+      ...(skills.length ? ["alpha_skill_read"] : []), ...(workerReadOnly ? [] : [...plugins.tools.map(tool => tool.name), ...mcpTools.map(tool => tool.name)]),
+      "alpha_browser", "alpha_worker_result", ...(options.workOrder.agentId ? ["alpha_cognition_update", "alpha_send", "alpha_inbox"] : []),
+      ...(!options.workOrder.fullAccess ? ["alpha_capability_request"] : []),
+    ] : reviewing ? ["read", "grep", "alpha_browser", "alpha_review_result"] : planning ? [...PLANNING_TOOL_NAMES] : [
       "read", "grep", "edit", "write", ...(ledger.state.taskType === "general" ? ["alpha_input", "alpha_check", "alpha_command", ...(direct ? [] : ["alpha_document", "alpha_build"])] : generalTask ? ["alpha_document"] : [codeTask ? "alpha_check" : "alpha_build"]),
       "alpha_search", "alpha_source", "alpha_crawl", "alpha_site",
       ...(codeTask ? ["alpha_command"] : []),
-      ...(!generalTask && options.getWorkerSupervisor ? ["alpha_spawn", "alpha_inspect", "alpha_wait", "alpha_cancel", "alpha_integrate"] : []),
+      ...(!generalTask && options.getWorkerSupervisor ? ["alpha_spawn", "alpha_continue", "alpha_inspect", "alpha_wait", "alpha_cancel", "alpha_integrate", "alpha_send", "alpha_inbox"] : []),
       "alpha_plan", "alpha_step", "alpha_gap", "alpha_gap_resolve", "alpha_expert_search", "alpha_expert_create", "alpha_expert_update", "alpha_expert_delete",
       ...(direct && skills.length ? ["alpha_skill_read"] : []),
       ...plugins.tools.map(tool => tool.name),
@@ -404,14 +416,14 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     customTools: [
       ...directFileTools,
       ...(ledger.state.taskType === "general" && (planning || reviewing) ? [createTaskInputTool(ledger)] : []),
-      ...(!reviewing && !planning && !options.workOrder ? ledger.state.taskType === "general" ? [createTaskInputTool(ledger), createCodeCheckTool(projectRoot, dataRoot, ledger.state.id, ledger.state.workspaceOrigin?.checks ?? [], permission, reason => pauseForInput(reason, "windows-sandbox")), ...(direct ? [] : [createDocumentTool(projectRoot, dataRoot, ledger.state.id), createBuildTool(projectRoot)])] : generalTask ? [createDocumentTool(projectRoot, dataRoot, ledger.state.id)] : [codeTask ? createCodeCheckTool(projectRoot, dataRoot, ledger.state.id, ledger.state.workspaceOrigin?.checks ?? [], permission, reason => pauseForInput(reason, "windows-sandbox")) : createBuildTool(projectRoot)] : options.workOrder && (options.workOrder.fullAccess || options.workOrder.mode === "implement") ? [createBuildTool(projectRoot, true), createCodeCheckTool(projectRoot, dataRoot, ledger.state.id, await configuredChecks(projectRoot), undefined, undefined, true), ...(options.workOrder.fullAccess ? [createDocumentTool(projectRoot, authorizationRoot, authorizationTaskId)] : [])] : []),
+      ...(!reviewing && !planning && !options.workOrder ? ledger.state.taskType === "general" ? [createTaskInputTool(ledger), createCodeCheckTool(projectRoot, dataRoot, ledger.state.id, ledger.state.workspaceOrigin?.checks ?? [], permission, reason => pauseForInput(reason, "windows-sandbox")), ...(direct ? [] : [createDocumentTool(projectRoot, dataRoot, ledger.state.id), createBuildTool(projectRoot)])] : generalTask ? [createDocumentTool(projectRoot, dataRoot, ledger.state.id)] : [codeTask ? createCodeCheckTool(projectRoot, dataRoot, ledger.state.id, ledger.state.workspaceOrigin?.checks ?? [], permission, reason => pauseForInput(reason, "windows-sandbox")) : createBuildTool(projectRoot)] : options.workOrder && !workerReadOnly ? [createBuildTool(projectRoot, true), createCodeCheckTool(projectRoot, dataRoot, ledger.state.id, await configuredChecks(projectRoot), undefined, undefined, true, options.workOrder.agentId ? async result => ledger.recordWorkerCheckReceipt({ attemptId: options.workOrder!.instanceId!, sourceRevision: result.sourceRevision, passed: result.passed, path: result.logPath }) : undefined), ...(options.workOrder.fullAccess ? [createDocumentTool(projectRoot, authorizationRoot, authorizationTaskId)] : [])] : options.workOrder && workerReadOnly ? [createReadOnlyCodeCheckTool(projectRoot, dataRoot, ledger.state.id, await configuredChecks(projectRoot))] : []),
       ...((!options.workOrder || options.workOrder.fullAccess) && !reviewing ? [createSearchTool(webContext), createCrawlTool(webContext), createSiteTool(webContext), createResearchSourceTool(authorizationRoot, authorizationTaskId || ledger.state.id, reason => pauseForInput(reason, "web-source"), { retrieval, kernel: webKernel, authorizeRead: scope => webRead(webContext, scope) })] : []),
-      ...(!reviewing && (codeTask || ledger.state.taskType === "general" || options.workOrder?.fullAccess) ? [createCommandTool(commandApprovalStore(authorizationRoot), authorizationTaskId || ledger.state.id, projectRoot, permission,
+      ...(!reviewing && !workerReadOnly && (codeTask || ledger.state.taskType === "general" || options.workOrder?.fullAccess) ? [createCommandTool(commandApprovalStore(authorizationRoot), authorizationTaskId || ledger.state.id, projectRoot, permission,
         permission?.mode === "auto" ? independentCommandReviewer(authorizationRoot, selector) : undefined,
         reason => pauseForInput(reason, "approval"))] : []),
        ...(!options.workOrder && !reviewing && !planning && !generalTask && options.getWorkerSupervisor ? createAsyncWorkTools(options.getWorkerSupervisor, ledger, dataRoot, agentPresets, skills) : []),
       ...(!options.workOrder && !reviewing ? [...createCognitionTools(ledger, dataRoot), ...createExpertTools(expertStore, pluginStore)] : []),
-      ...(options.workOrder ? [createWorkerResultTool(ledger, options.workOrder)] : []),
+      ...(options.workOrder ? [createWorkerResultTool(ledger, options.workOrder), ...(options.workOrder.agentId ? [createWorkerCognitionTool(ledger, options.workOrder.instanceId!), ...createWorkerMailboxTools(dataRoot, authorizationTaskId, options.workOrder)] : [])] : []),
       ...(options.workOrder && !options.workOrder.fullAccess ? [createWorkerCapabilityTool(ledger)] : []),
       ...(options.workOrder ? [options.browserProxyDir ? createWorkerBrowserTool(options.browserProxyDir) : createBrowserTool(() => null, dataRoot)] : []),
       ...(reviewing ? [createDevelopmentReviewTool(ledger, options.reviewInstanceId ?? randomUUID(), projectRoot)] : []),
@@ -422,7 +434,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     ],
     autoApprove: true,
     disableExtensionDiscovery: true,
-     preloadedPreparedExtensions: [fileToolGuard(projectRoot, options.workOrder, generalTask ? ["inputs"] : [], direct && !reviewing && !options.workOrder, reviewing || planning || !!(options.workOrder && !options.workOrder.fullAccess && (options.workOrder.mode === "review" || options.workOrder.mode === "investigate")), () => ledger.state.phase, options.getWorkerSupervisor?.(), options.onWorkerRead), ...hooks],
+     preloadedPreparedExtensions: [fileToolGuard(projectRoot, options.workOrder, generalTask ? ["inputs"] : [], direct && !reviewing && !options.workOrder, reviewing || planning || workerReadOnly, () => ledger.state.phase, options.getWorkerSupervisor?.(), options.onWorkerRead), ...hooks],
     enableMCP: false,
     enableLsp: false,
     skipPythonPreflight: true,
@@ -558,7 +570,10 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       cost: Math.max(0, usageAfter.cost - usageBefore.cost),
     };
     await ledger.recordRun({ model: selector, stage: options.workOrder ? "worker" : reviewing ? "review" : "coordinator", instanceId: options.workOrder?.instanceId ?? options.reviewInstanceId, toolCalls, compactions, compactionFailures, maxToolCalls, wallTimeMs, elapsedMs: Math.round(performance.now() - started), usage, outcome, failureReason });
-    try { await session.dispose(); }
-    finally { await mcp?.manager.disconnectAll(); }
+    try { await sessionManager.flush(); }
+    finally {
+      try { await session.dispose(); }
+      finally { await mcp?.manager.disconnectAll(); }
+    }
   }
 }

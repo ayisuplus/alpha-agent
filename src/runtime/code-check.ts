@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
 import { buildChildEnv } from "./child-env";
 import { commandApprovalStore, commandRisk } from "./command-approval";
 import { runFullAccessCommand, runSandboxCommand, SandboxUnavailableError } from "./sandbox-exec";
 import { fingerprintSource, type PermissionMode } from "./task-ledger";
+import { sourceFiles } from "./work-orders";
 
 const parameters = type({ script: "string" });
 const CHECK_NAMES = ["check", "typecheck", "lint", "test"];
@@ -61,7 +62,7 @@ export async function runCodeCheck(projectRoot: string, dataRoot: string, taskId
   }
 }
 
-export function createCodeCheckTool(projectRoot: string, dataRoot: string, taskId: string, allowed: ConfiguredCheck[], permission?: { mode: PermissionMode; roots: string[] }, onNeedsInput?: (reason: string) => Promise<void>, workerRestricted = false): CustomTool<typeof parameters> {
+export function createCodeCheckTool(projectRoot: string, dataRoot: string, taskId: string, allowed: ConfiguredCheck[], permission?: { mode: PermissionMode; roots: string[] }, onNeedsInput?: (reason: string) => Promise<void>, workerRestricted = false, onReceipt?: (result: { passed: boolean; logPath: string; sourceRevision: string | null }) => Promise<string>): CustomTool<typeof parameters> {
   return {
     name: "alpha_check",
     label: "Run configured project check",
@@ -71,11 +72,45 @@ export function createCodeCheckTool(projectRoot: string, dataRoot: string, taskI
     async execute(_id, args, _update, _ctx, signal) {
       try {
         if (workerRestricted && commandRisk([allowed.find(item => item.name === args.script)?.command ?? ""]) === "high") throw new Error("高风险检查命令须由主代理受控执行；请使用 alpha_capability_request。");
+        const before = onReceipt ? await fingerprintSource(projectRoot) : null;
         const result = await runCodeCheck(projectRoot, dataRoot, taskId, args.script, allowed, signal, permission);
-        return { content: [{ type: "text", text: `${result.output}\nlog=${result.logPath}` }], isError: !result.passed };
+        const changed = onReceipt ? before !== await fingerprintSource(projectRoot) : false;
+        const passed = result.passed && !changed;
+        const receipt = onReceipt ? await onReceipt({ passed, logPath: result.logPath, sourceRevision: before }) : null;
+        return { content: [{ type: "text", text: `${result.output}\nlog=${result.logPath}${receipt ? `\nreceipt=${receipt}` : ""}${changed ? "\nSource changed during check; this result cannot verify the original revision." : ""}` }], isError: !passed };
       } catch (error) {
         if (error instanceof SandboxUnavailableError) await onNeedsInput?.(error.message);
         return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+      }
+    },
+  };
+}
+
+export function createReadOnlyCodeCheckTool(projectRoot: string, dataRoot: string, taskId: string, allowed: ConfiguredCheck[]): CustomTool<typeof parameters> {
+  return {
+    name: "alpha_check", label: "Check a verification copy", loadMode: "essential", parameters,
+    description: "Run a configured check in a sandboxed temporary source copy. The subagent's source remains read-only.",
+    async execute(_id, args, _update, _ctx, signal) {
+      const base = join(dataRoot, "verification-copies");
+      let copyRoot: string | undefined;
+      try {
+        await mkdir(base, { recursive: true });
+        copyRoot = await mkdtemp(join(base, `${taskId}-`));
+        const sourceRevision = await fingerprintSource(projectRoot);
+        for (const file of await sourceFiles(projectRoot)) {
+          const destination = join(copyRoot, file);
+          await mkdir(dirname(destination), { recursive: true });
+          await copyFile(join(projectRoot, file), destination);
+        }
+        if (await stat(join(projectRoot, "node_modules")).then(item => item.isDirectory(), () => false)) await symlink(join(projectRoot, "node_modules"), join(copyRoot, "node_modules"), process.platform === "win32" ? "junction" : "dir");
+        const copyRevision = await fingerprintSource(copyRoot);
+        const result = await runCodeCheck(copyRoot, dataRoot, taskId, args.script, allowed, signal, { mode: "ask", roots: [copyRoot] });
+        const changed = copyRevision !== await fingerprintSource(copyRoot) || sourceRevision !== await fingerprintSource(projectRoot);
+        return { content: [{ type: "text", text: `${result.output}\nlog=${result.logPath}\nsourceRevision=${sourceRevision}${changed ? "\nSource changed during verification; check is not valid." : ""}` }], isError: !result.passed || changed };
+      } catch (error) {
+        return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+      } finally {
+        if (copyRoot && dirname(resolve(copyRoot)) === resolve(base)) await rm(copyRoot, { recursive: true, force: true });
       }
     },
   };

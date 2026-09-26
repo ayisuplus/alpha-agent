@@ -32,7 +32,7 @@ function filePath(input: string, allowSelector: boolean): string {
 export async function checkFileToolCall(toolName: string, input: Record<string, unknown>, projectRoot: string, order?: WorkOrder, protectedPaths: string[] = [], reviewing = false, parentWorkers?: { assertParentWrite(path: string): void; assertParentTool(name: string): void }, onRead?: (path: string) => void): Promise<void> {
   if (!order) parentWorkers?.assertParentTool(toolName);
   if (order && !order.fullAccess && ["glob", "ls", "find"].includes(toolName)) throw new Error(`Worker cannot enumerate files with ${toolName}; use explicit readPaths`);
-  if (order?.fullAccess && !["read", "grep", "edit", "write", "alpha_check", "alpha_worker_result", "alpha_browser", "alpha_search", "alpha_source", "alpha_crawl", "alpha_skill_read"].includes(toolName)) onRead?.(".");
+  if (order?.fullAccess && !["read", "grep", "edit", "write", "alpha_check", "alpha_worker_result", "alpha_cognition_update", "alpha_send", "alpha_inbox", "alpha_browser", "alpha_search", "alpha_source", "alpha_crawl", "alpha_skill_read"].includes(toolName)) onRead?.(".");
   if (!["read", "grep", "edit", "write"].includes(toolName)) return;
   const paths = toolName === "edit" ? [...(Array.isArray(input.paths) ? input.paths : []), ...(typeof input.path === "string" ? [input.path] : [])]
     : [toolName === "grep" ? input.path ?? "." : input.path];

@@ -7,6 +7,7 @@ import { publishLocalPreview, type PreviewInstance } from "./runtime/local-previ
 import { DEFAULT_MODEL, type RunEvent, type RunOptions } from "./runtime/omp-runner";
 import { runDevelopmentWorkflow } from "./runtime/development-workflow";
 import { WorkerSupervisor, inspectWorkerAttempt } from "./runtime/worker-supervisor";
+import { AgentMailbox } from "./runtime/agent-mailbox";
 import { ModelServiceError, isModelAvailable, listModels, removeApiKey, setApiKey, testModel } from "./runtime/models";
 import { PromptRefinementError, refinePrompt } from "./runtime/prompt-refinement";
 import { TaskLedger, fingerprintSource } from "./runtime/task-ledger";
@@ -913,6 +914,14 @@ const server = Bun.serve({
       return ledger ? Response.json({ task: taskView(ledger, !!queued) }) : Response.json({ error: "Task not found" }, { status: 404 });
     }
     const workerDetail = /^\/api\/tasks\/([0-9a-f-]{36})\/workers\/([0-9a-f-]{36})$/.exec(url.pathname);
+    const agentMessages = /^\/api\/tasks\/([0-9a-f-]{36})\/agents\/messages$/.exec(url.pathname);
+    if (agentMessages && request.method === "GET") {
+      const ledger = await loadLedger(agentMessages[1]);
+      if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });
+      const mailbox = new AgentMailbox(dataRoot, ledger);
+      await mailbox.collect();
+      return Response.json({ messages: await mailbox.inbox() });
+    }
     if (workerDetail && request.method === "GET") {
       const ledger = await loadLedger(workerDetail[1]);
       if (!ledger) return Response.json({ error: "Task not found" }, { status: 404 });

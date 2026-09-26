@@ -45,12 +45,21 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
   const [skillDecision, setSkillDecision] = useState<string | null>(null);
   const [selectedWorker, setSelectedWorker] = useState<{ id: string; diff?: string; status: string; reason?: string; findings?: string[]; events?: Array<{ sequence: number; type: string; value: string }> } | null>(null);
   const [workerLoading, setWorkerLoading] = useState<string | null>(null);
+  const [agentMessages, setAgentMessages] = useState<Awaited<ReturnType<typeof api.agentMessages>>["messages"]>([]);
   const [memory, setMemory] = useState<{ taskId: string; content: string; commit: string | null } | null>(null);
   useEffect(() => {
     if (!selectedWorker) return;
     const timer = setInterval(() => { void api.worker(task.id, selectedWorker.id).then(result => setSelectedWorker(current => current?.id === selectedWorker.id ? { id: selectedWorker.id, diff: result.diff, status: result.report?.status ?? result.instance.status, reason: result.report?.reason, findings: result.report?.results[result.instance.orderId]?.findings, events: result.events } : current)).catch(() => undefined); }, 2_000);
     return () => clearInterval(timer);
   }, [task.id, selectedWorker?.id]);
+  useEffect(() => {
+    if (!task.cognition?.agents?.length) { setAgentMessages([]); return; }
+    let current = true;
+    const refresh = () => { void api.agentMessages(task.id).then(result => { if (current) setAgentMessages(result.messages); }).catch(() => undefined); };
+    refresh();
+    const timer = setInterval(refresh, 2_000);
+    return () => { current = false; clearInterval(timer); };
+  }, [task.id, task.cognition?.agents?.length]);
   useEffect(() => {
     if (!detailsOnly) return;
     let current = true;
@@ -131,8 +140,18 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
       {!!task.cognition.candidates.length && <p>候选专家：{task.cognition.candidates.join("、")}（按需派发）</p>}
       {!!steps.length && <ol aria-label="任务待办">{steps.map(step => <li key={step.id}><strong>{step.id}</strong> · {step.objective} · {step.mode} · {step.status}{step.dependsOn.length ? ` · 依赖 ${step.dependsOn.join("、")}` : ""}{step.expertId ? ` · 专家 ${step.expertId}` : ""}{step.statusReason ? ` · ${step.statusReason}` : ""}</li>)}</ol>}
       {!!task.cognition.amendments.length && <details><summary>分工调整记录</summary><ul>{task.cognition.amendments.map(item => <li key={item.revision}>v{item.revision} · {item.reason}</li>)}</ul></details>}
+      {!!task.cognition.agents?.length && <div><strong>子代理 · {task.cognition.agents.length} 个稳定身份</strong><ul>{task.cognition.agents.map(agent => <li key={agent.id}>
+        <strong>{agent.expert.name}</strong> · {agent.mode} · {agent.status} · ID {agent.id.slice(0, 8)} · {agent.skillIds.join("、")}
+        <div>运行记录：{task.cognition?.instances?.filter(instance => instance.agentId === agent.id).map(instance => `${instance.id.slice(0, 8)} ${instance.status}${instance.integration ? `/${instance.integration}` : ""}`).join(" → ") || "暂无"}</div>
+        {agent.cognition && <div>认知 v{agent.cognition.revision}：{agent.cognition.understanding}{agent.cognition.openQuestions.length ? ` · 待查 ${agent.cognition.openQuestions.join("；")}` : ""}</div>}
+      </li>)}</ul></div>}
+      {!!agentMessages.length && <div><strong>主代理待处理消息 · {agentMessages.length}</strong><ul>{agentMessages.map(message => {
+        const agent = task.cognition?.agents?.find(item => item.id === message.fromAgentId);
+        const stale = message.contractVersion !== task.contractVersion || (agent && agent.lastAttemptId !== message.fromRunId);
+        return <li key={message.id}>{agent?.expert.name ?? message.fromAgentId?.slice(0, 8) ?? "主代理"} · {message.kind}{stale ? " · 旧运行/任务版本" : ""} · {message.body}</li>;
+      })}</ul></div>}
       {!!task.cognition.instances?.length && <div><strong>执行实例</strong><ul>{task.cognition.instances.map(instance => <li key={instance.id}>
-        <strong>{instance.orderId}</strong> · {instance.expert?.name ?? "通用执行"} · {instance.mode} · {instance.status}{instance.integration ? ` / ${instance.integration}` : ""}
+        <strong>{instance.orderId}</strong> · {instance.expert?.name ?? "通用执行"} · {instance.mode} · {instance.status}{instance.integration ? ` / ${instance.integration}` : ""}{instance.agentId ? ` · 子代理 ${instance.agentId.slice(0, 8)}` : ""}
         {instance.parentId ? ` · 主实例 ${instance.parentId.slice(0, 8)}` : ""}
         {instance.worktreePath && <div>Worktree：<code>{instance.worktreePath}</code></div>}
         {instance.startedAt && <div>开始：{formatDateTime(instance.startedAt)}{instance.endedAt ? ` · 结束：${formatDateTime(instance.endedAt)}` : ""}</div>}

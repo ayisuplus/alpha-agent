@@ -1,10 +1,12 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createTwoFilesPatch } from "diff";
 import { runModelWorkOrders } from "./model-workers";
-import { integratePreparedWorkOrder, validateOrders, type WorkBatchReport, type WorkOrder } from "./work-orders";
+import { integratePreparedWorkOrder, prepareAgentWorkspace, validateOrders, type WorkBatchReport, type WorkOrder } from "./work-orders";
+import { randomUUID } from "node:crypto";
 import type { TaskLedger } from "./task-ledger";
 import type { BrowserSession } from "./visible-browser";
+import { AgentMailbox } from "./agent-mailbox";
 
 async function ensureWorktreeBase(projectRoot: string, managed: boolean): Promise<void> {
   const git = async (...args: string[]) => {
@@ -62,6 +64,10 @@ export class WorkerSupervisor {
   private browserOwner: string | null = null;
   private integration: Promise<unknown> = Promise.resolve();
   private readonly listeners = new Set<() => void>();
+  readonly mailbox: AgentMailbox;
+  private messagePoll?: ReturnType<typeof setInterval>;
+  private coordinatorSteer?: (text: string) => Promise<void>;
+  private messageNotified = false;
 
   constructor(private readonly input: {
     ledger: TaskLedger; dataRoot: string; parentId?: string; modelSelector?: string; signal?: AbortSignal;
@@ -69,11 +75,13 @@ export class WorkerSupervisor {
     browser?: BrowserSession; browserUrl?: string; browserAccess?: () => boolean;
     remainingCalls: () => number; remainingTimeMs?: () => number; onStatus?: (message: string) => void; onChange?: () => void; runWorkers?: typeof runModelWorkOrders;
   }) {
+    this.mailbox = new AgentMailbox(input.dataRoot, input.ledger);
     liveSupervisors.set(input.ledger.state.id, this);
     for (const instance of input.ledger.state.cognition?.instances ?? []) {
       if (instance.status === "returned" && instance.order) this.attempts.set(instance.id, { order: instance.order, controller: new AbortController() });
     }
     input.signal?.addEventListener("abort", () => { void this.cancelAll(); }, { once: true });
+    this.startMessagePoll();
   }
 
   get ledger() { return this.input.ledger; }
@@ -83,6 +91,25 @@ export class WorkerSupervisor {
   get unsettled() { return [...this.attempts.keys()].some(id => ["queued", "running", "returned"].includes(this.instance(id)?.status ?? "")); }
   get running() { return this.active.size > 0; }
   get needsIntegration() { return [...this.attempts.keys()].some(id => this.instance(id)?.status === "returned"); }
+  get hasMessages() { return this.mailbox.pending; }
+  setCoordinatorSteer(steer?: (text: string) => Promise<void>) {
+    this.coordinatorSteer = steer;
+    this.messageNotified = false;
+    if (steer) void this.pollMessages();
+  }
+  private startMessagePoll() {
+    if (this.messagePoll) return;
+    this.messagePoll = setInterval(() => { void this.pollMessages().catch(error => this.input.onStatus?.(`子代理消息箱错误：${error instanceof Error ? error.message : String(error)}`)); }, 150);
+    this.messagePoll.unref?.();
+  }
+  private async pollMessages() {
+    await this.mailbox.collect();
+    if (!this.mailbox.pending) { this.messageNotified = false; if (!this.unsettled) this.notify(); return; }
+    if (this.messageNotified) return;
+    this.messageNotified = true;
+    this.notify();
+    if (this.coordinatorSteer) await this.coordinatorSteer("Subagent inbox has unread messages. Use alpha_inbox to inspect them and decide whether to answer, forward, continue an agent, or request user input.").catch(() => undefined);
+  }
   private instance(id: string) { return this.ledger.state.cognition?.instances?.find(item => item.id === id); }
   private releaseReservation(attempt: Attempt): void {
     if (!attempt.reserved) return;
@@ -90,7 +117,14 @@ export class WorkerSupervisor {
     this.reservedCalls -= 40;
     this.reservedTimeMs -= 120_000;
   }
-  private notify() { this.input.onChange?.(); for (const listener of this.listeners) listener(); if (!this.unsettled && liveSupervisors.get(this.ledger.state.id) === this) liveSupervisors.delete(this.ledger.state.id); }
+  private notify() {
+    this.input.onChange?.();
+    for (const listener of this.listeners) listener();
+    if (!this.unsettled && !this.mailbox.pending) {
+      if (liveSupervisors.get(this.ledger.state.id) === this) liveSupervisors.delete(this.ledger.state.id);
+      if (this.messagePoll) { clearInterval(this.messagePoll); this.messagePoll = undefined; }
+    }
+  }
 
   claimBrowser(id: string): boolean {
     if (this.input.browserAccess?.() === false) { this.browserOwner = null; return false; }
@@ -109,12 +143,16 @@ export class WorkerSupervisor {
   }
   assertParentTool(name: string): void {
     if (!this.unsettled) return;
-    if (!["read", "grep", "edit", "write", "alpha_spawn", "alpha_inspect", "alpha_wait", "alpha_cancel", "alpha_integrate", "alpha_browser", "alpha_plan", "alpha_step", "alpha_gap", "alpha_gap_resolve", "alpha_expert_search", "alpha_search", "alpha_crawl", "alpha_site", "alpha_source"].includes(name)) throw new Error(`Wait for worker integration before using ${name}`);
+    if (!["read", "grep", "edit", "write", "alpha_spawn", "alpha_continue", "alpha_inspect", "alpha_wait", "alpha_cancel", "alpha_integrate", "alpha_send", "alpha_inbox", "alpha_browser", "alpha_plan", "alpha_step", "alpha_gap", "alpha_gap_resolve", "alpha_expert_search", "alpha_search", "alpha_crawl", "alpha_site", "alpha_source"].includes(name)) throw new Error(`Wait for worker integration before using ${name}`);
   }
 
   async spawn(orders: WorkOrder[], maxParallel = this.maxParallel): Promise<string[]> {
     if (!Number.isInteger(maxParallel) || maxParallel < 1 || maxParallel > 4) throw new Error("Worker concurrency must be 1–4");
-    const outstanding = [...this.attempts.entries()].filter(([id]) => ["queued", "running", "returned"].includes(this.instance(id)?.status ?? "")).map(([, value]) => value.order);
+    const replacements = new Set(orders.map(order => order.agentId).filter((id): id is string => !!id));
+    const outstanding = [...this.attempts.entries()].filter(([id]) => {
+      const instance = this.instance(id);
+      return ["queued", "running", "returned"].includes(instance?.status ?? "") && !(instance?.status === "returned" && instance.agentId && replacements.has(instance.agentId));
+    }).map(([, value]) => value.order);
     validateOrders([...outstanding, ...orders], 16);
     const ids = new Set(orders.map(order => order.id));
     for (const order of orders) for (const dep of order.dependsOn ?? []) {
@@ -124,6 +162,7 @@ export class WorkerSupervisor {
     if (this.input.remainingTimeMs && this.input.remainingTimeMs() - this.reservedTimeMs < orders.length * 120_000) throw new Error("Task-wide time budget cannot reserve these workers");
     await ensureWorktreeBase(this.ledger.state.projectRoot, ["generated", "copy"].includes(this.ledger.state.workspaceOrigin?.kind ?? ""));
     this.maxParallel = maxParallel;
+    this.startMessagePoll();
     liveSupervisors.set(this.ledger.state.id, this);
     this.releaseBrowser("coordinator");
     const assigned: string[] = [];
@@ -139,6 +178,30 @@ export class WorkerSupervisor {
     this.pump();
     this.notify();
     return assigned;
+  }
+
+  async continue(agentId: string, instruction: string, mode?: WorkOrder["mode"]): Promise<string> {
+    if (!instruction.trim()) throw new Error("Continuation instruction is required");
+    if (mode && !["investigate", "implement", "review"].includes(mode)) throw new Error("Invalid subagent mode");
+    const agent = this.ledger.state.cognition?.agents?.find(item => item.id === agentId);
+    if (!agent) throw new Error("Persistent subagent not found");
+    const prior = this.instance(agent.lastAttemptId);
+    if (!prior?.order || ["queued", "running"].includes(prior.status)) throw new Error("Subagent run is still active");
+    const id = randomUUID();
+    const order: WorkOrder = { ...prior.order, agentId, instanceId: id, mode: mode ?? agent.mode,
+      objective: `${prior.order.objective}\nFollow-up: ${instruction.trim()}`,
+      ownedPaths: mode && mode !== "implement" ? [] : prior.order.ownedPaths,
+      readPaths: [...new Set(prior.order.readPaths ?? [])],
+      skillIds: [...agent.skillIds], skillSnapshots: agent.skillSnapshots?.map(item => ({ ...item })), preset: agent.expert,
+      contractVersion: this.ledger.state.contractVersion ?? 1,
+      cognitionRevision: this.ledger.state.cognition?.revision ?? 1,
+      baseRevision: this.ledger.state.revision ?? undefined,
+    };
+    const report = prior.workRoot ? await readFile(join(prior.workRoot, "merge.json"), "utf8").then(value => JSON.parse(value) as WorkBatchReport).catch(() => null) : null;
+    if (order.mode !== "implement" && prior.integration !== "merged" && report?.changes[prior.orderId]?.length) throw new Error("Integrate or discard prior source edits before switching this subagent to a read-only mode");
+    order.readPaths = [...new Set([...(order.readPaths ?? []), ...(prior.integration === "merged" ? [] : report?.results[prior.orderId]?.readPaths ?? [])])];
+    await this.spawn([order], this.maxParallel);
+    return id;
   }
 
   private pump(): void {
@@ -170,13 +233,29 @@ export class WorkerSupervisor {
       signal.throwIfAborted();
       await ledger.refreshRevision();
       signal.throwIfAborted();
+      const agentId = attempt.order.agentId;
+      const workspace = agentId ? join(dataRoot, "worker-agents", ledger.state.id, agentId, "project") : undefined;
+      const previous = agentId ? ledger.state.cognition?.instances?.filter(item => item.agentId === agentId && item.id !== id).at(-1) : undefined;
+      let mergeBaseRoot: string | undefined;
+      if (workspace) {
+        if (previous) {
+          if (!await Bun.file(join(workspace, ".git")).exists()) throw new Error("Persistent subagent workspace is missing");
+          if (previous.integration === "merged") await prepareAgentWorkspace(ledger.state.projectRoot, workspace, join(previous.workRoot!, previous.orderId));
+          else {
+            if (!previous.workRoot) throw new Error("Previous subagent base is missing");
+            mergeBaseRoot = join(previous.workRoot, "base");
+            const frozen = join(previous.workRoot, previous.orderId);
+            if (await stat(frozen).then(item => item.isDirectory(), () => false)) await prepareAgentWorkspace(ledger.state.projectRoot, workspace, frozen, false);
+          }
+        } else await prepareAgentWorkspace(ledger.state.projectRoot, workspace);
+      }
       const report = await (this.input.runWorkers ?? runModelWorkOrders)({
         projectRoot: ledger.state.projectRoot, dataRoot, taskId: ledger.state.id, baseRevision: ledger.state.revision!,
-        orders: [attempt.order], batchId: id, deferMerge: true, isolate: "git-worktree", signal, modelSelector, browser, browserUrl, browserAccess, plugins, generation, comfyUrl,
+        orders: [attempt.order], batchId: id, deferMerge: true, isolate: "git-worktree", agentWorkspace: workspace, mergeBaseRoot, signal, modelSelector, browser, browserUrl, browserAccess, plugins, generation, comfyUrl,
         workerContext: { taskType: ledger.state.taskType, workspaceOrigin: ledger.state.workspaceOrigin, capabilities: ledger.state.capabilities, permissionMode: ledger.state.permissionMode },
         browserLease: { claim: worker => this.claimBrowser(worker), release: worker => this.releaseBrowser(worker) },
         async onWorkerEvent(order, state) {
-          if (state === "started") { await ledger.updateWorker(id, "running", { skills: order.skillSnapshots ?? [] }); manager.notify(); }
+          if (state === "started") { attempt.order.skillSnapshots = order.skillSnapshots; await ledger.updateWorker(id, "running", { skills: order.skillSnapshots ?? [] }); manager.notify(); }
         },
         async onWorkerUsage(order, usage) {
           await ledger.recordRun({ model: usage.model, stage: "worker", instanceId: id, toolCalls: usage.incomplete ? 40 : usage.toolCalls, maxToolCalls: 40, wallTimeMs: 120_000, elapsedMs: usage.incomplete ? 120_000 : usage.elapsedMs, childElapsedMs: usage.elapsedMs, usageIncomplete: usage.incomplete, usage: usage.tokens, outcome: usage.outcome ?? "returned" });
@@ -186,13 +265,21 @@ export class WorkerSupervisor {
       const outcome = report.results[attempt.order.id];
       if (outcome?.status === "needs-context") {
         const reason = outcome.findings?.join("; ") || report.reason || "Worker needs task input";
-        await ledger.updateWorker(id, "blocked", { workRoot: report.workRoot, findings: [reason] });
-        if (ledger.state.status === "active") await ledger.needInput(reason, "worker-approval");
+        await ledger.updateWorker(id, "blocked", { workRoot: report.workRoot, findings: [reason], cognition: outcome.cognition });
+        if (attempt.order.agentId) { await this.mailbox.report(attempt.order.agentId, id, reason); await this.pollMessages(); }
+        else if (ledger.state.status === "active") await ledger.needInput(reason, "worker-approval");
         this.input.onStatus?.(`子实例 ${attempt.order.id} 等待任务授权或输入`);
         return;
       }
-      if (report.status !== "ready") throw new Error(report.reason ?? "Worker result was rejected");
-      await ledger.updateWorker(id, "returned", { workRoot: report.workRoot, worktreePath: join(report.workRoot, attempt.order.id), integration: "pending", findings: report.results[attempt.order.id]?.findings ?? [] });
+      if (report.status !== "ready") {
+        const reason = report.reason ?? "Worker result was rejected";
+        const status = outcome?.status === "blocked" ? "blocked" : "failed";
+        await ledger.updateWorker(id, status, { workRoot: report.workRoot, findings: [reason], cognition: outcome?.cognition });
+        if (status === "blocked" && attempt.order.agentId) { await this.mailbox.report(attempt.order.agentId, id, reason); await this.pollMessages(); }
+        this.input.onStatus?.(`子实例 ${attempt.order.id} ${status === "blocked" ? "等待主代理" : "失败"}`);
+        return;
+      }
+      await ledger.updateWorker(id, "returned", { workRoot: report.workRoot, worktreePath: workspace ?? join(report.workRoot, attempt.order.id), integration: "pending", findings: report.results[attempt.order.id]?.findings ?? [], cognition: outcome?.cognition });
       this.input.onStatus?.(`子实例 ${attempt.order.id} 已返回，等待检查和集成`);
     } catch (error) {
       await ledger.updateWorker(id, signal.aborted ? "cancelled" : "failed", { findings: [error instanceof Error ? error.message : String(error)] });
@@ -219,7 +306,7 @@ export class WorkerSupervisor {
     this.releaseBrowser("coordinator");
     if (timeoutMs && ids.every(id => ["queued", "running"].includes(this.instance(id)?.status ?? ""))) {
       await new Promise<void>(resolve => {
-        const done = () => { if (ids.some(id => !["queued", "running"].includes(this.instance(id)?.status ?? ""))) { clearTimeout(timer); this.listeners.delete(done); resolve(); } };
+        const done = () => { if (this.mailbox.pending || ids.some(id => !["queued", "running"].includes(this.instance(id)?.status ?? ""))) { clearTimeout(timer); this.listeners.delete(done); resolve(); } };
         const timer = setTimeout(() => { this.listeners.delete(done); resolve(); }, timeoutMs);
         this.listeners.add(done);
         done();

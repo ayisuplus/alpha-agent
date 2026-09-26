@@ -72,6 +72,8 @@ export function runModelWorkOrders(input: {
   deferMerge?: boolean;
   batchId?: string;
   isolate?: "copy" | "git-worktree";
+  agentWorkspace?: string;
+  mergeBaseRoot?: string;
   /** Workers run on the same model as the task that delegated to them. */
   modelSelector?: string;
   workerContext?: Pick<TaskState, "taskType" | "workspaceOrigin" | "capabilities" | "permissionMode">;
@@ -96,9 +98,10 @@ export function runModelWorkOrders(input: {
     const resultFile = join(runDir, "result.json");
     const browserDirectory = join(runDir, "browser-requests");
     await mkdir(browserDirectory, { recursive: true });
-    const withSkills = await snapshotSkills(input.dataRoot, join(runDir, "state"), order);
+    const stateRoot = order.agentId ? join(input.dataRoot, "worker-agents", input.taskId, order.agentId, "state") : join(runDir, "state");
+    const withSkills = order.skillSnapshots?.length ? order : await snapshotSkills(input.dataRoot, stateRoot, order);
     const { preset, ...workOrder } = withSkills;
-    await writeFile(requestFile, JSON.stringify({ taskId: input.taskId, projectRoot: directory, dataRoot: join(runDir, "state"), authorizationRoot: input.dataRoot, workerContext: input.workerContext, plugins: input.plugins, generation: input.generation, comfyUrl: input.comfyUrl, objective: order.objective, workOrder, workerPreset: preset, modelSelector: input.modelSelector, browserProxyDir: browserDirectory, eventFile: join(runDir, "events.jsonl") }));
+    await writeFile(requestFile, JSON.stringify({ taskId: input.taskId, projectRoot: directory, dataRoot: stateRoot, authorizationRoot: input.dataRoot, workerContext: input.workerContext, plugins: input.plugins, generation: input.generation, comfyUrl: input.comfyUrl, objective: order.objective, workOrder, workerPreset: preset, modelSelector: input.modelSelector, browserProxyDir: browserDirectory, eventFile: join(runDir, "events.jsonl") }));
     await input.onWorkerEvent?.(withSkills, "started");
     const browserTool = createBrowserTool(() => input.browserAccess?.() === false ? null : input.browser ?? null, input.dataRoot, input.browserUrl);
     const handled = new Set<string>();

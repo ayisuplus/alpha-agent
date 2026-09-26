@@ -91,6 +91,7 @@ export const api = {
   tasks: () => request<TaskList>("/api/tasks"),
   task: (id: string) => request<{ task: TaskView }>(taskPath(id)).then(result => result.task),
   worker: (taskId: string, id: string) => request<{ instance: NonNullable<NonNullable<TaskView["cognition"]>["instances"]>[number]; report?: { status: string; changes: Record<string, string[]>; reason?: string; results: Record<string, { findings?: string[]; unresolved?: string[] }> }; diff?: string; events: Array<{ sequence: number; type: string; value: string }> }>(`${taskPath(taskId)}/workers/${encodeURIComponent(id)}`),
+  agentMessages: (taskId: string) => request<{ messages: Array<{ id: string; fromAgentId: string | null; fromRunId: string | null; toAgentId: string | null; kind: string; body: string; recordedAt: string; contractVersion: number; baseRevision: string | null }> }>(`${taskPath(taskId)}/agents/messages`),
   cancelWorker: (taskId: string, id: string) => post<{ task: TaskView }>(`${taskPath(taskId)}/workers/${encodeURIComponent(id)}/cancel`).then(result => result.task),
   projectMemory: (id: string) => request<{ content: string; commit: string | null; checkpoint: TaskView["checkpoint"]; error: string | null }>(`${taskPath(id)}/memory`),
   webApprovals: (id: string) => request<{ approvals: import("./types").WebApproval[] }>(`${taskPath(id)}/web-approvals`).then(result => result.approvals),

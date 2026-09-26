@@ -78,6 +78,27 @@ export interface GuidanceRecord {
 }
 
 export type ExecutionMode = "investigate" | "implement" | "review";
+export interface AgentRecord {
+  id: string;
+  expert: import("./agent-presets").AgentPresetSnapshot;
+  skillIds: string[];
+  skillSnapshots?: Array<{ id: string; hash: string; revision: string }>;
+  mode: ExecutionMode;
+  orderId: string;
+  lastAttemptId: string;
+  status: "queued" | "running" | "returned" | "waiting-primary" | "completed" | "failed" | "cancelled";
+  cognition?: { revision: number; understanding: string; findings: Array<{ text: string; evidence: string[] }>; openQuestions: string[]; nextActions: string[]; sourceRevision: string | null };
+}
+export interface WorkerCognition {
+  revision: number;
+  understanding: string;
+  findings: Array<{ text: string; evidence: string[] }>;
+  openQuestions: string[];
+  nextActions: string[];
+  sourceRevision: string | null;
+  attemptId: string;
+  updatedAt: string;
+}
 export interface CognitionStep {
   id: string;
   objective: string;
@@ -103,7 +124,8 @@ export interface CognitionState {
   basedOnRevision?: string | null;
   skillSearches?: Array<{ key: string; gapDescription: string; query: string; resultCount: number; error?: string; recordedAt: string }>;
   skillProposals?: Array<{ id: string; key: string; name: string; description: string; source: string; revision: string; path: string; installs: number; requirements?: { tools: string[]; services: string[]; conflicts: string[] }; status: "pending" | "rejected" | "installed"; installedSkillId?: string; recordedAt: string }>;
-  instances?: Array<{ id: string; parentId?: string; orderId: string; mode: ExecutionMode; expert?: { id: string; name: string; hash: string }; skills: Array<{ id: string; hash: string; revision: string }>; contractVersion: number; cognitionRevision: number; baseRevision: string | null; status: "queued" | "running" | "returned" | "completed" | "blocked" | "failed" | "cancelled"; integration?: "pending" | "merged" | "conflict"; workRoot?: string; worktreePath?: string; order?: import("./work-orders").WorkOrder; startedAt: string; endedAt?: string; findings?: string[] }>;
+  agents?: AgentRecord[];
+  instances?: Array<{ id: string; agentId?: string; parentId?: string; orderId: string; mode: ExecutionMode; expert?: { id: string; name: string; hash: string }; skills: Array<{ id: string; hash: string; revision: string }>; contractVersion: number; cognitionRevision: number; baseRevision: string | null; status: "queued" | "running" | "returned" | "completed" | "blocked" | "failed" | "cancelled"; integration?: "pending" | "merged" | "conflict"; workRoot?: string; worktreePath?: string; order?: import("./work-orders").WorkOrder; startedAt: string; endedAt?: string; findings?: string[] }>;
 }
 export interface DevelopmentState {
   enabled: true;
@@ -126,6 +148,8 @@ export interface TaskState {
   contractHistory?: Array<{ version: number; objective: string; revisedAt: string }>;
   guidanceHistory?: GuidanceRecord[];
   cognition?: CognitionState;
+  workerCognition?: WorkerCognition;
+  workerReceipts?: Array<{ id: string; attemptId: string; kind: "check"; sourceRevision: string | null; passed: boolean; path: string; recordedAt: string }>;
   development?: DevelopmentState;
   workerOutcome?: { status: "completed" | "needs-context" | "blocked" | "failed"; findings: string[]; reviewVerdict?: "pass" | "changes-requested" | "inconclusive"; reviewEvidence?: Array<{ path: string; excerpt: string }>; requests?: Array<{ capability: string; reason: string; details: string }> };
   projectRoot: string;
@@ -503,20 +527,69 @@ export class TaskLedger {
     this.state.cognition ??= { revision: 1, recipeVersion: 1, summary: this.state.objective, candidates: [], steps: [], gaps: [], amendments: [] };
     if (this.state.cognition.instances?.some(item => item.id === input.id)) throw new Error("Worker attempt already exists");
     const { preset: _preset, ...order } = input.order;
-    (this.state.cognition.instances ??= []).push({ id: input.id, parentId: input.parentId, orderId: order.id, order, mode: order.mode ?? "implement", expert: input.expert, skills: [], contractVersion: this.state.contractVersion ?? 1, cognitionRevision: this.state.cognition.revision, baseRevision: this.state.revision, status: "queued", startedAt: new Date().toISOString() });
+    if (order.agentId) {
+      if (!_preset?.package?.skills.length || !order.skillIds?.length) throw new Error("Subagent requires a versioned expert persona and Skill");
+      const agents = this.state.cognition.agents ??= [];
+      const existing = agents.find(item => item.id === order.agentId);
+      if (existing) {
+        if (existing.expert.hash !== _preset.hash || existing.orderId !== order.id || JSON.stringify(existing.skillIds) !== JSON.stringify(order.skillIds)) throw new Error("Subagent identity or expert/skills changed");
+        if (["queued", "running"].includes(existing.status)) throw new Error("Subagent is already running");
+        const previous = (this.state.cognition.instances ?? []).find(item => item.id === existing.lastAttemptId);
+        if (previous?.status === "returned") { previous.status = "cancelled"; previous.findings = [...(previous.findings ?? []), "Superseded by continuation"]; previous.endedAt = new Date().toISOString(); }
+        existing.lastAttemptId = input.id;
+        existing.mode = order.mode ?? "implement";
+        existing.status = "queued";
+      } else agents.push({ id: order.agentId, expert: _preset, skillIds: [...order.skillIds], mode: order.mode ?? "implement", orderId: order.id, lastAttemptId: input.id, status: "queued" });
+    }
+    (this.state.cognition.instances ??= []).push({ id: input.id, agentId: order.agentId, parentId: input.parentId, orderId: order.id, order, mode: order.mode ?? "implement", expert: input.expert, skills: [], contractVersion: this.state.contractVersion ?? 1, cognitionRevision: this.state.cognition.revision, baseRevision: this.state.revision, status: "queued", startedAt: new Date().toISOString() });
     const step = this.state.cognition.steps.find(item => item.id === order.id);
     if (step) { step.status = "running"; step.statusReason = `工单 ${input.id} 排队中`; }
     await this.save();
   }
 
-  async updateWorker(id: string, status: "running" | "returned" | "completed" | "blocked" | "failed" | "cancelled", patch: { workRoot?: string; worktreePath?: string; findings?: string[]; integration?: "pending" | "merged" | "conflict"; skills?: Array<{ id: string; hash: string; revision: string }> } = {}): Promise<void> {
+  async updateWorker(id: string, status: "running" | "returned" | "completed" | "blocked" | "failed" | "cancelled", patch: { workRoot?: string; worktreePath?: string; findings?: string[]; integration?: "pending" | "merged" | "conflict"; skills?: Array<{ id: string; hash: string; revision: string }>; cognition?: AgentRecord["cognition"] } = {}): Promise<void> {
     const instance = this.state.cognition?.instances?.find(item => item.id === id);
     if (!instance || !instance.order) throw new Error("Worker attempt not found");
     if (["completed", "blocked", "failed", "cancelled"].includes(instance.status)) return;
     Object.assign(instance, patch, { status });
+    const agent = this.state.cognition?.agents?.find(item => item.id === instance.agentId);
+    if (agent && agent.lastAttemptId === id) {
+      agent.status = status === "blocked" ? "waiting-primary" : status;
+      if (patch.cognition) agent.cognition = patch.cognition;
+      if (patch.skills) {
+        agent.skillSnapshots = patch.skills.map(item => ({ ...item }));
+        if (instance.order) instance.order.skillSnapshots = patch.skills.map(item => ({ ...item }));
+      }
+    }
     if (status !== "running") instance.endedAt = new Date().toISOString();
     const step = this.state.cognition?.steps.find(item => item.id === instance.orderId);
     if (step) { step.status = status === "completed" ? "complete" : ["blocked", "failed", "cancelled"].includes(status) ? "blocked" : "running"; step.statusReason = `工单 ${id} ${status}${patch.integration ? ` / ${patch.integration}` : ""}`; }
+    await this.save();
+  }
+
+  async updateWorkerCognition(input: Omit<WorkerCognition, "revision" | "sourceRevision" | "updatedAt">): Promise<WorkerCognition> {
+    this.assertActive();
+    if (!input.understanding.trim() || input.understanding.length > 2_000 || input.findings.length > 20 || input.openQuestions.length > 20 || input.nextActions.length > 20) throw new Error("Worker cognition is invalid or too large");
+    const known = new Set((this.state.workerReceipts ?? []).map(item => item.id));
+    if (input.findings.some(item => !item.text.trim() || item.text.length > 500 || item.evidence.some(id => !known.has(id)))) throw new Error("Worker finding cites an unknown evidence receipt");
+    this.state.workerCognition = { ...input, revision: (this.state.workerCognition?.revision ?? 0) + 1, sourceRevision: await fingerprintSource(this.state.projectRoot), updatedAt: new Date().toISOString() };
+    await this.save();
+    return this.state.workerCognition;
+  }
+
+  async recordWorkerCheckReceipt(input: { attemptId: string; sourceRevision: string | null; passed: boolean; path: string }): Promise<string> {
+    const id = randomUUID();
+    (this.state.workerReceipts ??= []).push({ id, ...input, kind: "check", recordedAt: new Date().toISOString() });
+    await this.save();
+    return id;
+  }
+
+  async prepareWorkerRun(): Promise<void> {
+    if (this.state.status === "complete") throw new Error("Completed worker state cannot be continued");
+    this.state.status = "active";
+    delete this.state.pendingQuestion;
+    delete this.state.blockedService;
+    delete this.state.workerOutcome;
     await this.save();
   }
 
@@ -544,10 +617,13 @@ export class TaskLedger {
     await this.save();
   }
 
-  async recordDevelopmentReview(input: { verdict: NonNullable<DevelopmentState["review"]>["verdict"]; findings: string[]; evidence?: Array<{ path: string; excerpt: string }>; instanceId: string }): Promise<void> {
+  async recordDevelopmentReview(input: { verdict: NonNullable<DevelopmentState["review"]>["verdict"]; findings: string[]; evidence?: Array<{ path: string; excerpt: string }>; instanceId: string; expectedRevision?: string; expectedContractVersion?: number }): Promise<void> {
     this.assertActive();
     if (!this.state.development?.enabled || !this.state.revision || !input.instanceId) throw new Error("开发审查状态无效");
-    this.state.development.review = { ...input, findings: input.findings.map(item => item.trim()).filter(Boolean), revision: this.state.revision, contractVersion: this.state.contractVersion ?? 1, recordedAt: new Date().toISOString() };
+    if (input.expectedRevision && (this.state.revision !== input.expectedRevision || await fingerprintSource(this.state.projectRoot) !== input.expectedRevision)) throw new Error("Reviewed source version changed");
+    if (input.expectedContractVersion && (this.state.contractVersion ?? 1) !== input.expectedContractVersion) throw new Error("Reviewed task contract changed");
+    const { expectedRevision: _revision, expectedContractVersion: _contract, ...review } = input;
+    this.state.development.review = { ...review, findings: input.findings.map(item => item.trim()).filter(Boolean), revision: this.state.revision, contractVersion: this.state.contractVersion ?? 1, recordedAt: new Date().toISOString() };
     await this.save();
   }
 

@@ -56,6 +56,8 @@ test("async Git workers inherit dirty source, keep parent edits, and integrate o
   try {
     const [id] = await supervisor.spawn([order("first", "src/first.txt")]);
     await workerStarted;
+    expect(() => supervisor.assertParentTool("alpha_inbox")).not.toThrow();
+    expect(() => supervisor.assertParentTool("alpha_send")).not.toThrow();
     await expect(checkFileToolCall("write", { path: "src/first.txt" }, state.projectRoot, undefined, [], false, supervisor)).rejects.toThrow("reserved");
     await checkFileToolCall("write", { path: "src/second.txt" }, state.projectRoot, undefined, [], false, supervisor);
     await writeFile(join(state.projectRoot, "src", "second.txt"), "parent-change");
@@ -134,7 +136,7 @@ test("insufficient shared budget starts no worker", async () => {
   } finally { await rm(state.root, { recursive: true, force: true }); }
 });
 
-test("review-mode worktree worker can read and edit outside path hints, then integrate actual changes", async () => {
+test("review-mode worktree worker cannot integrate source edits even with full access", async () => {
   const state = await fixture();
   const child = { ...order("reviewer", "src/first.txt"), mode: "review" as const, fullAccess: true };
   const supervisor = new WorkerSupervisor({ ...state, remainingCalls: () => 1000, runWorkers: input => executeWorkOrders({ ...input,
@@ -148,9 +150,9 @@ test("review-mode worktree worker can read and edit outside path hints, then int
   }) });
   try {
     const [id] = await supervisor.spawn([child]);
-    expect((await supervisor.wait([id], 10_000))[0].report?.changes.reviewer).toEqual(["src/second.txt"]);
-    expect((await supervisor.integrate(id)).status).toBe("merged");
-    expect(await readFile(join(state.projectRoot, "src", "second.txt"), "utf8")).toBe("reviewer-fix");
+    expect((await supervisor.wait([id], 10_000))[0].instance.status).toBe("failed");
+    await expect(supervisor.integrate(id)).rejects.toThrow("not awaiting integration");
+    expect(await readFile(join(state.projectRoot, "src", "second.txt"), "utf8")).not.toBe("reviewer-fix");
   } finally { await supervisor.cancelAll(); await rm(state.root, { recursive: true, force: true }); }
 });
 
@@ -339,4 +341,39 @@ test("managed projects without Git gain an empty local anchor for isolated worke
     expect(await readFile(join(projectRoot, "entry.txt"), "utf8")).toBe("worker-change");
     await supervisor.cancelAll();
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("persistent subagent continues in its worktree and merges cumulative changes", async () => {
+  const state = await fixture();
+  const agentId = crypto.randomUUID();
+  const preset = { id: "test-expert", name: "Test expert", description: "Test", instructions: "Test", hash: "a".repeat(64), skillIds: ["test:skill"], package: { revision: "b".repeat(64), skills: [{ id: "test:skill", hash: "c".repeat(64) }] } };
+  const work = { ...order("persistent", "src/first.txt"), fullAccess: true, agentId, preset, skillIds: ["test:skill"] };
+  let runs = 0;
+  const supervisor = new WorkerSupervisor({ ...state, remainingCalls: () => 1000, runWorkers: input => executeWorkOrders({ ...input,
+    async runWorker(workOrder, directory) {
+      await input.onWorkerEvent?.(workOrder, "started");
+      runs++;
+      expect(directory).toBe(join(state.dataRoot, "worker-agents", state.ledger.state.id, agentId, "project"));
+      expect(await readFile(join(directory, "src", "first.txt"), "utf8")).toBe(runs === 1 ? "dirty-parent" : runs === 2 ? "first-run" : "second-run");
+      if (workOrder.mode === "implement") await writeFile(join(directory, "src", "first.txt"), runs === 1 ? "first-run" : "second-run");
+      return { status: "completed", findings: [`run ${runs}`], evidence: [], unresolved: [], ...(workOrder.mode === "review" ? { reviewVerdict: "pass" as const } : {}), cognition: { revision: runs, understanding: `run ${runs}`, findings: [], openQuestions: [], nextActions: [], sourceRevision: null } };
+    },
+  }) });
+  try {
+    const [first] = await supervisor.spawn([work]);
+    expect((await supervisor.wait([first], 10_000))[0].instance.status).toBe("returned");
+    await expect(supervisor.continue(agentId, "Review before integration", "review")).rejects.toThrow("Integrate or discard");
+    const second = await supervisor.continue(agentId, "Finish the change");
+    const result = (await supervisor.wait([second], 10_000))[0];
+    expect(result.instance.status).toBe("returned");
+    expect(result.diff).toContain("second-run");
+    expect(result.diff).toContain("dirty-parent");
+    expect(state.ledger.state.cognition?.agents?.[0].cognition?.understanding).toBe("run 2");
+    expect((await supervisor.integrate(second)).status).toBe("merged");
+    expect(await readFile(join(state.projectRoot, "src", "first.txt"), "utf8")).toBe("second-run");
+    const third = await supervisor.continue(agentId, "Check the integrated source", "review");
+    expect((await supervisor.wait([third], 10_000))[0].instance.status).toBe("returned");
+    expect((await supervisor.integrate(third)).status).toBe("merged");
+    expect(state.ledger.state.cognition?.instances?.map(item => item.agentId)).toEqual([agentId, agentId, agentId]);
+  } finally { await supervisor.cancelAll(); await rm(state.root, { recursive: true, force: true }); }
 });
