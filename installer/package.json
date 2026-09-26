@@ -1,0 +1,9 @@
+{
+  "name": "alpha",
+  "private": true,
+  "version": "0.1.0",
+  "main": "main.cjs",
+  "devDependencies": {
+    "electron-builder": "26.15.2"
+  }
+}
