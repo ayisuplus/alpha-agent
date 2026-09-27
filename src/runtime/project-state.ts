@@ -142,10 +142,13 @@ async function repoAt(root: string, allowedRoots: string[], importedWorktree: bo
   const existing = await git(root, ["rev-parse", "--show-toplevel"], false);
   if (!existing || (standalone && !inside(root, resolve(existing)))) await git(root, ["init", "-b", "main"]);
   const repository = resolve(await git(root, ["rev-parse", "--show-toplevel"]));
-  if (!allowedRoots.some(allowed => inside(allowed, repository))) throw new Error(`Git repository is outside the authorized project directories: ${repository}`);
+  const ancestor = !allowedRoots.some(allowed => inside(allowed, repository)) && allowedRoots.some(allowed => allowed === root && inside(repository, root));
+  if (!ancestor && !allowedRoots.some(allowed => inside(allowed, repository))) throw new Error(`Git repository is outside the authorized project directories: ${repository}`);
   const gitDir = resolve(await git(root, ["rev-parse", "--absolute-git-dir"]));
   if (!inside(repository, gitDir) && !importedWorktree) throw new Error(`Git metadata is outside the authorized project directory: ${gitDir}`);
-  await initialBaseline(repository);
+  if (ancestor) {
+    if (!await git(repository, ["rev-parse", "--verify", "HEAD"], false)) throw new Error("An ancestor Git repository needs an existing commit before scoped use");
+  } else await initialBaseline(repository);
   return repository;
 }
 
@@ -190,7 +193,7 @@ export async function bindProjectTurn(turn: ProjectTurn, ledger: TaskLedger): Pr
 export function assertWritablePaths(turn: ProjectTurn, paths: string[]): void {
   for (const path of paths) {
     const full = resolve(path);
-    const repo = turn.repos.find(item => inside(item.root, full));
+    const repo = turn.repos.find(item => item.scopes.some(scope => inside(resolve(item.root, scope), full)));
     if (!repo) throw new Error(`Modified path is outside the prepared repositories: ${path}`);
     const relativePath = relative(repo.root, full).replaceAll("\\", "/");
     if (!safe(relativePath)) throw new Error(`Modified path is excluded from automatic commits: ${relativePath}`);

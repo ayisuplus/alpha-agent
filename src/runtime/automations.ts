@@ -13,6 +13,7 @@ export interface Automation {
   schedule: AutomationSchedule;
   nextRunAt: string | null;
   modelSelector: string | null;
+  executor?: "scoped-git-backup";
   projectId?: string;
   mountId?: string;
   targetTaskId?: string;
@@ -35,7 +36,7 @@ export interface AutomationRun {
   readAt?: string;
 }
 export type AutomationState = { automations: Automation[]; runs: AutomationRun[] };
-export type AutomationInput = Pick<Automation, "name" | "prompt" | "kind" | "schedule" | "modelSelector" | "notificationPolicy"> & Partial<Pick<Automation, "projectId" | "mountId" | "targetTaskId">>;
+export type AutomationInput = Pick<Automation, "name" | "prompt" | "kind" | "schedule" | "modelSelector" | "notificationPolicy"> & Partial<Pick<Automation, "projectId" | "mountId" | "targetTaskId" | "executor">>;
 type Frequency = "MINUTELY" | "HOURLY" | "DAILY" | "WEEKLY";
 type Rule = { frequency: Frequency; interval: number; hour?: number; minute?: number; days?: number[] };
 const dayNames = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
@@ -116,11 +117,12 @@ function checked(input: AutomationInput): AutomationInput {
   if (input.mountId && !input.projectId || input.kind === "heartbeat" && (input.projectId || input.mountId)) throw new Error("Invalid automation project");
   for (const id of [input.projectId, input.mountId, input.targetTaskId]) if (id !== undefined && typeof id !== "string") throw new Error("Invalid automation identifier");
   if (input.modelSelector !== null && !isAllowedModelSelector(input.modelSelector)) throw new Error("Unsupported automation model");
+  if (input.executor && (input.executor !== "scoped-git-backup" || input.kind !== "cron" || !input.projectId || !input.mountId || input.modelSelector !== null)) throw new Error("Invalid scoped backup automation");
   if (input.notificationPolicy !== "all" && input.notificationPolicy !== "failures") throw new Error("Invalid notification policy");
   if (input.schedule.kind !== "once" && input.schedule.kind !== "rrule") throw new Error("Invalid automation schedule");
   nextAutomationTime(input.schedule, new Date(0));
   return { name, prompt, kind: input.kind, schedule: input.schedule, modelSelector: input.modelSelector, notificationPolicy: input.notificationPolicy,
-    ...(input.projectId ? { projectId: input.projectId } : {}), ...(input.mountId ? { mountId: input.mountId } : {}), ...(input.targetTaskId ? { targetTaskId: input.targetTaskId } : {}) };
+    ...(input.projectId ? { projectId: input.projectId } : {}), ...(input.mountId ? { mountId: input.mountId } : {}), ...(input.targetTaskId ? { targetTaskId: input.targetTaskId } : {}), ...(input.executor ? { executor: input.executor } : {}) };
 }
 
 export class AutomationStore {
@@ -159,7 +161,7 @@ export class AutomationStore {
       const item = data.automations.find(value => value.id === id && !value.deletedAt);
       if (!item) throw new Error("Automation not found");
       if (patch.status && patch.status !== "ACTIVE" && patch.status !== "PAUSED") throw new Error("Invalid automation status");
-      const fields = ["name", "prompt", "kind", "schedule", "modelSelector", "notificationPolicy", "projectId", "mountId", "targetTaskId"] as const;
+      const fields = ["name", "prompt", "kind", "schedule", "modelSelector", "notificationPolicy", "projectId", "mountId", "targetTaskId", "executor"] as const;
       const supplied = Object.fromEntries(fields.filter(key => Object.prototype.hasOwnProperty.call(patch, key)).map(key => [key, patch[key]]));
       const candidate = { ...item, ...supplied };
       if (candidate.kind === "cron") delete candidate.targetTaskId;

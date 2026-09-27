@@ -38,6 +38,7 @@ import { MCPPermissionStore, type MCPPermission } from "./runtime/mcp-permission
 import { OperationJournal } from "./runtime/operation-journal";
 import { TaskQueueStore } from "./runtime/task-queue";
 import { AutomationStore, type AutomationInput } from "./runtime/automations";
+import { scopedGitBackup } from "./runtime/scoped-git-backup";
 import { ProjectStore } from "./runtime/projects";
 import { assertWritablePaths, bindProjectTurn, finalizeProjectTurn, mayWriteProject, prepareProjectTurn, readProjectMemorySnapshot, recoverProjectTurn, unfinishedProjectTurns, type ProjectTurn } from "./runtime/project-state";
 import { configuredChecks } from "./runtime/code-check";
@@ -565,7 +566,7 @@ async function execute(runId: string, objective: string, projectRoot: string, co
     }
     if (existingLedger?.state.workspaceOrigin?.kind === "direct" && existingLedger.state.projectId) {
       const roots = await projectStore.roots(existingLedger.state.projectId, existingLedger.state.projectVersion ?? 0);
-      await verifySandbox({ cwd: projectRoot, roots, dataRoot, signal: controller.signal });
+      await verifySandbox({ cwd: projectRoot, roots, dataRoot, network: existingLedger.state.permissionMode === "full", signal: controller.signal });
     }
     projectTurn = await prepareProjectTurn({ dataRoot, projectRoot, runId, ledger: existingLedger });
     const configured = await configuredRun(existingLedger?.state.modelSelector ?? newTaskModel, existingLedger);
@@ -629,16 +630,19 @@ async function execute(runId: string, objective: string, projectRoot: string, co
       return ledger;
     }
     if (ledger.state.taskType === "general") {
-      const changed = sourceChanges(beforeHashes ?? {}, await snapshotSourceHashes(projectRoot)).map(item => item.path);
+      const fileChanges = sourceChanges(beforeHashes ?? {}, await snapshotSourceHashes(projectRoot));
+      const changed = fileChanges.map(item => item.path);
       const hasManifest = await Bun.file(join(projectRoot, "alpha-deliverable.json")).exists() &&
         (changed.some(path => path === "alpha-deliverable.json" || path.startsWith("outputs/")) || ledger.state.criteria.some(item => item.id === "deliverable"));
       const hasWebPlan = await Bun.file(join(projectRoot, "alpha-verification.json")).exists() &&
         (changed.some(path => path !== "alpha-deliverable.json" && !path.startsWith("outputs/")) || ledger.state.criteria.some(item => item.id === "user-path"));
       const codeChanged = changed.some(path => path !== "alpha-deliverable.json" && path !== "alpha-verification.json" && !path.startsWith("outputs/"));
+      const scheduledDocuments = automationRuns.has(runId) && ledger.state.workspaceOrigin?.kind === "direct" && fileChanges.length > 0 &&
+        fileChanges.every(item => item.after !== null && /\.(?:md|txt|png|jpe?g|webp|svg)$/i.test(item.path));
       const criteria: TaskLedger["state"]["criteria"] = [
         ...(hasManifest ? [{ id: "deliverable", description: "交付文件已核查", kind: "artifact" as const }] : []),
         ...(hasWebPlan ? [{ id: "build", description: "产品构建", kind: "build" as const }, { id: "user-path", description: "浏览器关键路径", kind: "browser" as const }] : []),
-        ...(!hasWebPlan && codeChanged ? [{ id: "change", description: "源码变更可审阅", kind: "asset" as const }, { id: "check", description: "项目检查通过", kind: "test" as const }] : []),
+        ...(!hasWebPlan && codeChanged ? [{ id: "change", description: scheduledDocuments ? "文档变更可审阅" : "源码变更可审阅", kind: "asset" as const }, ...(scheduledDocuments ? [] : [{ id: "check", description: "项目检查通过", kind: "test" as const }])] : []),
       ];
       await ledger.setCriteria(criteria);
       if (hasManifest) {
@@ -653,6 +657,17 @@ async function execute(runId: string, objective: string, projectRoot: string, co
         if (ledger.state.workspaceOrigin?.kind === "direct") throw new Error("Direct-project web build is unavailable inside the native sandbox");
       } else {
         if (codeChanged) {
+          if (scheduledDocuments) {
+            if (projectTurn) assertWritablePaths(projectTurn, changed.map(path => resolve(projectRoot, path)));
+            const evidenceRoot = join(dataRoot, "evidence");
+            await mkdir(evidenceRoot, { recursive: true });
+            const evidencePath = join(evidenceRoot, `${ledger.state.id}-${runId}-document-changes.json`);
+            await writeFile(evidencePath, JSON.stringify({ changes: fileChanges }, null, 2), { flag: "wx" });
+            await ledger.recordEvidence({ criterionId: "change", kind: "asset", revision: ledger.state.revision!, passed: true, source: evidencePath });
+            emitRun({ type: "task", task: taskView(ledger) });
+            emitRun({ type: "status", phase: "文档待审阅", runId, pending: ledger.completionGaps() });
+            return ledger;
+          }
           const accepted = await acceptCodeChange({ ledger, dataRoot, runId, signal: controller.signal, complete: false, onCheck: name => emitRun({ type: "status", phase: `检查 ${name}`, runId }) });
           emitRun({ type: "task", task: taskView(ledger) });
           emitRun({ type: "status", phase: accepted ? "已验收" : "待验收", runId, pending: ledger.completionGaps() });
@@ -877,6 +892,7 @@ async function drainAutomations(): Promise<void> {
   let lease: OperationLease | null = null;
   let pendingId: string | null = null;
   let launched = false;
+  let handledSynchronously = false;
   try {
     const pending = await automationStore.next();
     if (!pending) return;
@@ -886,6 +902,29 @@ async function drainAutomations(): Promise<void> {
     lease = operationManager.claim("run", automation.targetTaskId ?? null);
     if (!lease) return;
     if (automation.modelSelector && !await isModelAvailable(automation.modelSelector)) throw new Error("Automation model is unavailable");
+    if (automation.executor === "scoped-git-backup") {
+      const project = await projectStore.get(automation.projectId!);
+      const mount = project?.mounts.find(item => item.id === automation.mountId);
+      if (!project || !mount || project.permissionMode !== "full") throw new Error("Scoped backup project is unavailable or lacks full access");
+      await verifySandbox({ cwd: mount.path, roots: await projectStore.roots(project.id, project.version), dataRoot, network: true, signal: lease.controller.signal });
+      const ledger = await TaskLedger.create(dataRoot, { objective: automation.prompt, projectRoot: mount.path, taskType: "general", criteria: [],
+        workspaceOrigin: { kind: "direct" }, projectId: project.id, projectVersion: project.version, permissionMode: "full" });
+      operationManager.update(lease, { taskId: ledger.state.id });
+      await automationStore.start(pending.id, ledger.state.id, randomUUID());
+      emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+      try {
+        const result = await scopedGitBackup(mount.path, lease.controller.signal);
+        await ledger.complete();
+        await automationStore.finish(pending.id, "complete", result.message);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        await ledger.needInput(reason, "git-backup");
+        await automationStore.finish(pending.id, "needs-input", reason);
+      }
+      emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+      handledSynchronously = true;
+      return;
+    }
     let ledger: TaskLedger;
     if (automation.kind === "heartbeat") {
       const target = await loadLedger(automation.targetTaskId!);
@@ -902,7 +941,7 @@ async function drainAutomations(): Promise<void> {
       if (project.mounts.length && !mount) throw new Error("Automation working directory is unavailable");
       const projectRoot = mount?.path ?? join(productsRoot, `project-${project.id}`);
       if (!mount) await mkdir(projectRoot, { recursive: true });
-      if (mount) await verifySandbox({ cwd: mount.path, roots: await projectStore.roots(project.id, project.version), dataRoot, signal: lease.controller.signal });
+      if (mount) await verifySandbox({ cwd: mount.path, roots: await projectStore.roots(project.id, project.version), dataRoot, network: project.permissionMode === "full", signal: lease.controller.signal });
       ledger = await TaskLedger.create(dataRoot, { objective: automation.prompt, projectRoot, taskType: "general", criteria: [],
         workspaceOrigin: { kind: mount ? "direct" : "generated", ...(mount ? { checks: await configuredChecks(mount.path) } : {}) },
         projectId: project.id, projectVersion: project.version, permissionMode: project.permissionMode ?? "ask", modelSelector: automation.modelSelector ?? undefined });
@@ -929,6 +968,7 @@ async function drainAutomations(): Promise<void> {
   } finally {
     if (!launched && lease) operationManager.release(lease);
     automationDraining = false;
+    if (handledSynchronously) void drainAutomations();
   }
 }
 
@@ -1446,7 +1486,7 @@ const server = Bun.serve({
         if (!project || !mount) return Response.json({ error: "Choose a mounted project folder" }, { status: 400 });
         const roots = await projectStore.roots(project.id, project.version);
         operationManager.update(lease, { phase: "验证 Windows 文件与网络边界" });
-        await verifySandbox({ cwd: mount.path, roots, dataRoot, signal: lease.controller.signal });
+        await verifySandbox({ cwd: mount.path, roots, dataRoot, network: project.permissionMode === "full", signal: lease.controller.signal });
         return Response.json({ ok: true });
       } catch (error) { return Response.json({ ok: false, error: error instanceof Error ? error.message : String(error) }, { status: 503 }); }
       finally { operationManager.release(lease); }
@@ -1462,7 +1502,7 @@ const server = Bun.serve({
         const roots = await projectStore.roots(project.id, project.version);
         if (ledger.state.workspaceOrigin?.kind === "direct") {
           if (!roots.some(root => root.toLowerCase() === ledger.state.projectRoot.toLowerCase())) return Response.json({ error: "The original working directory is no longer mounted; create a new task in the replacement directory" }, { status: 409 });
-          await verifySandbox({ cwd: ledger.state.projectRoot, roots, dataRoot, signal: lease.controller.signal });
+          await verifySandbox({ cwd: ledger.state.projectRoot, roots, dataRoot, network: ledger.state.permissionMode === "full", signal: lease.controller.signal });
         }
         await ledger.confirmProjectVersion(project.version);
         emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
@@ -1589,7 +1629,7 @@ const server = Bun.serve({
         if (!["ask", "auto", "full"].includes(String(permissionMode))) return Response.json({ error: "Invalid permission mode" }, { status: 400 });
         const roots = project ? await projectStore.roots(project.id, project.version) : [];
         if (mount) {
-          await verifySandbox({ cwd: mount.path, roots, dataRoot, signal: new AbortController().signal });
+          await verifySandbox({ cwd: mount.path, roots, dataRoot, network: permissionMode === "full", signal: new AbortController().signal });
         }
         const skillIds = JSON.parse(String(form.get("skillIds") ?? "[]")) as unknown;
         const pluginIds = JSON.parse(String(form.get("pluginIds") ?? "[]")) as unknown;

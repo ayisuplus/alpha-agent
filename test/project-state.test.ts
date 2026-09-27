@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { finalizeProjectTurn, prepareProjectTurn, readProjectMemory, readProjectMemorySnapshot, recoverProjectTurn } from "../src/runtime/project-state";
+import { assertWritablePaths, finalizeProjectTurn, prepareProjectTurn, readProjectMemory, readProjectMemorySnapshot, recoverProjectTurn } from "../src/runtime/project-state";
 import { ProjectStore } from "../src/runtime/projects";
 import { TaskLedger } from "../src/runtime/task-ledger";
 
@@ -296,7 +296,35 @@ test("a mount below the Git root cannot initialize or commit outside authorizati
     await mkdir(sub, { recursive: true });
     await git(work, "init", "-b", "main");
     const ledger = await TaskLedger.create(data, { objective: "Inspect nested mount", projectRoot: sub, criteria: [], taskType: "general" });
-    await expect(prepareProjectTurn({ dataRoot: data, projectRoot: sub, ledger, runId: crypto.randomUUID() })).rejects.toThrow("outside the authorized project directories");
+    await expect(prepareProjectTurn({ dataRoot: data, projectRoot: sub, ledger, runId: crypto.randomUUID() })).rejects.toThrow("needs an existing commit");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a mounted subdirectory commits only its scope in an existing parent repository", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-project-scoped-git-"));
+  try {
+    const work = join(root, "work");
+    const sub = join(work, "sub");
+    const data = join(root, ".alpha");
+    await mkdir(sub, { recursive: true });
+    await git(work, "init", "-b", "main");
+    await writeFile(join(work, "outside.txt"), "outside base\n");
+    await writeFile(join(sub, "inside.txt"), "inside base\n");
+    await git(work, "add", "outside.txt", "sub/inside.txt");
+    await git(work, "-c", "user.name=Test", "-c", "user.email=test@local.invalid", "commit", "-m", "base");
+    await writeFile(join(work, "outside.txt"), "outside user edit\n");
+    await git(work, "add", "outside.txt");
+    const ledger = await TaskLedger.create(data, { objective: "Change mounted notes", projectRoot: sub, criteria: [], taskType: "general" });
+    const turn = await prepareProjectTurn({ dataRoot: data, projectRoot: sub, ledger, runId: crypto.randomUUID() });
+    expect(turn.repos[0]?.scopes).toEqual(["sub"]);
+    expect(() => assertWritablePaths(turn, [join(work, "outside.txt")])).toThrow("outside the prepared repositories");
+    await writeFile(join(sub, "inside.txt"), "inside Alpha edit\n");
+    await ledger.refreshRevision();
+    const result = await finalizeProjectTurn(turn, ledger);
+    expect(result.codeCommits).toHaveLength(1);
+    expect(await git(work, "show", "HEAD:sub/inside.txt")).toBe("inside Alpha edit");
+    expect(await git(work, "show", "HEAD:outside.txt")).toBe("outside base");
+    expect(await git(work, "diff", "--cached", "--name-only")).toBe("outside.txt");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

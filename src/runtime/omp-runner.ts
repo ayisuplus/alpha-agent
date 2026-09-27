@@ -292,7 +292,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   const webContext: WebToolContext = { taskId: authorizationTaskId || ledger.state.id, projectRoot, retrieval, permissions: new WebPermissionStore(authorizationRoot), kernel: webKernel, directMode: permission?.mode, onNeedsInput: reason => pauseForInput(reason, "web-approval") };
   if (!options.workOrder?.fullAccess) await webContext.permissions.reconcile(ledger.state.id);
   if (permission) {
-    try { await verifySandbox({ cwd: projectRoot, roots: permission.roots, dataRoot: authorizationRoot, signal: options.signal }); }
+    try { await verifySandbox({ cwd: projectRoot, roots: permission.roots, dataRoot: authorizationRoot, network: permission.mode === "full", signal: options.signal }); }
     catch (error) {
       if (options.signal?.aborted) throw error;
       const reason = `Windows sandbox is unavailable: ${error instanceof Error ? error.message : String(error)}`;

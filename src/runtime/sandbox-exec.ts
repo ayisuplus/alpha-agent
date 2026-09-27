@@ -130,9 +130,9 @@ export async function verifySandbox(input: Pick<SandboxCommand, "cwd" | "roots" 
         const escapedInside = inside.replaceAll("'", "''");
         const escapedOutside = outside.replaceAll("'", "''");
         const escapedSecret = secret.replaceAll("'", "''");
-        const childScript = `$x=$false;try{[IO.File]::WriteAllText('${escapedOutside}','child');$x=$true}catch{};Write-Output "child=$x"`;
+        const childScript = `$x=$false;try{Set-Content -LiteralPath '${escapedOutside}' -Value 'child' -NoNewline -ErrorAction Stop;$x=$true}catch{};Write-Output "child=$x"`;
         const encodedChild = Buffer.from(childScript, "utf16le").toString("base64");
-        const probe = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `$a=$false;$b=$false;$n=$false;$r=$false;try{[IO.File]::WriteAllText('${escapedInside}','inside');$a=$true}catch{};try{[IO.File]::WriteAllText('${escapedOutside}','escaped');$b=$true}catch{};try{[IO.File]::ReadAllText('${escapedSecret}')|Out-Null;$r=$true}catch{};try{$c=[Net.Sockets.TcpClient]::new();$c.Connect('127.0.0.1',${address.port});$n=$true;$c.Close()}catch{};$child=& powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodedChild}';$identity=[Security.Principal.WindowsIdentity]::GetCurrent().Name;Write-Output "inside=$a outside=$b secretRead=$r net=$n $child identity=$identity"`];
+        const probe = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `$a=$false;$b=$false;$n=$false;$r=$false;try{Set-Content -LiteralPath '${escapedInside}' -Value 'inside' -NoNewline -ErrorAction Stop;$a=$true}catch{};try{Set-Content -LiteralPath '${escapedOutside}' -Value 'escaped' -NoNewline -ErrorAction Stop;$b=$true}catch{};try{Get-Content -LiteralPath '${escapedSecret}' -Raw -ErrorAction Stop|Out-Null;$r=$true}catch{};try{$c=[Net.Sockets.TcpClient]::new();$c.Connect('127.0.0.1',${address.port});$n=$true;$c.Close()}catch{};$child=& powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodedChild}';$identity=whoami;Write-Output "inside=$a outside=$b secretRead=$r net=$n $child identity=$identity"`];
         const result = await rawSandboxCommand({ ...input, argv: probe, timeoutMs: 30_000 });
         const currentInside = await readFile(inside, "utf8").catch(() => null);
         const currentOutside = await readFile(outside, "utf8");

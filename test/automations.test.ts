@@ -66,3 +66,12 @@ test("paused imports keep their schedule and dispatch same-time jobs in import o
   expect(due.map(run => run.automationId)).toEqual([first.id, second.id]);
   expect((await store.next())?.automationId).toBe(first.id);
 });
+
+test("scoped backup requires a mounted project and no model", async () => {
+  const store = new AutomationStore(await root());
+  const schedule = { kind: "once" as const, at: new Date(Date.now() + 60_000).toISOString() };
+  const backup = { ...input(schedule), projectId: "project", mountId: "mount", modelSelector: null, executor: "scoped-git-backup" as const };
+  expect((await store.create(backup, "PAUSED")).executor).toBe("scoped-git-backup");
+  await expect(store.create({ ...backup, mountId: undefined })).rejects.toThrow("Invalid scoped backup automation");
+  await expect(store.create({ ...backup, modelSelector: "xiaomi-token-plan-cn/mimo-v2.6-flash" })).rejects.toThrow("Invalid scoped backup automation");
+});

@@ -29,7 +29,7 @@ function convertPrompt(source: Source): string {
   } else if (source.id === sourceIds[1]) {
     prompt = `【22:00 次日日练规则】本任务计划每天晚上 22:00 运行。以当前 Asia/Shanghai 时间之前最近一次 22:00 为本轮计划日期；目标学习日是该计划日期的次日。这样跨午夜排队或迟到补跑仍指向正确的一天。下文凡“今天 / 当天 / 今日 / 本日”涉及日练日期、训练日 D、课表星期、文件名、索引行、周五增强和回复日期时，均解释为目标学习日；“昨天 / 上周”依目标学习日计算。先用系统时钟算出目标日期和星期，不覆盖此前已填写的记录。若目标页已存在，只补缺失内容。周五增强应在周四 22:00 为周五页面生成。\n\n${prompt}`;
   } else {
-    prompt = `【22:00 备份规则】每天晚上 22:00 运行，排在资料整理和次日日练之后；只提交此刻已经存在的 Obsidian 变更。报告中的“今天”是本次运行的本地日期，不改动原有 Git 范围和禁止 push 的规则。\n\n${prompt}`;
+    prompt = `【Alpha 内置 Git 备份】每天晚上 22:00 运行，排在资料整理和次日日练之后。由限定 Obsidian 挂载目录的备份执行器完成；下文保留 WorkBuddy 原规则供审阅，不驱动模型。不会 push，也不会提交 Obsidian 以外的路径。\n\n${prompt}`;
   }
   return `【迁移来源 WorkBuddy：${source.id}】\n${prompt}`;
 }
@@ -52,13 +52,13 @@ try {
     const prior = (await store.list()).automations.find(item => item.prompt.startsWith(marker));
     if (prior) {
       if (process.argv.includes("--refresh") && prior.status === "PAUSED") {
-        const updated = await store.update(prior.id, { prompt: convertPrompt(source) });
+        const updated = await store.update(prior.id, { prompt: convertPrompt(source), ...(source.id === sourceIds[2] ? { modelSelector: null, executor: "scoped-git-backup" as const } : {}) });
         console.log(`REFRESHED ${source.id} ${updated.id} ${updated.status}`);
       } else console.log(`EXISTS ${source.id} ${prior.id} ${prior.status}`);
       continue;
     }
     const name = source.id === sourceIds[0] ? "晚间整理 · 纪要笔记 + 新文档转换" : source.id === sourceIds[1] ? "次日日练 · 每日综合（含周五重线调度）" : "晚间 Git 备份提交";
-    const input: AutomationInput = { name, prompt: convertPrompt(source), kind: "cron", schedule: { kind: "rrule", rule: "FREQ=DAILY;BYHOUR=22;BYMINUTE=0", timeZone: "Asia/Shanghai", startAt: "2026-09-27T14:00:00.000Z" }, modelSelector: "xiaomi-token-plan-cn/mimo-v2.6-flash", projectId: project.id, mountId, notificationPolicy: "all" };
+    const input: AutomationInput = { name, prompt: convertPrompt(source), kind: "cron", schedule: { kind: "rrule", rule: "FREQ=DAILY;BYHOUR=22;BYMINUTE=0", timeZone: "Asia/Shanghai", startAt: "2026-09-27T14:00:00.000Z" }, modelSelector: source.id === sourceIds[2] ? null : "xiaomi-token-plan-cn/mimo-v2.6-flash", projectId: project.id, mountId, notificationPolicy: "all", ...(source.id === sourceIds[2] ? { executor: "scoped-git-backup" as const } : {}) };
     const item = await store.create(input, "PAUSED");
     console.log(`IMPORTED ${source.id} ${item.id} ${item.status} ${item.nextRunAt}`);
   }
