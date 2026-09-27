@@ -53,3 +53,16 @@ test("startup marks interrupted runs failed and does not rerun them", async () =
   expect((await store.list()).runs[0]).toMatchObject({ status: "failed", taskId: "task-one" });
   expect(await store.next()).toBeNull();
 });
+
+test("paused imports keep their schedule and dispatch same-time jobs in import order", async () => {
+  const store = new AutomationStore(await root());
+  const at = new Date(Date.now() + 60_000).toISOString();
+  const first = await store.create(input({ kind: "once", at }), "PAUSED");
+  const second = await store.create(input({ kind: "once", at }), "PAUSED");
+  expect(await store.advanceDue(new Date(new Date(at).getTime() + 1000))).toEqual([]);
+  await store.update(first.id, { status: "ACTIVE" });
+  await store.update(second.id, { status: "ACTIVE" });
+  const due = await store.advanceDue(new Date(new Date(at).getTime() + 1000));
+  expect(due.map(run => run.automationId)).toEqual([first.id, second.id]);
+  expect((await store.next())?.automationId).toBe(first.id);
+});

@@ -141,14 +141,15 @@ export class AutomationStore {
   }
   private serial<T>(work: () => Promise<T>): Promise<T> { const result = this.pending.then(work); this.pending = result.then(() => undefined, () => undefined); return result; }
   list(): Promise<AutomationState> { return this.serial(async () => { const data = await this.read(); return { automations: data.automations.filter(item => !item.deletedAt), runs: data.runs }; }); }
-  async create(input: AutomationInput): Promise<Automation> {
+  async create(input: AutomationInput, status: Automation["status"] = "ACTIVE"): Promise<Automation> {
+    if (status !== "ACTIVE" && status !== "PAUSED") throw new Error("Invalid automation status");
     const value = checked(input);
     return this.serial(async () => {
       const data = await this.read();
       const now = new Date().toISOString();
       const nextRunAt = nextAutomationTime(value.schedule, new Date(Date.now() - 1));
       if (!nextRunAt) throw new Error("Schedule has no future occurrence");
-      const automation: Automation = { ...value, id: randomUUID(), status: "ACTIVE", nextRunAt, createdAt: now, updatedAt: now };
+      const automation: Automation = { ...value, id: randomUUID(), status, nextRunAt, createdAt: now, updatedAt: now };
       data.automations.push(automation); await this.write(data); return automation;
     });
   }
