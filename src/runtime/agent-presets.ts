@@ -35,7 +35,7 @@ export interface LocalExpertImport {
 }
 
 type Stored = { enabled: Record<string, boolean>; custom: AgentPresetSnapshot[] };
-type BuiltinIndex = { revision: string; presets: Array<{ id: string; name: string; description: string; file: string; sourcePath?: string }> };
+type BuiltinIndex = { revision: string; presets: Array<{ id: string; name: string; description: string; file: string; sourcePath?: string; skill?: string }> };
 
 function hash(name: string, description: string, instructions: string, skillIds?: string[], bundle?: ExpertPackage): string {
   return createHash("sha256").update(JSON.stringify(bundle ? [name, description, instructions, skillIds ?? [], bundle] : skillIds ? [name, description, instructions, skillIds] : [name, description, instructions])).digest("hex");
@@ -90,8 +90,11 @@ export class AgentPresetStore {
     return Promise.all(index.presets.map(async item => {
       if (!idPattern.test(item.id) || !/^[a-z0-9-]+\.md$/.test(item.file)) throw new Error("内置角色清单格式无效");
       const instructions = (await readFile(join(this.root, item.file), "utf8")).trim();
+      if (item.skill && !idPattern.test(item.skill)) throw new Error("内置 Skill 名称无效");
+      const skills = item.skill ? [`alpha-core:${item.skill}`] : undefined;
+      const bundle = item.skill ? await createExpertPackage(this.dataRoot, item.id, item.name, item.description, instructions, skills!, undefined, [{ id: skills![0], source: join(this.root, "skills", item.skill) }]) : undefined;
       return {
-        id: item.id, name: item.name, description: item.description, instructions, hash: hash(item.name, item.description, instructions),
+        id: item.id, name: item.name, description: item.description, instructions, ...(skills ? { skillIds: skills, package: bundle } : {}), hash: hash(item.name, item.description, instructions, skills, bundle),
         ...(item.sourcePath ? { source: { url: sourceUrl, revision: index.revision, path: item.sourcePath } } : {}),
       };
     }));
@@ -103,6 +106,32 @@ export class AgentPresetStore {
 
   async templates(): Promise<AgentPreset[]> {
     return (await this.builtins()).filter(item => item.id !== "general").map(item => ({ ...item, builtin: true, enabled: false }));
+  }
+
+  /** Explicit curation only; opening the library never changes the user's roster. */
+  installCoreExperts(retireIds: string[]): Promise<AgentPreset[]> {
+    return this.mutate(async (stored, all) => {
+      const templates = await this.templates();
+      for (const template of templates) {
+        verifyPresetSnapshot(template);
+        if (!template.package?.skills.length) throw new Error(`核心专家缺少 Skill：${template.id}`);
+        await this.loadBundledSkills(template);
+        const existing = all.find(item => item.id === `core-${template.id}`);
+        if (existing && existing.basedOn !== template.id) throw new Error(`核心专家 ID 冲突：${existing.id}`);
+        if (existing) { verifyPresetSnapshot(existing); await this.loadBundledSkills(existing); }
+      }
+      for (const id of retireIds) {
+        if (!all.some(item => item.id === id) || templates.some(item => `core-${item.id}` === id)) throw new Error(`停用专家 ID 无效：${id}`);
+      }
+      for (const template of templates) {
+        const id = `core-${template.id}`;
+        if (all.some(item => item.id === id)) continue;
+        const bundle = await createExpertPackage(this.dataRoot, id, template.name, template.description, template.instructions, template.skillIds!, template);
+        stored.custom.push({ ...presetSnapshot(template), id, basedOn: template.id, package: bundle, hash: hash(template.name, template.description, template.instructions, template.skillIds, bundle) });
+      }
+      for (const id of retireIds) stored.enabled[id] = false;
+      return this.from(stored).filter(item => templates.some(template => item.id === `core-${template.id}`));
+    });
   }
 
   async list(): Promise<AgentPreset[]> {

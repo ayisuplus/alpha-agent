@@ -104,22 +104,30 @@ export function AgentPresetsSettings() {
     finally { setBusy(false); }
   };
 
+  const enabled = presets.filter(item => item.enabled);
+  const disabled = presets.filter(item => !item.enabled);
+  const presetRow = (item: AgentPresetSummary) => <div className="agent-preset-row" key={item.id}>
+    <button className="agent-preset-select" aria-current={selectedId === item.id ? "true" : undefined} onClick={() => setSelectedId(item.id)}>
+      <strong>{item.name}</strong><small>{item.description}</small>
+      <small>{item.package?.skills.length ? `人设 + ${item.package.skills.length} 个 Skill` : "待补齐 Skill"}</small>
+    </button>
+    <Toggle label={`启用 ${item.name}`} checked={item.enabled} disabled={busy} onChange={value => void updateEnabled(item, value)} />
+  </div>;
+
   return <section className="agent-presets-settings">
-    <SectionTitle title="专家库" description="每个用户专家保存独立人设文件和选定 Skill 的固定快照。仅派发该专家时加载它的 Skill；专家库为空时仍可执行任务。" />
+    <SectionTitle title="专家库" description="专家由人设和可执行方法 Skill 组成。只启用当前需要的专家；停用保留原内容与历史任务快照。核心模板覆盖全栈开发、AI 科研和内容创作。" />
     <Button size="sm" disabled={busy} onClick={() => { setSelectedId(""); setSelected(null); setDraft({ name: "", description: "", instructions: "", skillIds: "" }); }}>创建专家</Button>
     <div className="agent-presets-layout">
       <div className="agent-presets-list" aria-label="专家库">
-        {presets.map(item => <div className="agent-preset-row" key={item.id}>
-          <button className="agent-preset-select" aria-current={selectedId === item.id ? "true" : undefined} onClick={() => setSelectedId(item.id)}>
-            <strong>{item.name}</strong><small>{item.description}</small>
-          </button>
-          <Toggle label={`启用 ${item.name}`} checked={item.enabled} disabled={busy} onChange={enabled => void updateEnabled(item, enabled)} />
-        </div>)}
-        {!presets.length && <p>暂无专家。可以创建专家，也可以从下面的模板添加。</p>}
-        <h3>可选模板</h3>
+        <h3>已启用 · {enabled.length}</h3>
+        {enabled.map(presetRow)}
+        {!enabled.length && <p>暂无启用的专家。可以创建专家，也可以从下面的模板添加。</p>}
+        {!!disabled.length && <details><summary>已停用 · {disabled.length}</summary>{disabled.map(presetRow)}</details>}
+        <details><summary>核心模板 · {templates.length}</summary>
         {templates.map(item => <div className="agent-preset-row" key={item.id}>
           <button className="agent-preset-select" aria-current={selectedId === item.id ? "true" : undefined} onClick={() => setSelectedId(item.id)}><strong>{item.name}</strong><small>{item.description}</small></button>
         </div>)}
+        </details>
       </div>
       {selected && draft && <div className="agent-preset-detail">
         <div className="agent-preset-title"><h3>{selected.name}</h3><span>{selected.builtin ? "可选模板" : "专家"} · {selected.hash.slice(0, 8)}</span></div>
@@ -132,7 +140,7 @@ export function AgentPresetsSettings() {
         </> : <>
           <label>名称<input value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
           <label>适用说明<input value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })} /></label>
-          <label>详细指令<textarea value={draft.instructions} onChange={event => setDraft({ ...draft, instructions: event.target.value })} rows={14} /></label>
+          <label>人设与职责边界<textarea value={draft.instructions} onChange={event => setDraft({ ...draft, instructions: event.target.value })} rows={14} /></label>
           <label>随专家打包的已安装 Skill（逗号分隔）<input value={draft.skillIds} onChange={event => setDraft({ ...draft, skillIds: event.target.value })} placeholder="plugin:skill" /></label>
           <Button size="sm" busy={busy} disabled={busy} onClick={() => void save()}>保存角色</Button>
           <Button size="sm" busy={busy} disabled={busy} onClick={() => void remove()}>删除专家</Button>
@@ -143,7 +151,7 @@ export function AgentPresetsSettings() {
         <h3>新专家</h3>
         <label>名称<input value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
         <label>适用范围<input value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })} /></label>
-        <label>专业方法<textarea value={draft.instructions} onChange={event => setDraft({ ...draft, instructions: event.target.value })} rows={10} /></label>
+        <label>人设与职责边界<textarea value={draft.instructions} onChange={event => setDraft({ ...draft, instructions: event.target.value })} rows={10} /></label>
         <label>随专家打包的已安装 Skill（逗号分隔）<input value={draft.skillIds} onChange={event => setDraft({ ...draft, skillIds: event.target.value })} placeholder="plugin:skill" /></label>
         <Button size="sm" busy={busy} disabled={busy} onClick={() => void create()}>添加专家</Button>
       </div>}

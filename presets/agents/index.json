@@ -1,12 +1,103 @@
 {
-  "version": 1,
-  "source": "https://github.com/msitarzewski/agency-agents",
-  "revision": "053ddbbf392a1688fc7043d81529f47ef2cf86c8",
+  "version": 2,
+  "revision": "alpha-core-2026-09-27",
   "presets": [
-    { "id": "general", "name": "通用 worker", "description": "没有更合适的专业角色时，完成独立源码工单。", "file": "general.md" },
-    { "id": "frontend", "name": "前端开发", "description": "页面逻辑、组件、状态和交互实现。", "file": "frontend.md", "sourcePath": "engineering/engineering-frontend-developer.md" },
-    { "id": "backend", "name": "后端开发", "description": "接口、数据流与服务端代码实现。", "file": "backend.md", "sourcePath": "engineering/engineering-backend-architect.md" },
-    { "id": "ui-designer", "name": "UI 设计实现", "description": "样式、布局、响应式与可访问性实现。", "file": "ui-designer.md", "sourcePath": "design/design-ui-designer.md" },
-    { "id": "test-automation", "name": "测试自动化", "description": "编写和维护针对实际行为的自动化测试代码。", "file": "test-automation.md", "sourcePath": "testing/testing-test-automation-engineer.md" }
+    {
+      "id": "general",
+      "name": "通用 worker",
+      "description": "没有更合适的专业角色时，完成独立源码工单。",
+      "file": "general.md"
+    },
+    {
+      "id": "solution-architect",
+      "name": "系统架构师",
+      "description": "全栈开发的需求边界、模块职责、接口契约和技术取舍；architecture, system design, API contracts。",
+      "file": "solution-architect.md",
+      "skill": "design-system-contracts"
+    },
+    {
+      "id": "ui-designer",
+      "name": "产品交互设计师",
+      "description": "基于真实参考设计用户流程、界面状态、布局和可访问性；UI UX design, accessibility。",
+      "file": "ui-designer.md",
+      "skill": "design-interface"
+    },
+    {
+      "id": "frontend",
+      "name": "前端工程师",
+      "description": "页面逻辑、组件、状态与交互实现，接口接入和浏览器验证；frontend React TypeScript CSS。",
+      "file": "frontend.md",
+      "skill": "implement-frontend"
+    },
+    {
+      "id": "backend",
+      "name": "后端与数据工程师",
+      "description": "后端 API、数据库迁移、鉴权、事务与并发一致性；backend database SQL authentication。",
+      "file": "backend.md",
+      "skill": "implement-backend"
+    },
+    {
+      "id": "test-automation",
+      "name": "测试与代码审查专家",
+      "description": "缺陷复现、回归测试、独立代码审查与安全边界验证；testing regression debugging code review security。",
+      "file": "test-automation.md",
+      "skill": "verify-code"
+    },
+    {
+      "id": "release-engineer",
+      "name": "部署与可靠性工程师",
+      "description": "构建打包、CI/CD、部署、健康检查、回滚和故障定位；deployment release DevOps reliability。",
+      "file": "release-engineer.md",
+      "skill": "release-service"
+    },
+    {
+      "id": "literature-researcher",
+      "name": "文献与证据研究员",
+      "description": "AI 与计算机论文检索、精读、Related Work、引用核验和研究空白；literature research citations evidence。",
+      "file": "literature-researcher.md",
+      "skill": "review-literature"
+    },
+    {
+      "id": "experiment-designer",
+      "name": "实验设计与复现专家",
+      "description": "AI 假设、基线、消融、数据划分、复现与 GPU 预算；experiment ablation reproducibility benchmark。",
+      "file": "experiment-designer.md",
+      "skill": "design-experiments"
+    },
+    {
+      "id": "data-analyst",
+      "name": "科研数据分析师",
+      "description": "实验日志、统计单位、效应量、置信区间和科研图表；statistics data analysis uncertainty visualization。",
+      "file": "data-analyst.md",
+      "skill": "analyze-results"
+    },
+    {
+      "id": "paper-writer",
+      "name": "论文写作与审稿专家",
+      "description": "由已验证证据撰写论文、核对方法结果、审稿意见与回复；scientific writing manuscript peer review。",
+      "file": "paper-writer.md",
+      "skill": "write-manuscript"
+    },
+    {
+      "id": "content-strategist",
+      "name": "内容策划与编辑",
+      "description": "选题、受众定位、长短文案、平台改编和发布物料；content strategy copywriting editorial。",
+      "file": "content-strategist.md",
+      "skill": "create-content"
+    },
+    {
+      "id": "story-writer",
+      "name": "故事与剧本创作者",
+      "description": "故事人物、冲突、场景、对白和短片剧本；story screenplay narrative character dialogue。",
+      "file": "story-writer.md",
+      "skill": "write-story"
+    },
+    {
+      "id": "visual-director",
+      "name": "视觉与音画导演",
+      "description": "真实参考、资产一致性、分镜、图像提示、视频生成包与音画节奏；visual storyboard image video audio。",
+      "file": "visual-director.md",
+      "skill": "direct-visuals"
+    }
   ]
 }

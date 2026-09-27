@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentPresetStore } from "../src/runtime/agent-presets";
+import { AgentPresetStore, presetSnapshot, verifyPresetSnapshot } from "../src/runtime/agent-presets";
+import { initialExpertCandidates, searchExpertCandidates } from "../src/runtime/expert-selection";
+import { createSkillResourceTool } from "../src/runtime/skill-resource-tool";
 import { TaskLedger } from "../src/runtime/task-ledger";
 import { workerSystemPrompt } from "../src/runtime/omp-runner";
 import { resolveWorkOrders } from "../src/runtime/work-order-tool";
@@ -12,14 +14,90 @@ import { SkillPluginStore } from "../src/plugins/third-party";
 import { snapshotSkills } from "../src/runtime/model-workers";
 import { loadWorkerSkillSnapshots } from "../src/runtime/skill-snapshot";
 
+test("every core specialty is discoverable and dispatches a readable immutable Skill", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-core-dispatch-"));
+  try {
+    const store = new AgentPresetStore(root);
+    const core = await store.installCoreExperts([]);
+    const queries: Record<string, string> = {
+      "solution-architect": "模块职责 接口契约 architecture system design",
+      "ui-designer": "界面状态 用户流程 UI UX accessibility",
+      frontend: "前端 页面逻辑 组件 状态 frontend React TypeScript",
+      backend: "后端 数据库 事务 backend database SQL",
+      "test-automation": "回归测试 代码审查 testing regression debugging",
+      "release-engineer": "部署 健康检查 回滚 deployment release DevOps",
+      "literature-researcher": "文献 论文检索 引用核验 literature citations",
+      "experiment-designer": "实验设计 消融 数据划分 experiment ablation reproducibility",
+      "data-analyst": "统计单位 效应量 置信区间 statistics uncertainty",
+      "paper-writer": "论文写作 审稿意见 scientific writing manuscript",
+      "content-strategist": "内容策划 平台改编 content strategy copywriting",
+      "story-writer": "故事人物 剧本 对白 story screenplay narrative",
+      "visual-director": "分镜 音画 视频生成包 visual storyboard video audio",
+    };
+    expect(core).toHaveLength(Object.keys(queries).length);
+    const snapshots = core.map(presetSnapshot);
+    for (const [templateId, query] of Object.entries(queries)) {
+      const expert = snapshots.find(item => item.id === `core-${templateId}`)!;
+      verifyPresetSnapshot(expert);
+      expect(searchExpertCandidates(query, snapshots, 1)[0]?.id).toBe(expert.id);
+      expect(initialExpertCandidates(query, snapshots)).toContain(expert.id);
+      const [order] = resolveWorkOrders([{ id: templateId, objective: query, mode: "investigate", ownedPaths: [], readPaths: ["source.txt"], resources: [], expertId: expert.id }], snapshots);
+      const isolated = join(root, "workers", templateId);
+      const dispatched = await snapshotSkills(root, isolated, order);
+      const skills = await loadWorkerSkillSnapshots(isolated, dispatched);
+      expect(skills.map(item => item.name)).toEqual(expert.skillIds!);
+      const read = await createSkillResourceTool(skills).execute("probe", { id: skills[0].name, path: "SKILL.md" }, undefined as never, undefined as never, undefined as never);
+      expect(read.isError).not.toBe(true);
+      expect(read.content).toEqual([{ type: "text", text: await readFile(skills[0].filePath, "utf8") }]);
+      expect(workerSystemPrompt(order, expert).join("\n")).toContain(expert.instructions);
+    }
+    expect(await new SkillPluginStore(root).loadSkills()).toEqual([]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("curation retires selected legacy experts without deleting snapshots or overriding edits", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-core-curation-"));
+  try {
+    const store = new AgentPresetStore(root);
+    const legacy = await store.copy("backend");
+    const personal = await store.copy("frontend");
+    const frozen = presetSnapshot(legacy);
+    const core = await store.installCoreExperts([legacy.id]);
+    expect((await store.enabled()).map(item => item.id)).toEqual([personal.id, ...core.map(item => item.id)]);
+    expect((await store.get(legacy.id)).enabled).toBe(false);
+    expect(presetSnapshot(await store.get(legacy.id))).toEqual(frozen);
+    expect(await store.loadBundledSkills(frozen)).toHaveLength(1);
+    const edited = await store.update("core-frontend", { name: "我的前端专家" });
+    await store.setEnabled(edited.id, false);
+    await store.installCoreExperts([]);
+    expect(await store.get(edited.id)).toMatchObject({ name: edited.name, hash: edited.hash, enabled: false });
+    expect(await store.list()).toHaveLength(15);
+    await store.delete(legacy.id);
+    expect(await store.loadBundledSkills(frozen)).toHaveLength(1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a core ID collision cannot partially retire or overwrite the expert library", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-core-conflict-"));
+  try {
+    const store = new AgentPresetStore(root);
+    const legacy = await store.copy("frontend");
+    await store.importLocalBatch([{ id: "core-frontend", name: "My unrelated expert", description: "Do not overwrite", instructions: "Preserve me", skills: [], source: { url: "local", revision: "1", path: "mine" } }]);
+    const before = await readFile(join(root, "agent-presets.json"), "utf8");
+    await expect(store.installCoreExperts([legacy.id])).rejects.toThrow("ID 冲突");
+    expect(await readFile(join(root, "agent-presets.json"), "utf8")).toBe(before);
+    expect((await store.get(legacy.id)).enabled).toBe(true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("templates are optional, user experts persist, and deleted experts leave frozen snapshots intact", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-presets-"));
   try {
     const store = new AgentPresetStore(root);
     const initial = await store.list();
     expect(initial).toEqual([]);
-    expect((await store.templates()).map(item => item.id)).toEqual(["frontend", "backend", "ui-designer", "test-automation"]);
-    expect((await store.get("frontend")).source?.revision).toBe("053ddbbf392a1688fc7043d81529f47ef2cf86c8");
+    expect(await store.templates()).toHaveLength(13);
+    expect((await store.get("frontend")).skillIds).toEqual(["alpha-core:implement-frontend"]);
     const original = await store.get("frontend");
     const copy = await store.copy("frontend");
     expect(copy.hash).not.toBe(original.hash);
