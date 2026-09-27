@@ -9,7 +9,7 @@ import { mergeActivity } from "./timeline";
 export type Detail = { kind: "diff"; operationId: string } | { kind: "evidence"; criterionId?: string; evidenceId?: string } | { kind: "info" };
 export type PendingAction = "start" | "resume" | "revise" | "guidance" | "stop" | "publish" | "verify" | "control" | "plan" | "approve" | "goal";
 export type SettingsSection = "model" | "run" | "agents" | "generation" | "interface" | "workspace" | "diagnostics" | "shortcuts";
-export type Panel = { kind: "settings"; section: SettingsSection };
+export type Panel = { kind: "settings"; section: SettingsSection } | { kind: "automations" };
 
 export interface AppState {
   loaded: boolean;
@@ -257,6 +257,8 @@ export async function setTaskModel(model: string | null): Promise<void> {
 export function openSettings(section: SettingsSection = "model"): void {
   store.set({ panel: { kind: "settings", section }, paletteOpen: false });
 }
+
+export function openAutomations(): void { store.set({ panel: { kind: "automations" }, paletteOpen: false }); }
 
 export function closePanel(): void {
   store.set({ panel: null });

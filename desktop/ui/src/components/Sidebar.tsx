@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
-import { Check, ChevronDown, FolderClosed, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, SlidersHorizontal, Square, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "../api/client";
+import { CalendarClock, Check, ChevronDown, FolderClosed, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, SlidersHorizontal, Square, X } from "lucide-react";
 import type { TaskSummary } from "../api/types";
 import { dayGroup, relativeTime, taskStatus, taskTitle } from "../state/labels";
 import { useStore } from "../state/store";
-import { newTask, openPalette, openSettings, openTask, store } from "../state/workbench";
+import { newTask, openAutomations, openPalette, openSettings, openTask, store } from "../state/workbench";
 import { IconButton, Spinner, StatusDot } from "./ui";
 import { TaskMenu } from "./TaskMenu";
 import { selectNewTaskProject } from "../state/new-task-draft";
@@ -45,7 +46,28 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
   const connection = useStore(store, state => state.connection);
   const loaded = useStore(store, state => state.loaded);
   const settingsOpen = useStore(store, state => state.panel?.kind === "settings");
-  const creatingTask = selectedId === null && !settingsOpen;
+  const automationsOpen = useStore(store, state => state.panel?.kind === "automations");
+  const [unreadAutomations, setUnreadAutomations] = useState(0);
+  const seenRuns = useRef<Map<string, string> | null>(null);
+  useEffect(() => {
+    async function checkAutomations() {
+      const data = await api.automations();
+      const policies = new Map(data.automations.map(item => [item.id, item.notificationPolicy]));
+      const relevant = data.runs.filter(run => run.finishedAt && !run.readAt && (policies.get(run.automationId) === "all" || ["failed", "needs-input", "skipped"].includes(run.status)));
+      setUnreadAutomations(relevant.length);
+      const current = new Map(data.runs.map(run => [run.id, run.status]));
+      if (seenRuns.current && window.alpha?.notify && store.get().settings?.notifications.enabled && !document.hasFocus()) {
+        for (const run of relevant) if (seenRuns.current.get(run.id) !== run.status) {
+          const name = data.automations.find(item => item.id === run.automationId)?.name ?? "自动化";
+          window.alpha.notify(`Alpha · ${name}`, `自动化运行${run.status === "complete" ? "完成" : run.status === "needs-input" ? "需要处理" : "失败"}`, run.taskId ?? "");
+        }
+      }
+      seenRuns.current = current;
+    }
+    void checkAutomations().catch(() => undefined);
+    const timer = window.setInterval(() => void checkAutomations().catch(() => undefined), 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [collapsedProjects, setCollapsedProjects] = useState<string[]>([]);
@@ -81,13 +103,14 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
   if (collapsed) {
     return <nav className="sidebar collapsed" aria-label="任务">
       <IconButton icon={PanelLeftOpen} label="展开任务栏 (Ctrl+B)" onClick={onToggle} />
-      <IconButton icon={Plus} label="新建任务 (Ctrl+N)" onClick={newTask} className={selectedId === null && !settingsOpen ? "active" : undefined} />
+      <IconButton icon={Plus} label="新建任务 (Ctrl+N)" onClick={newTask} className={selectedId === null && !settingsOpen && !automationsOpen ? "active" : undefined} />
       <IconButton icon={SlidersHorizontal} label="展开项目设置" onClick={onToggle} />
       <IconButton icon={Search} label="搜索任务和命令 (Ctrl+K)" onClick={openPalette} />
       {running && <button className={`rail-running ${running.id === selectedId && !settingsOpen ? "active" : ""}`} onClick={() => void openTask(running.id)} title={`正在运行：${taskTitle(running)}`} aria-label={`打开正在运行的任务：${taskTitle(running)}`}>
         <Spinner size={16} />
       </button>}
       <span className="sidebar-rail-spacer" />
+      <IconButton icon={CalendarClock} label={`自动化${unreadAutomations ? `，${unreadAutomations} 条未读` : ""}`} onClick={openAutomations} className={automationsOpen ? "active" : undefined} />
       <IconButton icon={Settings} label="设置 (Ctrl+,)" onClick={() => openSettings()} className={settingsOpen ? "active" : undefined} />
       <span title={connectionLabel}><StatusDot tone={connection === "open" ? "success" : "warning"} /></span>
     </nav>;
@@ -99,7 +122,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
       <span className="brand-name">Alpha<small>构建工作台</small></span>
       <IconButton icon={PanelLeftClose} label="收起任务栏 (Ctrl+B)" onClick={onToggle} />
     </header>
-    <button className="new-task-button" onClick={newTask} aria-current={selectedId === null && !settingsOpen ? "page" : undefined}>
+    <button className="new-task-button" onClick={newTask} aria-current={selectedId === null && !settingsOpen && !automationsOpen ? "page" : undefined}>
       <Plus size={16} aria-hidden />新建任务<kbd>Ctrl N</kbd>
     </button>
     <label className="task-search">
@@ -135,6 +158,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
       {tasks.some(task => task.meta?.archived) && <button className="sidebar-archived" onClick={() => setShowArchived(value => !value)}>{showArchived ? "隐藏已归档" : "显示已归档"}</button>}
     </div>
     <footer className="sidebar-footer">
+      <button className="sidebar-archived" onClick={openAutomations} aria-current={automationsOpen ? "page" : undefined}><CalendarClock size={15} aria-hidden /> 自动化{unreadAutomations ? ` · ${unreadAutomations}` : ""}</button>
       <span className="sidebar-status" title={connectionLabel}>
         <StatusDot tone={connection === "open" ? "success" : "warning"} pulse={connection !== "open"} />
         <span>{connection === "open" ? `${tasks.length} 个任务` : connectionLabel}</span>

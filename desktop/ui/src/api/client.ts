@@ -1,4 +1,4 @@
-import type { ActivityEntry, AgentPreset, AgentPresetSummary, ControlHolder, Diagnostics, EvidenceDetail, LocalSchedule, ModelCatalog, PermissionMode, ProjectRecord, PromptRefinement, QueueItem, ReviewDetail, ReviewSummary, Settings, SettingsPatch, SkillPlugin, StorageReport, TaskList, TaskMeta, TaskView } from "./types";
+import type { ActivityEntry, AgentPreset, AgentPresetSummary, Automation, AutomationRun, ControlHolder, Diagnostics, EvidenceDetail, LocalSchedule, ModelCatalog, PermissionMode, ProjectRecord, PromptRefinement, QueueItem, ReviewDetail, ReviewSummary, Settings, SettingsPatch, SkillPlugin, StorageReport, TaskList, TaskMeta, TaskView } from "./types";
 
 const SERVER_MESSAGES: Record<string, string> = {
   "A task is already running": "已有任务或操作正在进行，请等它结束",
@@ -149,6 +149,12 @@ export const api = {
     return request<{ taskId: string; runId?: string; contractVersion?: number; delivered?: boolean }>(`${taskPath(id)}/messages`, { method: "POST", body: form });
   },
   taskQueue: () => request<{ items: QueueItem[]; schedules: LocalSchedule[] }>("/api/queue"),
+  automations: () => request<{ automations: Automation[]; runs: AutomationRun[] }>("/api/automations"),
+  createAutomation: (input: Pick<Automation, "name" | "prompt" | "kind" | "schedule" | "modelSelector" | "notificationPolicy"> & Partial<Pick<Automation, "projectId" | "mountId" | "targetTaskId">>) => post<{ automation: Automation }>("/api/automations", input),
+  updateAutomation: (id: string, patch: Partial<Automation>) => send<{ automation: Automation }>("PATCH", `/api/automations/${encodeURIComponent(id)}`, patch),
+  deleteAutomation: (id: string) => send<{ deleted: boolean }>("DELETE", `/api/automations/${encodeURIComponent(id)}`),
+  runAutomation: (id: string) => post<{ run: AutomationRun }>(`/api/automations/${encodeURIComponent(id)}/run`),
+  readAutomationRun: (id: string) => post<{ read: boolean }>(`/api/automation-runs/${encodeURIComponent(id)}/read`),
   enqueueTask: (taskId: string, instruction: string) => post<{ item: QueueItem }>("/api/queue", { taskId, instruction }),
   cancelQueuedTask: (id: string) => send<{ cancelled: boolean }>("DELETE", `/api/queue/${encodeURIComponent(id)}`),
   scheduleTask: (taskId: string, instruction: string, nextRunAt: string, intervalMinutes: number | null) => post<{ schedule: LocalSchedule }>("/api/schedules", { taskId, instruction, nextRunAt, intervalMinutes }),

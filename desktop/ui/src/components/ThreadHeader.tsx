@@ -5,11 +5,11 @@ import { api } from "../api/client";
 import { criterionState, describeStep, parseFailure } from "../state/evidence";
 import { criterionLabel, failureHeadline, formatDateTime, phaseInfo, reopenText, taskStatus, taskTitle } from "../state/labels";
 import { notify, openDetail, openSettings, setGoalContinuation, setTaskModel, showPreview, store, syncSelected } from "../state/workbench";
+import { TaskAutomationPanel } from "./TaskAutomationPanel";
 import { useStore } from "../state/store";
 import { ModelPicker, shortModel } from "./ModelPicker";
 import { WebPanel } from "./WebPanel";
 import { TaskMenu } from "./TaskMenu";
-import { TaskAutomationPanel } from "./TaskAutomationPanel";
 import { Badge, IconButton, Spinner, StateIcon } from "./ui";
 import "./ThreadHeader.css";
 

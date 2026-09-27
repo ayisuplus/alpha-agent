@@ -37,6 +37,7 @@ import { addTaskInputs } from "./runtime/task-inputs";
 import { MCPPermissionStore, type MCPPermission } from "./runtime/mcp-permissions";
 import { OperationJournal } from "./runtime/operation-journal";
 import { TaskQueueStore } from "./runtime/task-queue";
+import { AutomationStore, type AutomationInput } from "./runtime/automations";
 import { ProjectStore } from "./runtime/projects";
 import { assertWritablePaths, bindProjectTurn, finalizeProjectTurn, mayWriteProject, prepareProjectTurn, readProjectMemorySnapshot, recoverProjectTurn, unfinishedProjectTurns, type ProjectTurn } from "./runtime/project-state";
 import { configuredChecks } from "./runtime/code-check";
@@ -72,6 +73,7 @@ const operationJournal = new OperationJournal(dataRoot);
 const startupReconciliation = await operationJournal.reconcile();
 for (const item of startupReconciliation) console.error("ALPHA_RECONCILED_OPERATION", item);
 const taskQueue = new TaskQueueStore(dataRoot);
+const automationStore = new AutomationStore(dataRoot);
 const projectStore = new ProjectStore(dataRoot);
 for (const turn of await unfinishedProjectTurns(dataRoot)) {
   if (!turn.taskId) continue;
@@ -86,8 +88,11 @@ for (const turn of await unfinishedProjectTurns(dataRoot)) {
   }
 }
 await taskQueue.reconcile();
+await automationStore.reconcile();
 const queuedRuns = new Map<string, string>();
+const automationRuns = new Map<string, string>();
 let queueDraining = false;
+let automationDraining = false;
 let taskMeta = await workbenchMeta.all();
 const clients = new Set<ServerWebSocket<unknown>>();
 const previews = new Map<string, PreviewInstance>();
@@ -816,9 +821,17 @@ async function execute(runId: string, objective: string, projectRoot: string, co
       queuedRuns.delete(runId);
       await taskQueue.finish(queueItemId, runError ?? (controller.signal.aborted ? "cancelled" : ledger ? `task ${ledger.state.status}; pending ${ledger.completionGaps().join(", ") || "none"}` : "no task ledger"), !runError && !controller.signal.aborted);
     }
+    const automationRunId = automationRuns.get(runId);
+    if (automationRunId) {
+      automationRuns.delete(runId);
+      const current = ledger ? await TaskLedger.load(ledger.file).catch(() => null) : null;
+      const status = runError || controller.signal.aborted || !current ? "failed" : current.state.status === "complete" ? "complete" : "needs-input";
+      await automationStore.finish(automationRunId, status, runError ?? (controller.signal.aborted ? "cancelled" : `task ${current?.state.status ?? "unavailable"}`));
+    }
     if (active?.runId === runId) active = null;
     operationManager.release(lease);
     void drainQueue();
+    void drainAutomations();
   }
 }
 
@@ -858,6 +871,67 @@ async function drainQueue(): Promise<void> {
   }
 }
 
+async function drainAutomations(): Promise<void> {
+  if (automationDraining || operationManager.snapshot()) return;
+  automationDraining = true;
+  let lease: OperationLease | null = null;
+  let pendingId: string | null = null;
+  let launched = false;
+  try {
+    const pending = await automationStore.next();
+    if (!pending) return;
+    pendingId = pending.id;
+    const automation = (await automationStore.list()).automations.find(item => item.id === pending.automationId);
+    if (!automation || automation.status !== "ACTIVE") throw new Error("Automation is no longer active");
+    lease = operationManager.claim("run", automation.targetTaskId ?? null);
+    if (!lease) return;
+    if (automation.modelSelector && !await isModelAvailable(automation.modelSelector)) throw new Error("Automation model is unavailable");
+    let ledger: TaskLedger;
+    if (automation.kind === "heartbeat") {
+      const target = await loadLedger(automation.targetTaskId!);
+      if (!target || !await taskRootAllowed(target)) throw new Error("Automation target task is unavailable");
+      ledger = target;
+      if (ledger.state.status === "complete") await ledger.reviseObjective(automation.prompt);
+      else if (ledger.state.status === "stopped" || ledger.state.status === "needs-input") await ledger.resume(automation.prompt);
+      else await ledger.recordGuidance(automation.prompt);
+      if (automation.modelSelector) await ledger.setModel(automation.modelSelector);
+    } else if (automation.projectId) {
+      const project = await projectStore.get(automation.projectId);
+      if (!project) throw new Error("Automation project no longer exists");
+      const mount = project.mounts.find(item => item.id === automation.mountId);
+      if (project.mounts.length && !mount) throw new Error("Automation working directory is unavailable");
+      const projectRoot = mount?.path ?? join(productsRoot, `project-${project.id}`);
+      if (!mount) await mkdir(projectRoot, { recursive: true });
+      if (mount) await verifySandbox({ cwd: mount.path, roots: await projectStore.roots(project.id, project.version), dataRoot, signal: lease.controller.signal });
+      ledger = await TaskLedger.create(dataRoot, { objective: automation.prompt, projectRoot, taskType: "general", criteria: [],
+        workspaceOrigin: { kind: mount ? "direct" : "generated", ...(mount ? { checks: await configuredChecks(mount.path) } : {}) },
+        projectId: project.id, projectVersion: project.version, permissionMode: project.permissionMode ?? "ask", modelSelector: automation.modelSelector ?? undefined });
+      if (mount) {
+        const baseline = await snapshotSourceHashes(projectRoot);
+        await mkdir(directBaselineRoot, { recursive: true });
+        await writeFile(join(directBaselineRoot, `${ledger.state.id}.json`), JSON.stringify({ format: 2, files: baseline }), { flag: "wx" });
+      }
+    } else {
+      ledger = await createGeneralWorkspace({ taskType: "general", objective: automation.prompt, productsRoot, dataRoot, modelSelector: automation.modelSelector ?? undefined });
+    }
+    operationManager.update(lease, { taskId: ledger.state.id });
+    const runId = randomUUID();
+    await automationStore.start(pending.id, ledger.state.id, runId);
+    automationRuns.set(runId, pending.id);
+    active = { runId, controller: lease.controller, ledger, steeringIds: new Set() };
+    setContext(ledger);
+    operations.set(ledger.state.id, runId);
+    emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
+    launched = true;
+    void execute(runId, automation.prompt, ledger.state.projectRoot, lease.controller, lease, ledger);
+  } catch (error) {
+    if (pendingId) await automationStore.finish(pendingId, "failed", error instanceof Error ? error.message : String(error));
+  } finally {
+    if (!launched && lease) operationManager.release(lease);
+    automationDraining = false;
+  }
+}
+
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
@@ -878,6 +952,39 @@ const server = Bun.serve({
       return Response.json({ tasks: (await listTasks()).map(ledger => taskSummary(ledger, queued.has(ledger.state.id))), activeTaskId: active?.ledger?.state.id ?? null, activeRunId: active?.runId ?? null, operation: operationManager.snapshot() });
     }
     if (url.pathname === "/api/queue" && request.method === "GET") return Response.json(await taskQueue.all());
+    if (url.pathname === "/api/automations" && request.method === "GET") return Response.json(await automationStore.list());
+    if (url.pathname === "/api/automations" && request.method === "POST") {
+      try {
+        const body = await request.json() as AutomationInput;
+        if (body.kind === "heartbeat" && !await loadLedger(body.targetTaskId ?? "")) throw new Error("Automation target task is unavailable");
+        if (body.kind === "cron" && body.projectId) {
+          const project = await projectStore.get(body.projectId);
+          if (!project || project.mounts.length && !project.mounts.some(item => item.id === body.mountId)) throw new Error("Automation project or working directory is unavailable");
+        }
+        if (body.modelSelector && !await isModelAvailable(body.modelSelector)) throw new Error("Automation model is unavailable");
+        return Response.json({ automation: await automationStore.create(body) });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
+    const automationRoute = /^\/api\/automations\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (automationRoute && (request.method === "PATCH" || request.method === "DELETE")) {
+      try {
+        if (request.method === "DELETE") { await automationStore.delete(automationRoute[1]); return Response.json({ deleted: true }); }
+        const patch = await request.json() as Partial<AutomationInput> & { status?: "ACTIVE" | "PAUSED" };
+        if (patch.targetTaskId && !await loadLedger(patch.targetTaskId)) throw new Error("Automation target task is unavailable");
+        if (patch.modelSelector && !await isModelAvailable(patch.modelSelector)) throw new Error("Automation model is unavailable");
+        return Response.json({ automation: await automationStore.update(automationRoute[1], patch) });
+      } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
+    const automationNow = /^\/api\/automations\/([0-9a-f-]{36})\/run$/.exec(url.pathname);
+    if (automationNow && request.method === "POST") {
+      try { const run = await automationStore.runNow(automationNow[1]); void drainAutomations(); return Response.json({ run }); }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
+    const automationRead = /^\/api\/automation-runs\/([0-9a-f-]{36})\/read$/.exec(url.pathname);
+    if (automationRead && request.method === "POST") {
+      try { await automationStore.markRead(automationRead[1]); return Response.json({ read: true }); }
+      catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 400 }); }
+    }
     if (url.pathname === "/api/queue" && request.method === "POST") {
       const body = await request.json().catch(() => ({})) as { taskId?: unknown; instruction?: unknown };
       if (typeof body.taskId !== "string" || !await loadLedger(body.taskId) || typeof body.instruction !== "string") return Response.json({ error: "Queue task or instruction is invalid" }, { status: 400 });
@@ -1911,6 +2018,11 @@ const server = Bun.serve({
 
 console.log(`ALPHA_SERVER_READY ${server.port}`);
 await taskQueue.advanceDue();
+await automationStore.advanceDue();
 void drainQueue();
-const scheduleTimer = setInterval(() => { void taskQueue.advanceDue().then(() => drainQueue()).catch(error => console.error("ALPHA_SCHEDULE_FAILED", error)); }, 15_000);
+void drainAutomations();
+const scheduleTimer = setInterval(() => {
+  void taskQueue.advanceDue().then(() => drainQueue()).catch(error => console.error("ALPHA_SCHEDULE_FAILED", error));
+  void automationStore.advanceDue().then(() => drainAutomations()).catch(error => console.error("ALPHA_AUTOMATION_FAILED", error));
+}, 15_000);
 process.on("SIGINT", () => { clearInterval(scheduleTimer); active?.controller.abort(); for (const preview of previews.values()) preview.stop(); server.stop(true); });

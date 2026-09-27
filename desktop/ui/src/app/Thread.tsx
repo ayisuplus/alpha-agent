@@ -7,6 +7,7 @@ import { EvidenceView } from "../components/EvidenceView";
 import { NewTask } from "../components/NewTask";
 import { OfficePdfPreview } from "../components/OfficePdfPreview";
 import { SettingsView } from "../components/settings/SettingsView";
+import { AutomationsView } from "../components/AutomationsView";
 import { ThreadHeader } from "../components/ThreadHeader";
 import { Timeline } from "../components/Timeline";
 import { Spinner } from "../components/ui";
@@ -62,6 +63,7 @@ export function Thread() {
   const task = useStore(store, state => state.task);
   const panel = useStore(store, state => state.panel);
   if (panel?.kind === "settings") return <SettingsView section={panel.section} />;
+  if (panel?.kind === "automations") return <AutomationsView />;
   if (selectedId === null) return <NewTask />;
   if (!task || task.id !== selectedId) return <p className="thread-loading"><Spinner size={16} />正在加载任务…</p>;
   return <TaskThread task={task} />;
