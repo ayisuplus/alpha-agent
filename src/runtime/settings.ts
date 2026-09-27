@@ -9,6 +9,7 @@ export interface AlphaSettings {
   version: 1;
   revision?: number;
   model: { default: string | null; translation: string | null };
+  workerModels: { investigate: string | null; implement: string | null; review: string | null };
   budget: { maxToolCalls: number; wallTimeMinutes: number; maxTotalToolCalls: number; totalWallTimeMinutes: number };
   generation: { comfyUrl: string; image: boolean; voice: boolean; video: boolean };
   plugins: { comfyui: boolean };
@@ -20,6 +21,7 @@ export const DEFAULT_SETTINGS: AlphaSettings = {
   version: 1,
   revision: 0,
   model: { default: null, translation: null },
+  workerModels: { investigate: null, implement: null, review: null },
   budget: { maxToolCalls: 120, wallTimeMinutes: 15, maxTotalToolCalls: 1200, totalWallTimeMinutes: 120 },
   generation: { comfyUrl: "http://127.0.0.1:8188", image: true, voice: true, video: true },
   plugins: { comfyui: true },
@@ -87,6 +89,7 @@ const number = (min: number, max: number, integer: boolean) => (value: unknown) 
 export function mergeSettings(current: AlphaSettings, input: unknown, strict = true): AlphaSettings {
   const patch = section(input, "settings", strict);
   const model = section(patch.model, "model", strict);
+  const workerModels = section(patch.workerModels, "workerModels", strict);
   const budget = section(patch.budget, "budget", strict);
   const generation = section(patch.generation, "generation", strict);
   const plugins = section(patch.plugins, "plugins", strict);
@@ -98,6 +101,11 @@ export function mergeSettings(current: AlphaSettings, input: unknown, strict = t
     model: {
       default: pick(model, "default", current.model.default, value => value === null ? null : isModelSelector(value) ? value : undefined, strict, "默认模型"),
       translation: pick(model, "translation", current.model.translation, value => value === null ? null : isModelSelector(value) ? value : undefined, strict, "翻译模型"),
+    },
+    workerModels: {
+      investigate: pick(workerModels, "investigate", current.workerModels.investigate, value => value === null ? null : isModelSelector(value) ? value : undefined, strict, "调查子代理模型"),
+      implement: pick(workerModels, "implement", current.workerModels.implement, value => value === null ? null : isModelSelector(value) ? value : undefined, strict, "实现子代理模型"),
+      review: pick(workerModels, "review", current.workerModels.review, value => value === null ? null : isModelSelector(value) ? value : undefined, strict, "审查子代理模型"),
     },
     budget: {
       maxToolCalls: pick(budget, "maxToolCalls", current.budget.maxToolCalls, number(...LIMITS.maxToolCalls, true), strict, "工具调用上限"),

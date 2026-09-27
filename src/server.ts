@@ -1161,7 +1161,7 @@ const server = Bun.serve({
     }
     if (url.pathname === "/api/settings" && request.method === "PUT") {
       try {
-        const patch = await request.json().catch(() => null) as { model?: { default?: unknown; translation?: unknown } } | null;
+        const patch = await request.json().catch(() => null) as { model?: { default?: unknown; translation?: unknown }; workerModels?: { investigate?: unknown; implement?: unknown; review?: unknown } } | null;
         const nextDefault = patch?.model?.default;
         if (typeof nextDefault === "string" && isModelSelector(nextDefault) && !(await isModelAvailable(nextDefault))) {
           return Response.json({ error: "这个模型没有可用的认证，不能设为默认" }, { status: 400 });
@@ -1169,6 +1169,12 @@ const server = Bun.serve({
         const nextTranslation = patch?.model?.translation;
         if (typeof nextTranslation === "string" && isModelSelector(nextTranslation) && !(await isModelAvailable(nextTranslation))) {
           return Response.json({ error: "这个模型没有可用的认证，不能用于翻译" }, { status: 400 });
+        }
+        for (const mode of ["investigate", "implement", "review"] as const) {
+          const selected = patch?.workerModels?.[mode];
+          if (typeof selected === "string" && isModelSelector(selected) && !(await isModelAvailable(selected))) {
+            return Response.json({ error: "这个模型没有可用的认证，不能用于子代理" }, { status: 400 });
+          }
         }
         const settings = await settingsStore.update(patch);
         broadcast({ type: "settings", settings });

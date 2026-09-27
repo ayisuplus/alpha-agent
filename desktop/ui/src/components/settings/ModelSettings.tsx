@@ -118,6 +118,13 @@ export function ModelSettings() {
         onChange={value => void updateSettings({ model: { translation: value } })} />
     </Field>
 
+    <h3 className="settings-subheading">子代理模型</h3>
+    <p className="settings-note">按执行模式选择，派发时自动使用。未指定时跟随当前任务模型；更改只影响后续运行。</p>
+    {([["investigate", "调查"], ["implement", "实现"], ["review", "审查"]] as const).map(([mode, label]) => <Field key={mode} stacked label={`${label}子代理`}>
+      <ModelPicker value={settings.workerModels[mode]} allowDefault label={`${label}子代理模型`} defaultLabel="跟随主代理" defaultHint="使用当前任务模型"
+        onChange={value => void updateSettings({ workerModels: { [mode]: value } })} />
+    </Field>)}
+
     <div className="settings-subheading-row">
       <h3 className="settings-subheading">服务商与 API Key</h3>
       <IconButton icon={RefreshCw} label="重新读取" onClick={() => void refresh()} disabled={refreshing} />

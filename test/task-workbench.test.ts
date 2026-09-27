@@ -292,8 +292,10 @@ test("model endpoints work against an isolated OMP store and never return keys",
     expect((await fetch(`${base}/api/providers/alibaba-token-plan/key`, { method: "PUT", headers: json, body: JSON.stringify({ apiKey: key }) })).status).toBe(400);
     expect((await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ model: { default: `${provider!.id}/not-a-real-model` } }) })).status).toBe(400);
     expect((await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ model: { translation: `${provider!.id}/not-a-real-model` } }) })).status).toBe(400);
+    expect((await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ workerModels: { implement: `${provider!.id}/not-a-real-model` } }) })).status).toBe(400);
     expect((await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ model: { default: selector } }) })).status).toBe(200);
     expect((await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ model: { translation: selector } }) })).status).toBe(200);
+    expect((await fetch(`${base}/api/settings`, { method: "PUT", headers: json, body: JSON.stringify({ workerModels: { implement: selector } }) })).status).toBe(200);
     expect((await fetch(`${base}/api/prompts/refine`, { method: "POST", headers: json, body: JSON.stringify({ prompt: "" }) })).status).toBe(400);
 
     expect(await fetch(`${base}/api/providers/${provider!.id}/key`, { method: "DELETE", headers: { origin: base } }).then(response => response.json())).toEqual({ removed: 1 });

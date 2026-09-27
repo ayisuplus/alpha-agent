@@ -266,6 +266,7 @@ export interface Settings {
   version: 1;
   revision?: number;
   model: { default: string | null; translation: string | null };
+  workerModels: { investigate: string | null; implement: string | null; review: string | null };
   budget: { maxToolCalls: number; wallTimeMinutes: number; maxTotalToolCalls: number; totalWallTimeMinutes: number };
   generation: { comfyUrl: string; image: boolean; voice: boolean; video: boolean };
   plugins: { comfyui: boolean };

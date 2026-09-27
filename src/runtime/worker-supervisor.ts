@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import type { TaskLedger } from "./task-ledger";
 import type { BrowserSession } from "./visible-browser";
 import { AgentMailbox } from "./agent-mailbox";
+import { SettingsStore } from "./settings";
 
 async function ensureWorktreeBase(projectRoot: string, managed: boolean): Promise<void> {
   const git = async (...args: string[]) => {
@@ -161,12 +162,14 @@ export class WorkerSupervisor {
     if (this.input.remainingCalls() - this.reservedCalls < orders.length * 40) throw new Error("Task-wide tool budget cannot reserve these workers");
     if (this.input.remainingTimeMs && this.input.remainingTimeMs() - this.reservedTimeMs < orders.length * 120_000) throw new Error("Task-wide time budget cannot reserve these workers");
     await ensureWorktreeBase(this.ledger.state.projectRoot, ["generated", "copy"].includes(this.ledger.state.workspaceOrigin?.kind ?? ""));
+    const workerModels = (await new SettingsStore(this.input.dataRoot).get()).workerModels;
     this.maxParallel = maxParallel;
     this.startMessagePoll();
     liveSupervisors.set(this.ledger.state.id, this);
     this.releaseBrowser("coordinator");
     const assigned: string[] = [];
-    for (const order of orders) {
+    for (const requested of orders) {
+      const order = { ...requested, modelSelector: workerModels[requested.mode ?? "implement"] ?? this.input.modelSelector };
       const id = order.instanceId!;
       if (!id) throw new Error("Worker instance ID is required");
       await this.ledger.queueWorker({ id, parentId: this.input.parentId, order, expert: order.preset ? { id: order.preset.id, name: order.preset.name, hash: order.preset.hash } : undefined });

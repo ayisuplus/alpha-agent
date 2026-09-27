@@ -10,9 +10,10 @@ import { SkillPluginStore } from "../plugins/third-party";
 import { validateSkillBindings } from "./skill-binding";
 import type { WorkOrder } from "./work-orders";
 import type { BrowserSession } from "./visible-browser";
+import { SettingsStore } from "./settings";
 
 const parameters = type({
-  orders: type({ id: "string", objective: "string", ownedPaths: "string[]", resources: "string[]", readPaths: "string[]?", mode: "string?", expertId: "string?", skillIds: "string[]?", modelSelector: "string?", dependsOn: "string[]?", acceptance: "string[]?" }).array(),
+  orders: type({ id: "string", objective: "string", ownedPaths: "string[]", resources: "string[]", readPaths: "string[]?", mode: "string?", expertId: "string?", skillIds: "string[]?", dependsOn: "string[]?", acceptance: "string[]?" }).array(),
 });
 
 export function resolveWorkOrders(orders: WorkOrder[], presets: readonly AgentPresetSnapshot[], skills: readonly Skill[] = []): WorkOrder[] {
@@ -32,7 +33,7 @@ export function createWorkOrderTool(ledger: TaskLedger, dataRoot: string, signal
   return {
     name: "alpha_delegate",
     label: "Delegate scoped work",
-    description: "Run one or two independent work orders in isolated instances. Set modelSelector per order for a different worker model; omit it to inherit the main agent model. The cognitive plan can propose experts, but only selected orders are started. Use expertId only for an enabled expert; omit for a neutral instance. Set readPaths to the specific source files or directories this worker may inspect; ownedPaths are also readable. Read-only investigate/review orders must have no ownedPaths. Implementation ownership must be disjoint. Parent verifies integration and final acceptance.",
+    description: "Run one or two independent work orders in isolated instances. Worker models come from the investigate, implement, and review choices in settings. The cognitive plan can propose experts, but only selected orders are started. Use expertId only for an enabled expert; omit for a neutral instance. Set readPaths to the specific source files or directories this worker may inspect; ownedPaths are also readable. Read-only investigate/review orders must have no ownedPaths. Implementation ownership must be disjoint. Parent verifies integration and final acceptance.",
     parameters,
     loadMode: "essential",
     async execute(_toolCallId, args, _onUpdate, _ctx, toolSignal) {
@@ -48,7 +49,8 @@ export function createWorkOrderTool(ledger: TaskLedger, dataRoot: string, signal
           return { ...order, mode: planned?.mode ?? order.mode, dependsOn: planned?.dependsOn ?? order.dependsOn, expertId: planned ? planned.expertId : order.expertId, presetId: planned ? planned.expertId : order.presetId, skillIds: [...new Set([...(planned?.skillIds ?? []), ...(order.skillIds ?? [])])] };
         });
         if (ledger.state.designatedExpertId && !ledger.state.cognition?.steps.length && requested.some(order => (order.mode ?? "implement") === "implement") && !requested.some(order => order.expertId === ledger.state.designatedExpertId)) throw new Error(`用户指定专家尚未分配到工单：${ledger.state.designatedExpertId}`);
-        const orders = resolveWorkOrders(requested, currentExperts, currentSkills).map(order => ({ ...order, instanceId: randomUUID(), contractVersion: ledger.state.contractVersion ?? 1, cognitionRevision: ledger.state.cognition?.revision ?? 1, baseRevision: ledger.state.revision ?? undefined }));
+        const workerModels = (await new SettingsStore(dataRoot).get()).workerModels;
+        const orders = resolveWorkOrders(requested, currentExperts, currentSkills).map(order => ({ ...order, modelSelector: workerModels[order.mode ?? "implement"] ?? modelSelector, instanceId: randomUUID(), contractVersion: ledger.state.contractVersion ?? 1, cognitionRevision: ledger.state.cognition?.revision ?? 1, baseRevision: ledger.state.revision ?? undefined }));
         const expertStore = new AgentPresetStore(dataRoot);
         for (const order of orders) {
           const bundled = order.preset ? await expertStore.loadBundledSkills(order.preset) : [];
