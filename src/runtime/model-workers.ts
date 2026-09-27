@@ -74,7 +74,7 @@ export function runModelWorkOrders(input: {
   isolate?: "copy" | "git-worktree";
   agentWorkspace?: string;
   mergeBaseRoot?: string;
-  /** Workers run on the same model as the task that delegated to them. */
+  /** Default model inherited by workers without an order-specific selector. */
   modelSelector?: string;
   workerContext?: Pick<TaskState, "taskType" | "workspaceOrigin" | "capabilities" | "permissionMode">;
   plugins?: { comfyui: boolean };
@@ -90,6 +90,7 @@ export function runModelWorkOrders(input: {
   let browserQueue: Promise<unknown> = Promise.resolve();
   return executeWorkOrders({ ...input, async runWorker(order, directory, signal) {
     signal?.throwIfAborted();
+    const modelSelector = order.modelSelector ?? input.modelSelector;
     const localAbort = new AbortController();
     const workerSignal = signal ? AbortSignal.any([signal, localAbort.signal]) : localAbort.signal;
     const runDir = join(input.dataRoot, "worker-runs", input.taskId, order.instanceId ?? `${order.id}-${randomUUID()}`);
@@ -101,7 +102,7 @@ export function runModelWorkOrders(input: {
     const stateRoot = order.agentId ? join(input.dataRoot, "worker-agents", input.taskId, order.agentId, "state") : join(runDir, "state");
     const withSkills = order.skillSnapshots?.length ? order : await snapshotSkills(input.dataRoot, stateRoot, order);
     const { preset, ...workOrder } = withSkills;
-    await writeFile(requestFile, JSON.stringify({ taskId: input.taskId, projectRoot: directory, dataRoot: stateRoot, authorizationRoot: input.dataRoot, workerContext: input.workerContext, plugins: input.plugins, generation: input.generation, comfyUrl: input.comfyUrl, objective: order.objective, workOrder, workerPreset: preset, modelSelector: input.modelSelector, browserProxyDir: browserDirectory, eventFile: join(runDir, "events.jsonl") }));
+    await writeFile(requestFile, JSON.stringify({ taskId: input.taskId, projectRoot: directory, dataRoot: stateRoot, authorizationRoot: input.dataRoot, workerContext: input.workerContext, plugins: input.plugins, generation: input.generation, comfyUrl: input.comfyUrl, objective: order.objective, workOrder, workerPreset: preset, modelSelector, browserProxyDir: browserDirectory, eventFile: join(runDir, "events.jsonl") }));
     await input.onWorkerEvent?.(withSkills, "started");
     const browserTool = createBrowserTool(() => input.browserAccess?.() === false ? null : input.browser ?? null, input.dataRoot, input.browserUrl);
     const handled = new Set<string>();
@@ -165,7 +166,7 @@ export function runModelWorkOrders(input: {
       await input.onWorkerEvent?.(withSkills, "completed");
       return result;
     } catch (error) {
-      if (!usageRecorded) await input.onWorkerUsage?.(withSkills, { model: input.modelSelector ?? "task-default", toolCalls: 0, elapsedMs: Math.round(performance.now() - started), outcome: signal?.aborted ? "cancelled" : "error", incomplete: true });
+      if (!usageRecorded) await input.onWorkerUsage?.(withSkills, { model: modelSelector ?? "task-default", toolCalls: 0, elapsedMs: Math.round(performance.now() - started), outcome: signal?.aborted ? "cancelled" : "error", incomplete: true });
       await input.onWorkerEvent?.(withSkills, "failed");
       throw error;
     } finally {

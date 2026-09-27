@@ -11,7 +11,7 @@ import type { WorkOrder } from "./work-orders";
 import type { WorkerSupervisor } from "./worker-supervisor";
 import { createCoordinatorMailboxTools } from "./agent-mailbox";
 
-const orderParameters = type({ orders: type({ id: "string", objective: "string", ownedPaths: "string[]", resources: "string[]", readPaths: "string[]?", mode: "string?", expertId: "string?", skillIds: "string[]?", dependsOn: "string[]?", acceptance: "string[]?" }).array(), "concurrency?": "number" });
+const orderParameters = type({ orders: type({ id: "string", objective: "string", ownedPaths: "string[]", resources: "string[]", readPaths: "string[]?", mode: "string?", expertId: "string?", skillIds: "string[]?", modelSelector: "string?", dependsOn: "string[]?", acceptance: "string[]?" }).array(), "concurrency?": "number" });
 const idParameters = type({ id: "string" });
 const continueParameters = type({ agentId: "string", instruction: "string", mode: "string?" });
 const waitParameters = type({ ids: "string[]", "timeoutMs?": "number" });
@@ -23,7 +23,7 @@ export function createAsyncWorkTools(getSupervisor: () => WorkerSupervisor, ledg
     ...createCoordinatorMailboxTools(getSupervisor().mailbox),
     {
       name: "alpha_spawn", label: "Start isolated workers", loadMode: "essential" as const,
-      description: "Start expert subagents in independent Git worktrees. Each needs a versioned persona and at least one Skill. Investigation and review cannot edit source. Return stable agent IDs and run IDs; inspect results before integration.",
+      description: "Start expert subagents in independent Git worktrees. Each needs a versioned persona and at least one Skill. Set modelSelector on each order to use a different model (for example xiaomi-token-plan-cn/mimo-v2.6-flash); omit it to inherit the main agent model. Investigation and review cannot edit source. Return stable agent IDs and run IDs; inspect results before integration.",
       parameters: orderParameters,
       async execute(_id: string, args: typeof orderParameters.infer) {
         try {

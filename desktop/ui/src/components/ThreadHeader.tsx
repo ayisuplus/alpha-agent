@@ -6,7 +6,7 @@ import { criterionState, describeStep, parseFailure } from "../state/evidence";
 import { criterionLabel, failureHeadline, formatDateTime, phaseInfo, reopenText, taskStatus, taskTitle } from "../state/labels";
 import { notify, openDetail, openSettings, setGoalContinuation, setTaskModel, showPreview, store, syncSelected } from "../state/workbench";
 import { useStore } from "../state/store";
-import { ModelPicker } from "./ModelPicker";
+import { ModelPicker, shortModel } from "./ModelPicker";
 import { WebPanel } from "./WebPanel";
 import { TaskMenu } from "./TaskMenu";
 import { TaskAutomationPanel } from "./TaskAutomationPanel";
@@ -74,6 +74,7 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
   const completedSteps = steps.filter(step => step.status === "complete").length;
   const usedCalls = (task.runs ?? []).reduce((sum, run) => sum + run.toolCalls, 0);
   const usedMinutes = Math.floor((task.runs ?? []).reduce((sum, run) => sum + run.elapsedMs, 0) / 60_000);
+  const workerModels = new Map((task.runs ?? []).filter(run => run.instanceId).map(run => [run.instanceId, run.model]));
   const planningState = task.status === "stopped" ? "已停止" : task.status === "needs-input" ? "需要回答" : task.status === "complete" ? "已完成" : task.phase === "plan" ? "规划中" : task.phase === "plan-review" ? "待审阅" : "执行中";
   const decideSkill = async (id: string, decision: "install" | "reject") => {
     setSkillDecision(id);
@@ -152,6 +153,7 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
       })}</ul></div>}
       {!!task.cognition.instances?.length && <div><strong>执行实例</strong><ul>{task.cognition.instances.map(instance => <li key={instance.id}>
         <strong>{instance.orderId}</strong> · {instance.expert?.name ?? "通用执行"} · {instance.mode} · {instance.status}{instance.integration ? ` / ${instance.integration}` : ""}{instance.agentId ? ` · 子代理 ${instance.agentId.slice(0, 8)}` : ""}
+        {(workerModels.get(instance.id) ?? instance.order?.modelSelector) && ` · 模型 ${shortModel((workerModels.get(instance.id) ?? instance.order?.modelSelector)!)}`}
         {instance.parentId ? ` · 主实例 ${instance.parentId.slice(0, 8)}` : ""}
         {instance.worktreePath && <div>Worktree：<code>{instance.worktreePath}</code></div>}
         {instance.startedAt && <div>开始：{formatDateTime(instance.startedAt)}{instance.endedAt ? ` · 结束：${formatDateTime(instance.endedAt)}` : ""}</div>}

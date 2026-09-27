@@ -3,6 +3,7 @@ import { copyFile, mkdir, readdir, readFile, rename, unlink, writeFile } from "n
 import { dirname, join, resolve, sep } from "node:path";
 import { fingerprintSource } from "./task-ledger";
 import type { AgentPresetSnapshot } from "./agent-presets";
+import { isAllowedModelSelector } from "./model-policy";
 import { excludedSourceDirectory } from "./source-review";
 
 export interface WorkOrder {
@@ -14,6 +15,8 @@ export interface WorkOrder {
   /** Async worktree workers may use the whole project; scopes remain scheduling hints. */
   fullAccess?: boolean;
   mode?: "investigate" | "implement" | "review";
+  /** Optional model for this subagent; absent inherits the coordinator model. */
+  modelSelector?: string;
   expertId?: string;
   skillIds?: string[];
   skillSnapshots?: Array<{ id: string; hash: string; revision: string }>;
@@ -88,6 +91,7 @@ export function validateOrders(orders: WorkOrder[], maximum = 2): void {
   for (const order of orders) {
     if (!/^[a-z][a-z0-9_-]{0,31}$/.test(order.id) || ids.has(order.id) || !order.objective.trim() || (!order.fullAccess && (order.mode ?? "implement") === "implement" && order.ownedPaths.length === 0)) throw new Error("Invalid work order");
     if (order.mode && !["investigate", "implement", "review"].includes(order.mode)) throw new Error("Invalid work order mode");
+    if (order.modelSelector !== undefined && !isAllowedModelSelector(order.modelSelector)) throw new Error(`Model is not supported: ${order.modelSelector}`);
     if (!order.fullAccess && order.mode && order.mode !== "implement" && order.ownedPaths.length) throw new Error("Read-only orders cannot own source paths");
     ids.add(order.id);
     for (const scope of order.ownedPaths) {

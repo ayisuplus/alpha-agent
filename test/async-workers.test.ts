@@ -347,12 +347,13 @@ test("persistent subagent continues in its worktree and merges cumulative change
   const state = await fixture();
   const agentId = crypto.randomUUID();
   const preset = { id: "test-expert", name: "Test expert", description: "Test", instructions: "Test", hash: "a".repeat(64), skillIds: ["test:skill"], package: { revision: "b".repeat(64), skills: [{ id: "test:skill", hash: "c".repeat(64) }] } };
-  const work = { ...order("persistent", "src/first.txt"), fullAccess: true, agentId, preset, skillIds: ["test:skill"] };
+  const work = { ...order("persistent", "src/first.txt"), fullAccess: true, agentId, preset, skillIds: ["test:skill"], modelSelector: "xiaomi-token-plan-cn/mimo-v2.6-flash" };
   let runs = 0;
   const supervisor = new WorkerSupervisor({ ...state, remainingCalls: () => 1000, runWorkers: input => executeWorkOrders({ ...input,
     async runWorker(workOrder, directory) {
       await input.onWorkerEvent?.(workOrder, "started");
       runs++;
+      expect(workOrder.modelSelector).toBe("xiaomi-token-plan-cn/mimo-v2.6-flash");
       expect(directory).toBe(join(state.dataRoot, "worker-agents", state.ledger.state.id, agentId, "project"));
       expect(await readFile(join(directory, "src", "first.txt"), "utf8")).toBe(runs === 1 ? "dirty-parent" : runs === 2 ? "first-run" : "second-run");
       if (workOrder.mode === "implement") await writeFile(join(directory, "src", "first.txt"), runs === 1 ? "first-run" : "second-run");
@@ -375,5 +376,6 @@ test("persistent subagent continues in its worktree and merges cumulative change
     expect((await supervisor.wait([third], 10_000))[0].instance.status).toBe("returned");
     expect((await supervisor.integrate(third)).status).toBe("merged");
     expect(state.ledger.state.cognition?.instances?.map(item => item.agentId)).toEqual([agentId, agentId, agentId]);
+    expect(state.ledger.state.cognition?.instances?.map(item => item.order?.modelSelector)).toEqual([work.modelSelector, work.modelSelector, work.modelSelector]);
   } finally { await supervisor.cancelAll(); await rm(state.root, { recursive: true, force: true }); }
 });

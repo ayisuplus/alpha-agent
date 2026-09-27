@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fingerprintSource } from "../src/runtime/task-ledger";
-import { executeWorkOrders, recoverIncompleteMerges, type WorkOrder } from "../src/runtime/work-orders";
+import { executeWorkOrders, recoverIncompleteMerges, validateOrders, type WorkOrder } from "../src/runtime/work-orders";
+import { runModelWorkOrders } from "../src/runtime/model-workers";
 
 const orders: WorkOrder[] = [
   { id: "first", objective: "Change first module", ownedPaths: ["src/first.txt"], resources: ["module:first"] },
@@ -20,6 +21,35 @@ async function fixture() {
   await writeFile(join(projectRoot, "alpha-verification.json"), "{}");
   return { root, projectRoot, dataRoot: join(root, "state"), baseRevision: await fingerprintSource(projectRoot) };
 }
+
+test("each worker request uses its own model or inherits the main model", async () => {
+  const input = await fixture();
+  const taskId = "66666666-6666-4666-8666-666666666666";
+  const parentModel = "xiaomi-token-plan-cn/mimo-v2.6-pro";
+  try {
+    for (const [instanceId, selectedModel] of [["11111111-1111-4111-8111-111111111111", "xiaomi-token-plan-cn/mimo-v2.6-flash"], ["22222222-2222-4222-8222-222222222222", undefined]] as const) {
+      const workOrder: WorkOrder = { ...orders[0], instanceId, modelSelector: selectedModel };
+      let requestModel: string | undefined;
+      const report = await runModelWorkOrders({ ...input, taskId, orders: [workOrder], modelSelector: parentModel,
+        async onWorkerEvent(_order, state) {
+          if (state !== "started") return;
+          const request = JSON.parse(await readFile(join(input.dataRoot, "worker-runs", taskId, instanceId, "request.json"), "utf8")) as { modelSelector: string };
+          requestModel = request.modelSelector;
+          throw new Error("Stop before model launch");
+        },
+      });
+      expect(report.status).toBe("rejected");
+      expect(requestModel).toBe(selectedModel ?? parentModel);
+    }
+  } finally {
+    await rm(input.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
+test("worker model selectors must use an allowed provider", () => {
+  expect(() => validateOrders([{ ...orders[0], modelSelector: "other/model" }])).toThrow("Model is not supported");
+  expect(() => validateOrders([{ ...orders[0], modelSelector: "xiaomi-token-plan-cn/mimo-v2.6-flash" }])).not.toThrow();
+});
 
 test("two isolated workers merge only their owned changes", async () => {
   const input = await fixture();

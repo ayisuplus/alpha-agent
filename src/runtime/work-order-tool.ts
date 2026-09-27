@@ -12,7 +12,7 @@ import type { WorkOrder } from "./work-orders";
 import type { BrowserSession } from "./visible-browser";
 
 const parameters = type({
-  orders: type({ id: "string", objective: "string", ownedPaths: "string[]", resources: "string[]", readPaths: "string[]?", mode: "string?", expertId: "string?", skillIds: "string[]?", dependsOn: "string[]?", acceptance: "string[]?" }).array(),
+  orders: type({ id: "string", objective: "string", ownedPaths: "string[]", resources: "string[]", readPaths: "string[]?", mode: "string?", expertId: "string?", skillIds: "string[]?", modelSelector: "string?", dependsOn: "string[]?", acceptance: "string[]?" }).array(),
 });
 
 export function resolveWorkOrders(orders: WorkOrder[], presets: readonly AgentPresetSnapshot[], skills: readonly Skill[] = []): WorkOrder[] {
@@ -32,7 +32,7 @@ export function createWorkOrderTool(ledger: TaskLedger, dataRoot: string, signal
   return {
     name: "alpha_delegate",
     label: "Delegate scoped work",
-    description: "Run one or two independent work orders in isolated instances. The cognitive plan can propose experts, but only selected orders are started. Use expertId only for an enabled expert; omit for a neutral instance. Set readPaths to the specific source files or directories this worker may inspect; ownedPaths are also readable. Read-only investigate/review orders must have no ownedPaths. Implementation ownership must be disjoint. Parent verifies integration and final acceptance.",
+    description: "Run one or two independent work orders in isolated instances. Set modelSelector per order for a different worker model; omit it to inherit the main agent model. The cognitive plan can propose experts, but only selected orders are started. Use expertId only for an enabled expert; omit for a neutral instance. Set readPaths to the specific source files or directories this worker may inspect; ownedPaths are also readable. Read-only investigate/review orders must have no ownedPaths. Implementation ownership must be disjoint. Parent verifies integration and final acceptance.",
     parameters,
     loadMode: "essential",
     async execute(_toolCallId, args, _onUpdate, _ctx, toolSignal) {
