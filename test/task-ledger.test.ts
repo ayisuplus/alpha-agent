@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskLedger } from "../src/runtime/task-ledger";
+import type { WorkOrder } from "../src/runtime/work-orders";
 import { taskPrompt } from "../src/runtime/omp-runner";
 
 test("a source change makes old evidence and preview ineligible for completion", async () => {
@@ -153,6 +154,22 @@ test("CLI guidance survives a failed model start and a ledger reload", async () 
     const restored = await TaskLedger.load(ledger.file);
     expect(restored.state.status).toBe("active");
     expect(taskPrompt(restored, "Continue")).toContain("Do not delete the original data");
+    await restored.needInput("Optional command needs approval", "approval");
+    const briefFile = join(root, "guidance.txt");
+    const multiline = "Skip the optional command.\nContinue with configured checks.";
+    await Bun.write(briefFile, multiline);
+    const retry = Bun.spawn([process.execPath, "run", join(import.meta.dir, "..", "src", "cli.ts"), "resume", "--ledger", ledger.file, "--brief-file", briefFile, "--model", "alpha-invalid/no-model"], {
+      cwd: root, stdout: "ignore", stderr: "ignore",
+    });
+    let resumed = false;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const current = await TaskLedger.load(ledger.file);
+      if (current.state.status === "active" && current.state.guidanceHistory?.some(item => item.instruction === multiline)) { resumed = true; break; }
+      await Bun.sleep(100);
+    }
+    retry.kill();
+    await retry.exited;
+    expect(resumed).toBe(true);
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
@@ -170,5 +187,30 @@ test("a task remembers its own model across reloads until it is cleared", async 
     await ledger.setModel("deepseek/deepseek-flash");
     expect((await TaskLedger.load(ledger.file)).state.modelSelector).toBe("deepseek/deepseek-flash");
     await expect(ledger.setModel("alibaba-token-plan/qwen3.6-flash")).rejects.toThrow("not supported");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("an uncertain worker request is re-resolvable instead of blocking completion forever", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-uncertain-request-"));
+  try {
+    const project = join(root, "product");
+    await mkdir(project);
+    await writeFile(join(project, "app.txt"), "v1");
+    const ledger = await TaskLedger.create(join(root, "state"), {
+      objective: "Install a project dependency",
+      projectRoot: project,
+      taskType: "code-change",
+      criteria: [{ id: "check", description: "Checked output", kind: "test" }],
+    });
+    const agentId = crypto.randomUUID();
+    const runId = crypto.randomUUID();
+    const order: WorkOrder = { id: "install", objective: "Implement the feature", decisionReason: "Dependency work belongs to one worker", mode: "implement", ownedPaths: ["."], resources: [], acceptance: ["Dependency installs and the feature works"], agentId, instanceId: runId, fullAccess: true };
+    await ledger.queueWorker({ id: runId, order });
+    const request = await ledger.recordWorkerRequest({ id: crypto.randomUUID(), agentId, runId, orderId: "install", kind: "dependency", blockedStep: "npm install is required", capabilityIds: [], contractVersion: 1, sourceRevision: ledger.state.revision });
+    await ledger.updateWorkerRequest(request.id, { status: "uncertain", reason: "Installation receipt requires inspection" });
+    expect(ledger.completionGaps()).toContain("worker-request");
+    await expect(ledger.updateWorkerRequest(request.id, { status: "applied", reason: "Receipt inspected and available" })).resolves.toMatchObject({ status: "applied" });
+    expect(ledger.completionGaps()).not.toContain("worker-request");
+    await expect(ledger.updateWorkerRequest(request.id, { status: "rejected" })).rejects.toThrow("already resolved");
   } finally { await rm(root, { recursive: true, force: true }); }
 });

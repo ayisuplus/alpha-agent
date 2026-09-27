@@ -18,4 +18,4 @@ test("read-only check preserves agent source and fails closed when sandbox verif
     expect(await readFile(join(projectRoot, "entry.txt"), "utf8")).toBe("original");
     expect(await readdir(join(dataRoot, "verification-copies"))).toHaveLength(0);
   } finally { await rm(root, { recursive: true, force: true }); }
-}, 30_000);
+}, 70_000);

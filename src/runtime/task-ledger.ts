@@ -55,6 +55,7 @@ export interface RunRecord {
   model: string;
   stage?: "coordinator" | "implementation" | "review" | "worker";
   instanceId?: string;
+  thinkingPolicyVersion?: number;
   contractVersion?: number;
   toolCalls: number;
   compactions?: number;
@@ -80,9 +81,12 @@ export interface GuidanceRecord {
 export type ExecutionMode = "investigate" | "implement" | "review";
 export interface AgentRecord {
   id: string;
-  expert: import("./agent-presets").AgentPresetSnapshot;
+  expert?: import("./agent-presets").AgentPresetSnapshot;
   skillIds: string[];
-  skillSnapshots?: Array<{ id: string; hash: string; revision: string }>;
+  skillSnapshots?: NonNullable<import("./work-orders").WorkOrder["skillSnapshots"]>;
+  capabilityIds?: string[];
+  capabilitySnapshots?: NonNullable<import("./work-orders").WorkOrder["capabilitySnapshots"]>;
+  contextRevision?: number;
   mode: ExecutionMode;
   orderId: string;
   lastAttemptId: string;
@@ -125,7 +129,7 @@ export interface CognitionState {
   skillSearches?: Array<{ key: string; gapDescription: string; query: string; resultCount: number; error?: string; recordedAt: string }>;
   skillProposals?: Array<{ id: string; key: string; name: string; description: string; source: string; revision: string; path: string; installs: number; requirements?: { tools: string[]; services: string[]; conflicts: string[] }; status: "pending" | "rejected" | "installed"; installedSkillId?: string; recordedAt: string }>;
   agents?: AgentRecord[];
-  instances?: Array<{ id: string; agentId?: string; parentId?: string; orderId: string; mode: ExecutionMode; expert?: { id: string; name: string; hash: string }; skills: Array<{ id: string; hash: string; revision: string }>; contractVersion: number; cognitionRevision: number; baseRevision: string | null; status: "queued" | "running" | "returned" | "completed" | "blocked" | "failed" | "cancelled"; integration?: "pending" | "merged" | "conflict"; workRoot?: string; worktreePath?: string; order?: import("./work-orders").WorkOrder; startedAt: string; endedAt?: string; findings?: string[] }>;
+  instances?: Array<{ id: string; agentId?: string; parentId?: string; orderId: string; mode: ExecutionMode; expert?: { id: string; name: string; hash: string }; skills: NonNullable<import("./work-orders").WorkOrder["skillSnapshots"]>; contractVersion: number; cognitionRevision: number; baseRevision: string | null; status: "queued" | "running" | "returned" | "completed" | "blocked" | "failed" | "cancelled"; integration?: "pending" | "merged" | "conflict"; decisionReason?: string; integrationDecision?: { action: "integrate" | "reject"; reason: string; runId: string; contractVersion: number; sourceRevision: string | null; recordedAt: string }; workRoot?: string; worktreePath?: string; order?: import("./work-orders").WorkOrder; startedAt: string; endedAt?: string; findings?: string[] }>;
 }
 export interface DevelopmentState {
   enabled: true;
@@ -150,6 +154,7 @@ export interface TaskState {
   cognition?: CognitionState;
   workerCognition?: WorkerCognition;
   workerReceipts?: Array<{ id: string; attemptId: string; kind: "check"; sourceRevision: string | null; passed: boolean; path: string; recordedAt: string }>;
+  workerRequests?: WorkerRequestRecord[];
   development?: DevelopmentState;
   workerOutcome?: { status: "completed" | "needs-context" | "blocked" | "failed"; findings: string[]; reviewVerdict?: "pass" | "changes-requested" | "inconclusive"; reviewEvidence?: Array<{ path: string; excerpt: string }>; requests?: Array<{ capability: string; reason: string; details: string }> };
   projectRoot: string;
@@ -173,6 +178,35 @@ export interface TaskState {
   checkpoint?: { runId: string; codeCommits: Array<{ root: string; commit: string }>; memoryCommit: string; recordedAt: string };
   checkpointError?: string;
   checkpointStatus?: "pending" | "committed" | "failed";
+}
+
+export interface WorkerRequestRecord {
+  id: string;
+  agentId: string;
+  runId: string;
+  orderId: string;
+  kind: "capability" | "dependency" | "context" | "permission";
+  blockedStep: string;
+  capabilityIds: string[];
+  evidence?: string[];
+  sourceEvidence?: Array<{ path: string; excerpt: string }>;
+  recommendation?: string;
+  targetEnvironment?: string;
+  proposedArgv?: string[];
+  network?: boolean;
+  contractVersion: number;
+  sourceRevision: string | null;
+  status: "open" | "awaiting-approval" | "applied" | "rejected" | "uncertain";
+  reason?: string;
+  resolutionRunId?: string;
+  approvalId?: string;
+  installArgv?: string[];
+  cwdRelative?: string;
+  availabilityPath?: string;
+  installNetwork?: boolean;
+  commandReceipt?: { id: string; status: string; exitCode?: number; logPath?: string; revision?: string };
+  recordedAt: string;
+  resolvedAt?: string;
 }
 
 
@@ -351,6 +385,7 @@ export class TaskLedger {
     if ((this.state.taskType ?? "web-product") === "web-product" && (!this.state.preview || this.state.preview.revision !== this.state.revision)) gaps.push("local-preview");
     if (this.state.development?.enabled && (this.state.development.review?.verdict !== "pass" || this.state.development.review.revision !== this.state.revision || this.state.development.review.contractVersion !== (this.state.contractVersion ?? 1))) gaps.push("development-review");
     if (this.state.cognition?.gaps.some(item => !item.resolvedAt)) gaps.push("capability-gap");
+    if (this.state.workerRequests?.some(item => ["open", "awaiting-approval", "uncertain"].includes(item.status))) gaps.push("worker-request");
     if (this.state.designatedExpertId && !this.state.cognition?.instances?.some(item => item.expert?.id === this.state.designatedExpertId && item.status === "completed" && item.contractVersion === (this.state.contractVersion ?? 1))) gaps.push("designated-expert");
     if (this.state.planApproval && this.state.phase === "execute" && this.state.cognition?.steps.some(step => step.status !== "complete" && step.status !== "cancelled")) gaps.push("plan-steps");
     if (this.state.cognition?.instances?.some(item => item.order && ["queued", "running", "returned"].includes(item.status))) gaps.push("worker-integration");
@@ -512,7 +547,7 @@ export class TaskLedger {
     await this.save();
   }
 
-  async recordDispatch(input: { id: string; orderId: string; mode: ExecutionMode; expert?: { id: string; name: string; hash: string }; skills: Array<{ id: string; hash: string; revision: string }> }): Promise<void> {
+  async recordDispatch(input: { id: string; orderId: string; mode: ExecutionMode; expert?: { id: string; name: string; hash: string }; skills: Array<{ id: string; hash: string; revision: string }>; decisionReason?: string }): Promise<void> {
     this.assertActive();
     this.state.cognition ??= { revision: 1, recipeVersion: 1, summary: this.state.objective, candidates: [], steps: [], gaps: [], amendments: [] };
     if (this.state.cognition.instances?.some(item => item.id === input.id)) return;
@@ -528,26 +563,28 @@ export class TaskLedger {
     if (this.state.cognition.instances?.some(item => item.id === input.id)) throw new Error("Worker attempt already exists");
     const { preset: _preset, ...order } = input.order;
     if (order.agentId) {
-      if (!_preset?.package?.skills.length || !order.skillIds?.length) throw new Error("Subagent requires a versioned expert persona and Skill");
+      if (!_preset && (!order.acceptance?.some(item => item.trim()) || !(order.ownedPaths.length || order.readPaths?.length))) throw new Error("Neutral subagent requires acceptance criteria and source scope");
       const agents = this.state.cognition.agents ??= [];
       const existing = agents.find(item => item.id === order.agentId);
       if (existing) {
-        if (existing.expert.hash !== _preset.hash || existing.orderId !== order.id || JSON.stringify(existing.skillIds) !== JSON.stringify(order.skillIds)) throw new Error("Subagent identity or expert/skills changed");
+        if (existing.expert?.hash !== _preset?.hash || existing.orderId !== order.id || existing.skillIds.some(id => !(order.skillIds ?? []).includes(id))) throw new Error("Subagent identity or expert/skills changed");
         if (["queued", "running"].includes(existing.status)) throw new Error("Subagent is already running");
         const previous = (this.state.cognition.instances ?? []).find(item => item.id === existing.lastAttemptId);
         if (previous?.status === "returned") { previous.status = "cancelled"; previous.findings = [...(previous.findings ?? []), "Superseded by continuation"]; previous.endedAt = new Date().toISOString(); }
         existing.lastAttemptId = input.id;
         existing.mode = order.mode ?? "implement";
+        existing.capabilityIds = [...(order.capabilityIds ?? [])];
+        existing.contextRevision = order.contextRevision ?? existing.contextRevision ?? 1;
         existing.status = "queued";
-      } else agents.push({ id: order.agentId, expert: _preset, skillIds: [...order.skillIds], mode: order.mode ?? "implement", orderId: order.id, lastAttemptId: input.id, status: "queued" });
+      } else agents.push({ id: order.agentId, ...(_preset ? { expert: _preset } : {}), skillIds: [...(order.skillIds ?? [])], capabilityIds: [...(order.capabilityIds ?? [])], contextRevision: order.contextRevision ?? 1, mode: order.mode ?? "implement", orderId: order.id, lastAttemptId: input.id, status: "queued" });
     }
-    (this.state.cognition.instances ??= []).push({ id: input.id, agentId: order.agentId, parentId: input.parentId, orderId: order.id, order, mode: order.mode ?? "implement", expert: input.expert, skills: [], contractVersion: this.state.contractVersion ?? 1, cognitionRevision: this.state.cognition.revision, baseRevision: this.state.revision, status: "queued", startedAt: new Date().toISOString() });
+    (this.state.cognition.instances ??= []).push({ id: input.id, agentId: order.agentId, parentId: input.parentId, orderId: order.id, order, decisionReason: order.decisionReason, mode: order.mode ?? "implement", expert: input.expert, skills: [], contractVersion: this.state.contractVersion ?? 1, cognitionRevision: this.state.cognition.revision, baseRevision: this.state.revision, status: "queued", startedAt: new Date().toISOString() });
     const step = this.state.cognition.steps.find(item => item.id === order.id);
     if (step) { step.status = "running"; step.statusReason = `工单 ${input.id} 排队中`; }
     await this.save();
   }
 
-  async updateWorker(id: string, status: "running" | "returned" | "completed" | "blocked" | "failed" | "cancelled", patch: { workRoot?: string; worktreePath?: string; findings?: string[]; integration?: "pending" | "merged" | "conflict"; skills?: Array<{ id: string; hash: string; revision: string }>; cognition?: AgentRecord["cognition"] } = {}): Promise<void> {
+  async updateWorker(id: string, status: "running" | "returned" | "completed" | "blocked" | "failed" | "cancelled", patch: { workRoot?: string; worktreePath?: string; findings?: string[]; integration?: "pending" | "merged" | "conflict"; integrationDecision?: NonNullable<CognitionState["instances"]>[number]["integrationDecision"]; skills?: NonNullable<import("./work-orders").WorkOrder["skillSnapshots"]>; capabilities?: NonNullable<import("./work-orders").WorkOrder["capabilitySnapshots"]>; cognition?: AgentRecord["cognition"] } = {}): Promise<void> {
     const instance = this.state.cognition?.instances?.find(item => item.id === id);
     if (!instance || !instance.order) throw new Error("Worker attempt not found");
     if (["completed", "blocked", "failed", "cancelled"].includes(instance.status)) return;
@@ -557,8 +594,13 @@ export class TaskLedger {
       agent.status = status === "blocked" ? "waiting-primary" : status;
       if (patch.cognition) agent.cognition = patch.cognition;
       if (patch.skills) {
+        agent.skillIds = patch.skills.map(item => item.id);
         agent.skillSnapshots = patch.skills.map(item => ({ ...item }));
         if (instance.order) instance.order.skillSnapshots = patch.skills.map(item => ({ ...item }));
+      }
+      if (patch.capabilities) {
+        agent.capabilitySnapshots = patch.capabilities.map(item => ({ ...item }));
+        if (instance.order) instance.order.capabilitySnapshots = patch.capabilities.map(item => ({ ...item }));
       }
     }
     if (status !== "running") instance.endedAt = new Date().toISOString();
@@ -582,6 +624,31 @@ export class TaskLedger {
     (this.state.workerReceipts ??= []).push({ id, ...input, kind: "check", recordedAt: new Date().toISOString() });
     await this.save();
     return id;
+  }
+
+  async recordWorkerRequest(input: Omit<WorkerRequestRecord, "status" | "recordedAt" | "reason" | "resolutionRunId" | "approvalId" | "commandReceipt" | "resolvedAt">): Promise<WorkerRequestRecord> {
+    const existing = this.state.workerRequests?.find(item => item.id === input.id);
+    if (existing) {
+      for (const key of ["agentId", "runId", "orderId", "kind", "blockedStep", "contractVersion", "sourceRevision"] as const) if (existing[key] !== input[key]) throw new Error("Worker request ID was reused");
+      return existing;
+    }
+    if (!this.state.cognition?.instances?.some(item => item.id === input.runId && item.agentId === input.agentId)) throw new Error("Worker request has no matching run");
+    const request: WorkerRequestRecord = { ...input, capabilityIds: [...input.capabilityIds], status: "open", recordedAt: new Date().toISOString() };
+    (this.state.workerRequests ??= []).push(request);
+    await this.save();
+    return request;
+  }
+
+  async updateWorkerRequest(id: string, patch: Pick<WorkerRequestRecord, "status"> & Partial<Pick<WorkerRequestRecord, "reason" | "resolutionRunId" | "approvalId" | "commandReceipt" | "installArgv" | "cwdRelative" | "availabilityPath" | "installNetwork">>): Promise<WorkerRequestRecord> {
+    const request = this.state.workerRequests?.find(item => item.id === id);
+    if (!request) throw new Error("Worker request not found");
+    if (["applied", "rejected"].includes(request.status)) throw new Error("Worker request is already resolved");
+    const priorStatus = request.status;
+    Object.assign(request, patch);
+    if (["applied", "rejected", "uncertain"].includes(patch.status)) request.resolvedAt = new Date().toISOString();
+    else if (priorStatus === "uncertain") delete request.resolvedAt;
+    await this.save();
+    return request;
   }
 
   async prepareWorkerRun(): Promise<void> {

@@ -1668,6 +1668,27 @@ const server = Bun.serve({
       try {
         const approval = await commandApprovals.decide(ledger.state.id, approvalDecision[2], body.approved);
         appendActivity(ledger.state.id, "status", `命令${body.approved ? "已批准" : "已拒绝"}：${approval.argv.join(" ")}`);
+        const supervisor = WorkerSupervisor.forTask(ledger.state.id);
+        const owner = supervisor?.ledger ?? ledger;
+        const workerRequest = owner.state.workerRequests?.find(item => item.approvalId === approval.id && item.status === "awaiting-approval");
+        if (workerRequest) {
+          if (body.approved) {
+            try {
+              if (supervisor) await supervisor.resumeApprovedRequest(workerRequest.id);
+              else throw new Error("Coordinator is not running");
+            } catch (error) {
+              appendActivity(ledger.state.id, "status", `依赖审批已通过，等待任务恢复：${error instanceof Error ? error.message : String(error)}`);
+              await taskQueue.enqueue(ledger.state.id, `Resume approved dependency request ${workerRequest.id} with alpha_worker_resolve, then inspect and integrate the subagent result.`);
+              void drainQueue();
+            }
+          } else {
+            await owner.updateWorkerRequest(workerRequest.id, { status: "rejected", reason: "User denied the installation command" });
+            if (supervisor) {
+              try { await supervisor.mailbox.send(workerRequest.agentId, "decision", "User denied the installation command", workerRequest.id, workerRequest.id); }
+              catch (error) { appendActivity(ledger.state.id, "status", `依赖请求已拒绝，但通知子代理失败：${error instanceof Error ? error.message : String(error)}`); }
+            }
+          }
+        }
         return Response.json({ approval });
       } catch (error) { return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 409 }); }
     }

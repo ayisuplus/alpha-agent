@@ -23,8 +23,14 @@ async function canonicalTarget(path: string): Promise<string> {
   }
 }
 
+export function stripReadSelector(input: string): string {
+  const token = String.raw`-?\d+(?:-\d*|\+\d+)?`;
+  const ranges = `${token}(?:,${token})*`;
+  return input.replace(new RegExp(String.raw`:(?:raw(?::${ranges})?|${ranges}(?::raw)?|conflicts|img)$`, "i"), "");
+}
+
 function filePath(input: string, allowSelector: boolean): string {
-  const path = allowSelector ? input.replace(/:(?:\d+(?:-\d+|\+\d+)?|raw|conflicts)$/i, "") : input;
+  const path = allowSelector ? stripReadSelector(input) : input;
   if (!path || /[;*?\r\n]/.test(path) || /^[a-z][\w+.-]*:\/\//i.test(path)) throw new Error(`Unsupported file target: ${input}`);
   return path;
 }

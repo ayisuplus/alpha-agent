@@ -3,6 +3,7 @@ import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { TaskLedger } from "./task-ledger";
+import { stripReadSelector } from "./file-tool-guard";
 
 const parameters = type({ verdict: "'pass' | 'changes-requested' | 'inconclusive'", findings: "string[]", evidence: type({ path: "string", excerpt: "string" }).array().optional() });
 
@@ -11,11 +12,11 @@ export async function validateReviewEvidence(projectRoot: string, items: Array<{
   const evidence: Array<{ path: string; excerpt: string }> = [];
   for (const item of items) {
     if (item.excerpt.trim().length < 20 || item.excerpt.length > 500) throw new Error("源码引用须为 20–500 字符的原文");
-    const path = await realpath(resolve(root, item.path));
+    const path = await realpath(resolve(root, stripReadSelector(item.path)));
     const relativePath = relative(root, path);
     if (!relativePath || relativePath === ".." || relativePath.startsWith(`..\\`) || relativePath.startsWith("../") || isAbsolute(relativePath)) throw new Error("源码引用必须位于项目目录内");
     if (!(await readFile(path, "utf8")).includes(item.excerpt)) throw new Error(`源码引用与当前文件不一致：${item.path}`);
-    evidence.push({ path: relativePath, excerpt: item.excerpt });
+    evidence.push({ path: relativePath.replaceAll("\\", "/"), excerpt: item.excerpt });
   }
   return evidence;
 }

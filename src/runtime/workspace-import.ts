@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { copyFile, lstat, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, rmdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { TaskLedger, fingerprintSource, type WorkspaceOrigin } from "./task-ledger";
 import { configuredChecks } from "./code-check";
@@ -27,7 +28,7 @@ function inside(root: string, path: string): boolean {
 }
 
 async function git(source: string, args: string[]): Promise<{ code: number; output: string; error: string }> {
-  const child = Bun.spawn(["git", "-C", source, ...args], { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+  const child = Bun.spawn(["git", "-c", "core.fsmonitor=false", "-C", source, ...args], { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
   const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   return { code, output, error };
 }
@@ -91,6 +92,18 @@ export async function importCodeWorkspace(input: { sourcePath: string; productsR
     await mkdir(dirname(destination), { recursive: true });
     await copyFile(from, destination);
     files[path] = createHash("sha256").update(await readFile(destination)).digest("hex");
+  }
+  if (source.kind === "git") {
+    const paths = Object.keys(files);
+    for (let index = 0; index < paths.length; index += 80) {
+      const added = await git(managedPath, ["add", "--force", "--", ...paths.slice(index, index + 80)]);
+      if (added.code !== 0) throw new Error(`Cannot stage imported Git snapshot: ${added.error.slice(0, 400)}`);
+    }
+    const hooks = await mkdtemp(join(tmpdir(), "alpha-import-hooks-"));
+    try {
+      const committed = await git(managedPath, ["-c", "user.name=Alpha", "-c", "user.email=alpha@local", "-c", `core.hooksPath=${hooks}`, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "alpha: imported source baseline"]);
+      if (committed.code !== 0) throw new Error(`Cannot commit imported Git snapshot: ${committed.error.slice(0, 400)}`);
+    } finally { await rmdir(hooks); }
   }
   const snapshot: ImportSnapshot = { sourcePath, managedPath, kind: source.kind, importedAt: new Date().toISOString(), files, excluded };
   await mkdir(dirname(manifestFile), { recursive: true });

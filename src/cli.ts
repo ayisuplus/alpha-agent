@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { acceptCodeChange } from "./runtime/code-acceptance";
 import { AgentPresetStore } from "./runtime/agent-presets";
@@ -13,6 +14,13 @@ import type { RunEvent } from "./runtime/omp-runner";
 function option(name: string): string | undefined {
   const index = Bun.argv.indexOf(`--${name}`);
   return index >= 0 ? Bun.argv[index + 1] : undefined;
+}
+
+async function brief(): Promise<string | undefined> {
+  const inline = option("brief");
+  const file = option("brief-file");
+  if (inline && file) throw new Error("Use either --brief or --brief-file");
+  return file ? (await readFile(file, "utf8")).trim() : inline;
 }
 
 const command = Bun.argv[2];
@@ -46,8 +54,8 @@ async function cliTurn(projectRoot: string, existing: TaskLedger | undefined, ru
 }
 if (command === "run") {
   const projectRoot = option("project");
-  const objective = option("brief");
-  if (!projectRoot || !objective) throw new Error("Usage: bun run alpha run --project <directory> --brief <goal> [--model provider/id]");
+  const objective = await brief();
+  if (!projectRoot || !objective) throw new Error("Usage: bun run alpha run --project <directory> (--brief <goal> | --brief-file <path>) [--model provider/id]");
   const controller = new AbortController();
   process.once("SIGINT", () => controller.abort());
   const ledger = await cliTurn(projectRoot, undefined, (onLedger, observeEvent) => runDevelopmentWorkflow({
@@ -67,8 +75,8 @@ if (command === "run") {
   process.stdout.write(`Ledger: ${ledger.file}\n`);
 } else if (command === "run-code") {
   const sourcePath = option("source");
-  const objective = option("brief");
-  if (!sourcePath || !objective) throw new Error("Usage: bun run alpha run-code --source <directory> --brief <goal> [--model provider/id] [--expert expert-id]");
+  const objective = await brief();
+  if (!sourcePath || !objective) throw new Error("Usage: bun run alpha run-code --source <directory> (--brief <goal> | --brief-file <path>) [--model provider/id] [--expert expert-id]");
   const designatedExpertId = option("expert");
   if (designatedExpertId && !(await new AgentPresetStore(dataRoot).enabled()).some(item => item.id === designatedExpertId)) throw new Error(`Expert does not exist or is disabled: ${designatedExpertId}`);
   const ledger = await importCodeWorkspace({ sourcePath, productsRoot: join(dirname(dataRoot), "products"), dataRoot, objective, modelSelector: option("model"), designatedExpertId });
@@ -94,10 +102,10 @@ if (command === "run") {
   console.log(JSON.stringify({ id: ledger.state.id, status: ledger.state.status, revision: ledger.state.revision, pending: ledger.completionGaps(), preview: ledger.state.preview }, null, 2));
 } else if (command === "resume") {
   const file = option("ledger");
-  const correction = option("brief");
-  if (!file || !correction) throw new Error("Usage: bun run alpha resume --ledger <task-file> --brief <correction>");
+  const correction = await brief();
+  if (!file || !correction) throw new Error("Usage: bun run alpha resume --ledger <task-file> (--brief <correction> | --brief-file <path>)");
   const existingLedger = await TaskLedger.load(file);
-  if (existingLedger.state.status === "stopped") await existingLedger.resume(correction);
+  if (existingLedger.state.status === "stopped" || existingLedger.state.status === "needs-input") await existingLedger.resume(correction);
   else await existingLedger.recordGuidance(correction);
   const controller = new AbortController();
   process.once("SIGINT", () => controller.abort());

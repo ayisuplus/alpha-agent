@@ -9,6 +9,7 @@ import { excludedSourceDirectory } from "./source-review";
 export interface WorkOrder {
   id: string;
   objective: string;
+  decisionReason?: string;
   ownedPaths: string[];
   resources: string[];
   readPaths?: string[];
@@ -19,7 +20,11 @@ export interface WorkOrder {
   modelSelector?: string;
   expertId?: string;
   skillIds?: string[];
-  skillSnapshots?: Array<{ id: string; hash: string; revision: string }>;
+  skillSnapshots?: Array<{ id: string; hash: string; revision: string; path?: string }>;
+  capabilityIds?: string[];
+  capabilitySnapshots?: Array<{ id: string; kind: "skill" | "mcp-server" | "mcp-tool" | "builtin-tool"; revision: string; hash?: string }>;
+  contextRevision?: number;
+  install?: { requestId: string; approvalId: string; argv: string[]; cwdRelative: string; availabilityPath: string; network: boolean };
   dependsOn?: string[];
   acceptance?: string[];
   /** Stable identity within the parent task; instanceId remains one execution attempt. */
@@ -89,7 +94,7 @@ export function validateOrders(orders: WorkOrder[], maximum = 2): void {
   const scopes: string[] = [];
   const resources = new Set<string>();
   for (const order of orders) {
-    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(order.id) || ids.has(order.id) || !order.objective.trim() || (!order.fullAccess && (order.mode ?? "implement") === "implement" && order.ownedPaths.length === 0)) throw new Error("Invalid work order");
+    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(order.id) || ids.has(order.id) || !order.objective.trim() || ((order.mode ?? "implement") === "implement" && order.ownedPaths.length === 0)) throw new Error("Invalid work order");
     if (order.mode && !["investigate", "implement", "review"].includes(order.mode)) throw new Error("Invalid work order mode");
     if (order.modelSelector !== undefined && !isAllowedModelSelector(order.modelSelector)) throw new Error(`Model is not supported: ${order.modelSelector}`);
     if (!order.fullAccess && order.mode && order.mode !== "implement" && order.ownedPaths.length) throw new Error("Read-only orders cannot own source paths");

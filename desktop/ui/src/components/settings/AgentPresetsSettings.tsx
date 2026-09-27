@@ -115,7 +115,7 @@ export function AgentPresetsSettings() {
   </div>;
 
   return <section className="agent-presets-settings">
-    <SectionTitle title="专家库" description="专家由人设和可执行方法 Skill 组成。只启用当前需要的专家；停用保留原内容与历史任务快照。核心模板覆盖全栈开发、AI 科研和内容创作。" />
+    <SectionTitle title="专家库" description="专家由人设和可执行方法 Skill 组成。只启用当前需要的专家；停用保留原内容与历史任务快照。核心模板覆盖全栈开发、AI 科研、内容创作、平面游戏开发与文档办公。" />
     <Button size="sm" disabled={busy} onClick={() => { setSelectedId(""); setSelected(null); setDraft({ name: "", description: "", instructions: "", skillIds: "" }); }}>创建专家</Button>
     <div className="agent-presets-layout">
       <div className="agent-presets-list" aria-label="专家库">

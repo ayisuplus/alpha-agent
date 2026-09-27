@@ -26,6 +26,10 @@ test("every core specialty is discoverable and dispatches a readable immutable S
       backend: "后端 数据库 事务 backend database SQL",
       "test-automation": "回归测试 代码审查 testing regression debugging",
       "release-engineer": "部署 健康检查 回滚 deployment release DevOps",
+      "game-designer": "2D 游戏核心循环 玩法机制 数值经济 关卡结构 难度曲线 教学 game design core loop mechanics economy level design",
+      "gameplay-engineer": "2D 游戏主循环 场景状态机 碰撞与手感 输入 存档 图集批处理 帧预算 game engine gameplay collision physics sprite input performance",
+      "game-artist": "像素风格 精灵图集 帧动画 骨骼动画 瓦片场景 UI皮肤 特效 pixel art sprite atlas tileset animation skin VFX",
+      "game-playtest": "试玩验证 数值平衡核对 难度曲线 手感验收 性能稳定性 缺陷回归 playtest balance difficulty tuning regression",
       "literature-researcher": "文献 论文检索 引用核验 literature citations",
       "experiment-designer": "实验设计 消融 数据划分 experiment ablation reproducibility",
       "data-analyst": "统计单位 效应量 置信区间 statistics uncertainty",
@@ -33,6 +37,18 @@ test("every core specialty is discoverable and dispatches a readable immutable S
       "content-strategist": "内容策划 平台改编 content strategy copywriting",
       "story-writer": "故事人物 剧本 对白 story screenplay narrative",
       "visual-director": "分镜 音画 视频生成包 visual storyboard video audio",
+      "short-video-operator": "抖音起号 流量池 发布优化 完播率 快手 douyin short video growth",
+      "bilibili-operator": "B站分区 中长视频 选题系列化 弹幕 三连 投稿 bilibili danmaku",
+      "xiaohongshu-planner": "小红书种草 搜索关键词 封面标题 笔记 xiaohongshu red note seo",
+      "wechat-operator": "视频号 社交裂变 公众号 完读率 小绿书 私域 wechat channels",
+      "content-growth-analyst": "内容数据复盘 指标口径 漏斗诊断 对标拆解 pdca content analytics benchmark",
+      "live-stream-operator": "直播 主播 脚本话术 场控 起号破层 播后复盘 live stream commerce",
+      "compliance-reviewer": "内容合规 强制标注 广告法 品类资质 版权 平台红线 审核分级 compliance moderation",
+      "doc-writer": "Word 文档 撰写 排版 公文 套版 报告 docx",
+      "data-sheet-expert": "Excel 表格 数据清洗 公式 透视 图表 spreadsheet",
+      "presentation-designer": "PPT 演示 幻灯片 结构 美化 演讲备注 slides",
+      "document-processor": "PDF 合并 拆分 水印 格式转换 OCR document",
+      "file-manager": "文件管理 整理 搜索 清理 大文件 重复 空间 file organization",
     };
     expect(core).toHaveLength(Object.keys(queries).length);
     const snapshots = core.map(presetSnapshot);
@@ -71,7 +87,7 @@ test("curation retires selected legacy experts without deleting snapshots or ove
     await store.setEnabled(edited.id, false);
     await store.installCoreExperts([]);
     expect(await store.get(edited.id)).toMatchObject({ name: edited.name, hash: edited.hash, enabled: false });
-    expect(await store.list()).toHaveLength(15);
+    expect(await store.list()).toHaveLength(31);
     await store.delete(legacy.id);
     expect(await store.loadBundledSkills(frozen)).toHaveLength(1);
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -96,7 +112,7 @@ test("templates are optional, user experts persist, and deleted experts leave fr
     const store = new AgentPresetStore(root);
     const initial = await store.list();
     expect(initial).toEqual([]);
-    expect(await store.templates()).toHaveLength(13);
+    expect(await store.templates()).toHaveLength(29);
     expect((await store.get("frontend")).skillIds).toEqual(["alpha-core:implement-frontend"]);
     const original = await store.get("frontend");
     const copy = await store.copy("frontend");

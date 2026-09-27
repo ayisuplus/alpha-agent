@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent";
+import { createAgentSession, SessionManager, type CustomTool } from "@oh-my-pi/pi-coding-agent";
 import { ompRegistry } from "./models";
 import { DEFAULT_MODEL, isAllowedModelSelector } from "./model-policy";
 import { TaskLedger, type TaskState } from "./task-ledger";
@@ -39,11 +39,15 @@ import { createWorkerResultTool } from "./worker-result-tool";
 import { createWorkerCapabilityTool } from "./worker-capability-tool";
 import { createDevelopmentReviewTool } from "./development-review-tool";
 import { createSkillResourceTool } from "./skill-resource-tool";
+import { resolvePoolSkill } from "./capability-pool";
+import { createCapabilityMCPTool } from "./capability-mcp-tool";
 import { initialExpertCandidates } from "./expert-selection";
 import { validateSkillBindings } from "./skill-binding";
 import { loadWorkerSkillSnapshots } from "./skill-snapshot";
 import { createWorkerCognitionTool } from "./worker-cognition-tool";
 import { createWorkerMailboxTools } from "./agent-mailbox";
+import { ROLE_THINKING_POLICY_VERSION, roleThinkingInstructions } from "./role-thinking";
+import { createCapabilitySearchTool } from "./capability-tool";
 import type { BrowserSession } from "./visible-browser";
 
 export interface RunOptions {
@@ -63,6 +67,7 @@ export interface RunOptions {
   browserUrl?: string;
   browserAccess?: () => boolean;
   browserProxyDir?: string;
+  mcpProxyTools?: CustomTool[];
   onNeedsInput?: (reason: string) => void;
   existingLedger?: TaskLedger;
   maxToolCalls?: number;
@@ -132,6 +137,7 @@ export function cognitionSnapshot(ledger: TaskLedger): string {
     cognition?.openQuestions?.length ? `Open questions: ${bounded(cognition.openQuestions.join("; "), 600)}` : "",
     cognition?.steps.length ? `Steps: ${bounded(cognition.steps.map(step => `${step.id} [${step.mode}/${step.status}] ${step.objective}; needs ${step.dependsOn.join(",") || "none"}${step.statusReason ? `; result ${step.statusReason}` : ""}`).join(" | "), 1_500)}` : "",
     cognition?.gaps.some(gap => !gap.resolvedAt) ? `Unresolved capability gaps: ${bounded(cognition.gaps.filter(gap => !gap.resolvedAt).map(gap => `${gap.kind}: ${gap.description}`).join(" | "), 650)}` : "",
+    ledger.state.workerRequests?.some(item => ["open", "awaiting-approval", "uncertain"].includes(item.status)) ? `Worker requests: ${bounded(ledger.state.workerRequests.filter(item => ["open", "awaiting-approval", "uncertain"].includes(item.status)).map(item => `${item.id} [${item.status}/${item.kind}] agent ${item.agentId}; ${item.blockedStep}; approval ${item.approvalId ?? "none"}`).join(" | "), 1000)}` : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -154,6 +160,7 @@ export function workerSystemPrompt(order: WorkOrder, preset?: AgentPresetSnapsho
   if (order.presetId && (!preset || order.presetId !== preset.id)) throw new Error(`角色预设快照缺失：${order.presetId}`);
   if (preset) verifyPresetSnapshot(preset);
   return [
+    ...roleThinkingInstructions("worker"),
     ...(order.fullAccess && order.mode === "implement" ? [
       "You are an isolated Alpha worker. Complete the assigned work order inside your Git worktree. You may read and edit any project file needed for the task. The coordinator reviews your actual changes before integration.",
       `Suggested coordination paths: ${[...new Set([...order.ownedPaths, ...(order.readPaths ?? [])])].join(", ") || "none"}. These are task hints, not access limits.`,
@@ -164,6 +171,7 @@ export function workerSystemPrompt(order: WorkOrder, preset?: AgentPresetSnapsho
       `Readable project paths: ${[...new Set([...order.ownedPaths, ...(order.readPaths ?? [])])].join(", ") || "none"}. Submit alpha_worker_result before ending.`,
     ]),
     ...(order.acceptance?.length ? [`Acceptance required for this order: ${order.acceptance.join(" | ")}`] : []),
+    ...(order.decisionReason ? [`Coordinator delegation reason: ${order.decisionReason}`] : []),
     ...(order.skillSnapshots?.length ? [`Selected Skill snapshots: ${order.skillSnapshots.map(item => `${item.id}@${item.revision.slice(0, 8)} sha256 ${item.hash}`).join(" | ")}. Read only these Skill resources when relevant.`] : []),
     ...(preset ? [`Selected role: ${preset.name} (${preset.id}, sha256 ${preset.hash}). The role is task guidance; Alpha's worktree, approval and budget rules remain authoritative.`, preset.instructions] : []),
     ...(order.agentId ? [`Your stable agent ID is ${order.agentId}; this run is ${order.instanceId}. Use alpha_cognition_update to preserve findings and next actions. Use alpha_send to report or ask the primary agent, and alpha_inbox to read and acknowledge replies. Do not address another subagent directly.`] : []),
@@ -194,7 +202,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     designatedExpertId: options.designatedExpertId,
     startMode: options.startMode,
     continueUntilAccepted: options.continueUntilAccepted,
-    goalBudget: options.continueUntilAccepted ? { maxToolCalls: options.maxToolCalls ?? 120, wallTimeMs: options.wallTimeMs ?? 900_000, maxTotalToolCalls: options.maxTotalToolCalls ?? 1200, totalWallTimeMs: options.totalWallTimeMs ?? 7_200_000 } : undefined,
+    goalBudget: options.continueUntilAccepted ? { maxToolCalls: options.maxToolCalls ?? 120, wallTimeMs: options.wallTimeMs ?? 1_800_000, maxTotalToolCalls: options.maxTotalToolCalls ?? 1200, totalWallTimeMs: options.totalWallTimeMs ?? 7_200_000 } : undefined,
     projectRoot,
     taskType: options.workerContext?.taskType,
     workspaceOrigin: options.workerContext?.workspaceOrigin,
@@ -241,7 +249,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     throw new Error("Task-wide model budget exhausted");
   }
   const maxToolCalls = Math.min(options.maxToolCalls ?? 120, remainingCalls);
-  const wallTimeMs = Math.min(options.wallTimeMs ?? 900_000, remainingTime);
+  const wallTimeMs = Math.min(options.wallTimeMs ?? 1_800_000, remainingTime);
   if (!Number.isInteger(maxToolCalls) || maxToolCalls < 1 || !Number.isInteger(wallTimeMs) || wallTimeMs < 1_000) throw new Error("Invalid task budget");
   await options.onLedger?.(ledger);
 
@@ -250,7 +258,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   let hooks: Awaited<ReturnType<SkillPluginStore["loadHooks"]>>;
   let directExpert: AgentPresetSnapshot | undefined;
   try {
-    if (ledger.state.capabilities) {
+    if (ledger.state.capabilities && !options.workOrder) {
       const installed = await pluginStore.list();
       for (const selected of ledger.state.capabilities.plugins) {
         const plugin = installed.find(item => item.id === selected.id);
@@ -260,9 +268,9 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     agentPresets = options.workOrder || reviewing ? [] : await expertStore.enabled();
     directExpert = codeTask && !reviewing && ledger.state.designatedExpertId ? agentPresets.find(item => item.id === ledger.state.designatedExpertId) : undefined;
     if (codeTask && ledger.state.designatedExpertId && !directExpert && !reviewing) throw new Error(`用户指定专家已停用或删除：${ledger.state.designatedExpertId}`);
-    const selectedSkillIds = ledger.state.capabilities?.skills.map(item => item.id);
-    const loadedSkills = options.workOrder ? await pluginStore.loadSkills(selectedSkillIds) : reviewing ? (options.reviewExpert?.skillIds?.length ? await pluginStore.loadSkills() : []) : await pluginStore.loadSkills(selectedSkillIds);
-    for (const selected of ledger.state.capabilities?.skills ?? []) {
+    const selectedSkillIds = options.workOrder ? undefined : ledger.state.capabilities?.skills.map(item => item.id);
+    const loadedSkills = options.workOrder ? [] : reviewing ? (options.reviewExpert?.skillIds?.length ? await pluginStore.loadSkills() : []) : await pluginStore.loadSkills(selectedSkillIds);
+    for (const selected of options.workOrder ? [] : ledger.state.capabilities?.skills ?? []) {
       const skill = loadedSkills.find(item => item.name === selected.id);
       if (!skill || await hashSkillDirectory(skill.baseDir) !== selected.hash) throw new Error(`Selected Skill is unavailable or changed: ${selected.id}`);
     }
@@ -304,13 +312,14 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     ? await createDirectFileTools({ taskId: ledger.state.id, projectId: ledger.state.projectId, projectVersion: ledger.state.projectVersion ?? 0, projectRoot, dataRoot, mode: permission.mode, onNeedsInput: reason => pauseForInput(reason, "approval") })
     : [];
 
-  const plugins = (options.workOrder && !options.workOrder.fullAccess) || reviewing || planning
+  const allPlugins = (options.workOrder && !options.workOrder.fullAccess) || reviewing || planning
     ? { tools: [], instructions: [] }
     : direct ? { tools: [], instructions: [] }
     : loadBuiltinPlugins({ projectRoot, dataRoot: authorizationRoot, url: options.comfyUrl, enabled: options.plugins, generation: options.generation, ledger });
   const officeReadTools = !options.workOrder && (reviewing || planning) ? createOfficePlugin({ ledger, dataRoot: authorizationRoot, readOnly: true }).tools : [];
+  const plugins = options.workOrder ? { ...allPlugins, tools: allPlugins.tools.filter(tool => options.workOrder!.capabilitySnapshots?.some(item => item.kind === "builtin-tool" && item.id === tool.name)) } : allPlugins;
   let mcp: Awaited<ReturnType<SkillPluginStore["loadMCP"]>> | null = null;
-  try { if ((!options.workOrder || options.workOrder.fullAccess) && !direct && !reviewing && !planning && !codeTask) mcp = await pluginStore.loadMCP(projectRoot, ledger.state.capabilities?.plugins.map(item => item.id)); }
+  try { if (!options.workOrder && !direct && !reviewing && !planning && !codeTask) mcp = await pluginStore.loadMCP(projectRoot, ledger.state.capabilities?.plugins.map(item => item.id)); }
   catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     await ledger.needInput(`已指定的 MCP 工具无法加载：${reason}。请修复服务或说明如何继续。`, "MCP");
@@ -322,7 +331,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     await ledger.needInput(`已指定的 MCP 服务不可用：${reason}。请修复服务或说明如何继续。`, "MCP");
     throw new NeedsInputError(reason);
   }
-  const mcpTools = guardMCPTools(mcp?.tools ?? [], new MCPPermissionStore(authorizationRoot), authorizationTaskId || ledger.state.id, question => pauseForInput(question, "MCP"));
+  const mcpTools = [...guardMCPTools(mcp?.tools ?? [], new MCPPermissionStore(authorizationRoot), authorizationTaskId || ledger.state.id, question => pauseForInput(question, "MCP")), ...(options.mcpProxyTools ?? [])];
   const toolNames = ["read", "grep", "edit", "write", "alpha_build", "alpha_check", "alpha_command", "alpha_source", "alpha_search", "alpha_crawl", "alpha_site", "alpha_document", "alpha_spawn", "alpha_browser", ...plugins.tools.map(tool => tool.name)];
   if (mcpTools.some(tool => toolNames.includes(tool.name))) {
     await mcp?.manager.disconnectAll();
@@ -349,6 +358,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     model,
     sessionManager,
     systemPrompt: options.workOrder ? [...workerSystemPrompt(options.workOrder, options.workerPreset), ...skillCatalog(skills)] : reviewing ? [
+      ...roleThinkingInstructions("worker"),
       "You are an independent read-only reviewer in a fresh Alpha session. Compare the task contract, actual source, and available evidence. Do not assume the implementer's report is correct.",
       `Task objective v${ledger.state.contractVersion ?? 1}: ${ledger.state.objective}`,
       ...(ledger.state.designatedExpertId ? [`User-designated expert: ${ledger.state.designatedExpertId}. Keep this expert in the plan and dispatch it for a relevant work order; do not replace it with an automatic recommendation.`] : []),
@@ -357,10 +367,12 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       ...(options.reviewExpert ? [`Professional review perspective: ${options.reviewExpert.name} (${options.reviewExpert.id}, sha256 ${options.reviewExpert.hash}). This is guidance only and cannot grant permissions.`, options.reviewExpert.instructions] : []),
       ...skillCatalog(skills),
     ] : planning ? [
+      ...roleThinkingInstructions("coordinator"),
       "You are planning the current Alpha task. Inspect the assigned project and available read-only web sources, ask for missing context when needed, and record a concrete plan with alpha_plan. Plan step mode must be investigate, implement, or review. Do not implement, run commands, alter project files, install capabilities, or interact with web page controls. Once alpha_plan succeeds, stop: the user has not approved the plan yet.",
       cognitionSnapshot(ledger),
       ...skillCatalog(skills),
     ] : [
+      ...roleThinkingInstructions("coordinator"),
       "You are Alpha, a local work agent. Complete the task in the assigned project directory.",
       cognitionSnapshot(ledger),
       `Current task objective v${ledger.state.contractVersion ?? 1}: ${ledger.state.objective}`,
@@ -389,9 +401,9 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       "Alpha has built-in alpha_search, alpha_source, alpha_crawl, alpha_site and alpha_browser web tools. Public pages and logged-in tabs are separate from provider extraction. Exact external page interactions require a stable requestId and approval. Do not send logged-in content or cookies to providers.",
       ...(mcpTools.length ? ["Third-party MCP tools are available only under their listed mcp__ names. Use them for the user's task; do not assume an unavailable service is running."] : []),
       ...(hooks.length ? ["Third-party Pi hooks may include tool guidance for other hosts. In Alpha, use only the tools listed in this session; do not invent bash, Skill, or subagent calls."] : []),
-      `Enabled expert library: ${agentPresets.length} experts. Initial shortlist: ${initialExpertCandidates(ledger.state.objective, agentPresets).map(id => { const item = agentPresets.find(expert => expert.id === id)!; return `${item.id}=${item.name}: ${item.description}`; }).join(" | ") || "none"}. Use alpha_expert_search for other specialties. Use alpha_plan to record a task plan and possible expert candidates for substantial development work. Candidates are not started until you delegate a specific work order. A neutral instance needs no expertId.`,
+      `Enabled expert library: ${agentPresets.length} experts. Dispatchable shortlist: ${initialExpertCandidates(ledger.state.objective, agentPresets).map(id => { const item = agentPresets.find(expert => expert.id === id)!; return `${item.id}=${item.name}: ${item.description}`; }).join(" | ") || "none"}. Use alpha_expert_search for other specialties. Prefer a relevant expert with a Skill package, but do not delay a clear task to find or create one. If none fits, omit expertId and dispatch a neutral worker with explicit acceptance criteria and source scope. Use alpha_plan for substantial development work. Dispatch by independent task, not by individual error. You own questions, review, integration and final acceptance.`,
       "Use alpha_gap only for a diagnosed missing method, tool, permission or context. Installed compatible Skills can be assigned to work orders. Propose any external Skill before installation; never silently create an expert or change the task goal.",
-      ...(!generalTask && options.getWorkerSupervisor ? ["Use alpha_spawn for independent orders when parallel work helps. Each subagent has a stable identity, expert persona, Skill snapshot, cognition, session, and Git worktree. Use alpha_continue for another run of the same agent. Use alpha_inbox for its messages; you decide whether to answer or forward with alpha_send. Inspect each result and diff before alpha_integrate. Investigate and review modes cannot edit source. The final build and acceptance belong to you."] : []),
+      ...(!generalTask && options.getWorkerSupervisor ? ["Use alpha_spawn for independent task orders when parallel work helps. Each subagent has a stable identity, task role, cognition, session and Git worktree; expert and Skill snapshots are optional for a neutral worker. Give a precise brief, source scope and acceptance criteria. Use alpha_capability_search before binding a capability. Read alpha_inbox promptly; use alpha_worker_resolve on reported gaps to grant capabilities, answer, install an approved project dependency in that worker workspace, or reject. A message cannot approve a command. Use alpha_continue for other follow-ups. Inspect each result and diff before alpha_integrate. Investigate and review modes cannot edit source. The final build and acceptance belong to you."] : []),
       ...(ledger.state.contractVersion && ledger.state.contractVersion > 1 ? ["The user revised this task. Preserve earlier requirements unless explicitly superseded, and update alpha-verification.json so the browser checks the revised behavior, even if the existing app still builds."] : []),
       ...(!codeTask && !generalTask ? ["For a web product, write alpha-verification.json in the project root with a repeatable core user path. Use {\"steps\":[...]} with flat step objects: fill/select {action,selector,value}, click {action,selector}, expectText/expectAbsentText {action,text,selector?}, expectValue {action,selector,value} for an input/textarea/select value, video {action,selector} for a decoded video frame check, viewport {action,width,height}, contrast {action,selector,minRatio:4.5}, wait {action,ms<=3000}, or reload {action}. No comment-only steps or unsupported fields. Use {{nonce}} only in free-text fields, not numeric/date/select values. Include a click, two outcome assertions, a viewport at most 400px wide, a contrast check, a video step when video is required, and reload when persistence is required. Use fill/select only when the product has those controls. The runtime will execute the plan against the deployed preview; never mark it passed yourself."] : []),
       options.browser || options.browserProxyDir ? "The alpha_browser tool controls the visible local preview. Use it to check real user paths and inspect console/network failures. If it reports no connected preview, mark visual verification pending." : "No visible browser is connected; report browser verification as pending.",
@@ -399,16 +411,16 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     toolNames: options.workOrder ? [
       "read", "grep", ...(workerReadOnly ? ["alpha_check"] : ["edit", "write", "alpha_build", "alpha_check", "alpha_command", "alpha_document"]),
       ...(options.workOrder.fullAccess ? ["alpha_search", "alpha_source", "alpha_crawl", "alpha_site"] : []),
-      ...(skills.length ? ["alpha_skill_read"] : []), ...(workerReadOnly ? [] : [...plugins.tools.map(tool => tool.name), ...mcpTools.map(tool => tool.name)]),
+      ...(skills.length ? ["alpha_skill_read"] : []), ...(workerReadOnly ? [] : plugins.tools.map(tool => tool.name)), ...mcpTools.map(tool => tool.name),
       "alpha_browser", "alpha_worker_result", ...(options.workOrder.agentId ? ["alpha_cognition_update", "alpha_send", "alpha_inbox"] : []),
       ...(!options.workOrder.fullAccess ? ["alpha_capability_request"] : []),
     ] : reviewing ? ["read", "grep", "alpha_browser", "alpha_review_result", ...officeReadTools.map(tool => tool.name)] : planning ? [...PLANNING_TOOL_NAMES, ...officeReadTools.map(tool => tool.name)] : [
       "read", "grep", "edit", "write", ...(ledger.state.taskType === "general" ? ["alpha_input", "alpha_check", "alpha_command", ...(direct ? [] : ["alpha_document", "alpha_build"])] : generalTask ? ["alpha_document"] : [codeTask ? "alpha_check" : "alpha_build"]),
       "alpha_search", "alpha_source", "alpha_crawl", "alpha_site",
       ...(codeTask ? ["alpha_command"] : []),
-      ...(!generalTask && options.getWorkerSupervisor ? ["alpha_spawn", "alpha_continue", "alpha_inspect", "alpha_wait", "alpha_cancel", "alpha_integrate", "alpha_send", "alpha_inbox"] : []),
-      "alpha_plan", "alpha_step", "alpha_gap", "alpha_gap_resolve", "alpha_expert_search", "alpha_expert_create", "alpha_expert_update", "alpha_expert_delete",
-      ...(direct && skills.length ? ["alpha_skill_read"] : []),
+      ...(!generalTask && options.getWorkerSupervisor ? ["alpha_spawn", "alpha_continue", "alpha_worker_resolve", "alpha_inspect", "alpha_wait", "alpha_cancel", "alpha_integrate", "alpha_send", "alpha_inbox"] : []),
+      "alpha_plan", "alpha_step", "alpha_gap", "alpha_gap_resolve", "alpha_expert_search", "alpha_capability_search", "alpha_capability_mcp", "alpha_expert_create", "alpha_expert_update", "alpha_expert_delete",
+      "alpha_skill_read",
       ...plugins.tools.map(tool => tool.name),
       ...mcpTools.map(tool => tool.name),
       "alpha_browser",
@@ -425,12 +437,12 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
         permission?.mode === "auto" ? independentCommandReviewer(authorizationRoot, selector) : undefined,
         reason => pauseForInput(reason, "approval"))] : []),
        ...(!options.workOrder && !reviewing && !planning && !generalTask && options.getWorkerSupervisor ? createAsyncWorkTools(options.getWorkerSupervisor, ledger, dataRoot, agentPresets, skills) : []),
-      ...(!options.workOrder && !reviewing ? [...createCognitionTools(ledger, dataRoot), ...createExpertTools(expertStore, pluginStore)] : []),
-      ...(options.workOrder ? [createWorkerResultTool(ledger, options.workOrder), ...(options.workOrder.agentId ? [createWorkerCognitionTool(ledger, options.workOrder.instanceId!), ...createWorkerMailboxTools(dataRoot, authorizationTaskId, options.workOrder)] : [])] : []),
+      ...(!options.workOrder && !reviewing ? [createCapabilitySearchTool(dataRoot), ...(!planning ? [createCapabilityMCPTool(dataRoot, projectRoot, ledger.state.id, reason => pauseForInput(reason, "MCP"))] : []), ...createCognitionTools(ledger, dataRoot), ...createExpertTools(expertStore, pluginStore)] : []),
+      ...(options.workOrder ? [createWorkerResultTool(ledger, options.workOrder), ...(options.workOrder.agentId ? [createWorkerCognitionTool(ledger, options.workOrder.instanceId!), ...createWorkerMailboxTools(dataRoot, authorizationTaskId, options.workOrder, ledger)] : [])] : []),
       ...(options.workOrder && !options.workOrder.fullAccess ? [createWorkerCapabilityTool(ledger)] : []),
       ...(options.workOrder ? [options.browserProxyDir ? createWorkerBrowserTool(options.browserProxyDir) : createBrowserTool(() => null, dataRoot)] : []),
       ...(reviewing ? [createDevelopmentReviewTool(ledger, options.reviewInstanceId ?? randomUUID(), projectRoot)] : []),
-      ...((direct && !reviewing || options.workOrder) && skills.length ? [createSkillResourceTool(skills)] : []),
+      ...(!reviewing && !options.workOrder ? [createSkillResourceTool(skills, async id => (await resolvePoolSkill(dataRoot, id)).skill)] : options.workOrder && skills.length ? [createSkillResourceTool(skills)] : []),
       ...plugins.tools,
       ...mcpTools,
        ...(!options.workOrder ? [createBrowserTool(() => options.browserAccess?.() === false || options.getWorkerSupervisor && !options.getWorkerSupervisor().claimBrowser("coordinator") ? null : options.browser ?? null, dataRoot, options.browserUrl, webContext, reviewing || planning)] : []),
@@ -471,6 +483,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   session.setAutoCompactionEnabled(true);
   let toolCalls = 0;
   let planRecorded = false;
+  let workerHandoff = false;
   let compactions = 0;
   let compactionFailures = 0;
   let budgetReason: string | null = null;
@@ -488,7 +501,18 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     stalledReason = `Model produced no response within ${firstResponseMs} ms; check network or provider availability`;
     void session.abort();
   }, firstResponseMs);
+  const idleMs = Math.min(180_000, wallTimeMs);
+  const abortIdle = () => {
+    stalledReason = `Model produced no progress within ${idleMs} ms; check network or provider availability`;
+    void session.abort();
+  };
+  let idleTimer = setTimeout(abortIdle, idleMs);
+  const resetIdle = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(abortIdle, idleMs);
+  };
   const unsubscribe = session.subscribe(event => {
+    if (event.type === "message_update" || event.type === "tool_execution_start" || event.type === "tool_execution_end") resetIdle();
     if (event.type === "auto_compaction_end" && !event.skipped) {
       if (event.aborted || event.errorMessage) compactionFailures++;
       else { compactions++; void session.steer(`Current authoritative task state after compaction:\n${cognitionSnapshot(ledger)}`).catch(() => undefined); }
@@ -501,7 +525,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       const taskUsedCalls = (ledger.state.runs ?? []).reduce((sum, run) => sum + run.toolCalls, 0) + toolCalls + (options.getWorkerSupervisor?.().reservations ?? 0);
       const taskUsedTime = (ledger.state.runs ?? []).reduce((sum, run) => sum + run.elapsedMs, 0) + Math.round(performance.now() - started) + (options.getWorkerSupervisor?.().timeReservations ?? 0);
       if ((toolCalls > maxToolCalls || taskUsedCalls > (options.maxTotalToolCalls ?? 1200) || taskUsedTime > (options.totalWallTimeMs ?? 7_200_000)) && !budgetReason) {
-        budgetReason = `Model run exceeded its task-wide budget`;
+        budgetReason = toolCalls > maxToolCalls ? `Model run exceeded ${maxToolCalls} tool calls` : "Model run exceeded its task-wide budget";
         void session.abort();
       }
       options.onEvent?.({ type: "tool-start", value: event.toolName, callId: event.toolCallId, target: toolTarget(event.args, projectRoot), intent: event.intent?.slice(0, 160) });
@@ -510,6 +534,10 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       if (planning && event.toolName === "alpha_plan" && !event.isError && ledger.state.cognition?.steps.length && !planRecorded) {
         planRecorded = true;
         void session.abort({ goalReason: "internal", reason: "Plan recorded; awaiting user review" });
+      }
+      if (options.workOrder?.agentId && event.toolName === "alpha_send" && !event.isError && ledger.state.workerOutcome?.status === "needs-context") {
+        workerHandoff = true;
+        void session.abort({ goalReason: "internal", reason: "Worker requested coordinator decision" });
       }
     }
   });
@@ -523,6 +551,12 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     await options.onSessionReady?.(text => session.steer(text));
     options.signal?.throwIfAborted();
     await session.prompt(prompt);
+    if (workerHandoff && !options.signal?.aborted && !budgetReason && !stalledReason) {
+      outcome = "needs-input";
+      await ledger.refreshRevision();
+      await ledger.clearFailure();
+      return ledger;
+    }
     if (planning && planRecorded && !options.signal?.aborted && !budgetReason && !stalledReason) {
       await ledger.refreshRevision();
       await ledger.clearFailure();
@@ -543,6 +577,12 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     } else await ledger.clearFailure();
     return ledger;
   } catch (error) {
+    if (workerHandoff && !options.signal?.aborted && !budgetReason && !stalledReason) {
+      outcome = "needs-input";
+      await ledger.refreshRevision();
+      await ledger.clearFailure();
+      return ledger;
+    }
     if (planning && planRecorded && !options.signal?.aborted && !budgetReason && !stalledReason) {
       await ledger.refreshRevision();
       await ledger.clearFailure();
@@ -551,6 +591,12 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     outcome = String(ledger.state.status) === "needs-input" ? "needs-input" : stalledReason ? "error" : budgetReason ? "budget" : options.signal?.aborted ? "cancelled" : "error";
     failureReason = needsInputReason ?? stalledReason ?? budgetReason ?? (error instanceof Error ? error.message : String(error));
     if (outcome === "needs-input") throw new NeedsInputError(failureReason);
+    const perRunBudget = budgetReason === `Model run exceeded ${wallTimeMs} ms` && remainingTime > wallTimeMs
+      || budgetReason === `Model run exceeded ${maxToolCalls} tool calls` && remainingCalls > maxToolCalls;
+    if (perRunBudget && !options.workOrder && !reviewing && options.getWorkerSupervisor && ledger.state.status === "active") {
+      await ledger.recordFailure(failureReason);
+      return ledger;
+    }
     if (ledger.state.status === "active") {
       await ledger.refreshRevision();
       await ledger.recordFailure(failureReason);
@@ -560,6 +606,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   } finally {
     clearTimeout(timeout);
     clearTimeout(firstResponseTimer);
+    clearTimeout(idleTimer);
     options.signal?.removeEventListener("abort", onAbort);
     unsubscribe();
     await options.onSessionEnd?.(session.getQueuedMessages().steering, outcome === "returned");
@@ -572,7 +619,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       totalTokens: Math.max(0, usageAfter.totalTokens - usageBefore.totalTokens),
       cost: Math.max(0, usageAfter.cost - usageBefore.cost),
     };
-    await ledger.recordRun({ model: selector, stage: options.workOrder ? "worker" : reviewing ? "review" : "coordinator", instanceId: options.workOrder?.instanceId ?? options.reviewInstanceId, toolCalls, compactions, compactionFailures, maxToolCalls, wallTimeMs, elapsedMs: Math.round(performance.now() - started), usage, outcome, failureReason });
+    await ledger.recordRun({ model: selector, stage: options.workOrder ? "worker" : reviewing ? "review" : "coordinator", instanceId: options.workOrder?.instanceId ?? options.reviewInstanceId, thinkingPolicyVersion: ROLE_THINKING_POLICY_VERSION, toolCalls, compactions, compactionFailures, maxToolCalls, wallTimeMs, elapsedMs: Math.round(performance.now() - started), usage, outcome, failureReason });
     try { await sessionManager.flush(); }
     finally {
       try { await session.dispose(); }

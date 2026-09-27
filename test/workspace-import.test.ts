@@ -1,16 +1,24 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { importCodeWorkspace } from "../src/runtime/workspace-import";
 import { applyCodeChanges, reviewCodeApply } from "../src/runtime/workspace-apply";
 import { runCodeCheck } from "../src/runtime/code-check";
 import { acceptCodeChange } from "../src/runtime/code-acceptance";
+import { finalizeProjectTurn, prepareProjectTurn } from "../src/runtime/project-state";
 
 async function git(cwd: string, ...args: string[]): Promise<void> {
   const child = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
   const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
   if (code !== 0) throw new Error(`git ${args.join(" ")}: ${stderr}`);
+}
+
+async function gitOutput(cwd: string, ...args: string[]): Promise<string> {
+  const child = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  if (code !== 0) throw new Error(`git ${args.join(" ")}: ${stderr}`);
+  return stdout.trim();
 }
 
 test("Git import captures dirty and untracked files in a managed worktree", async () => {
@@ -38,6 +46,13 @@ test("Git import captures dirty and untracked files in a managed worktree", asyn
     expect(await readFile(join(managed, "new.js"), "utf8")).toBe("untracked");
     expect(await Bun.file(join(managed, ".env")).exists()).toBe(false);
     expect(await Bun.file(join(managed, "ignored.txt")).exists()).toBe(false);
+    expect(await readFile(join(source, "app.js"), "utf8")).toBe("dirty");
+    expect(await gitOutput(managed, "status", "--porcelain")).toBe("");
+    const turn = await prepareProjectTurn({ dataRoot: join(root, "state"), projectRoot: managed, ledger, runId: crypto.randomUUID() });
+    await writeFile(join(managed, "app.js"), "fixed");
+    const finished = await finalizeProjectTurn(turn, ledger);
+    expect(finished.codeCommits).toHaveLength(1);
+    expect(await gitOutput(managed, "status", "--porcelain")).toBe("");
     expect(await readFile(join(source, "app.js"), "utf8")).toBe("dirty");
   } finally {
     if (managed) await git(source, "worktree", "remove", "--force", managed);
@@ -125,5 +140,27 @@ test("shared code acceptance requires review and current check evidence before c
     await ledger.complete();
     expect(ledger.state.status).toBe("complete");
     expect(await readFile(join(source, "app.js"), "utf8")).toBe("before");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("Git import never executes repository-configured fsmonitor commands", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-import-fsmonitor-"));
+  try {
+    const source = join(root, "source");
+    await mkdir(source);
+    await git(source, "init");
+    await git(source, "config", "user.email", "test@example.com");
+    await git(source, "config", "user.name", "Test");
+    await writeFile(join(source, "app.js"), "committed");
+    await git(source, "add", ".");
+    await git(source, "commit", "-m", "base");
+    const marker = join(root, "fsmonitor-ran");
+    const probe = join(root, "fsmonitor-probe.sh");
+    await writeFile(probe, `#!/bin/sh\ntouch "${marker.split("\\").join("/")}"\nexit 0\n`);
+    await chmod(probe, 0o755);
+    await git(source, "config", "core.fsmonitor", probe.split("\\").join("/"));
+    const ledger = await importCodeWorkspace({ sourcePath: source, productsRoot: join(root, "products"), dataRoot: join(root, "state"), objective: "Fix app" });
+    expect(ledger.state.workspaceOrigin?.kind).toBe("git");
+    expect(await readFile(marker, "utf8").then(() => true, () => false)).toBe(false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

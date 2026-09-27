@@ -15,6 +15,7 @@ export interface CommandRequest {
   purpose: "check" | "other";
   cwd: string;
   network?: boolean;
+  contextId?: string;
   scriptCommand?: string;
   status: "pending" | "approved" | "denied" | "running" | "complete" | "uncertain";
   createdAt: string;
@@ -79,14 +80,14 @@ export class CommandApprovalStore {
     return run;
   }
 
-  request(taskId: string, cwd: string, argv: string[], purpose: "check" | "other", network = false): Promise<CommandRequest> {
+  request(taskId: string, cwd: string, argv: string[], purpose: "check" | "other", network = false, contextId?: string): Promise<CommandRequest> {
     if (!argv.length || argv.length > 16 || argv.some(arg => typeof arg !== "string" || !arg || arg.length > 1000 || /[\r\n\0]/.test(arg))) throw new Error("Command arguments are invalid");
     return this.serial(async () => {
       const script = await scriptCommand(cwd, argv);
-      const existing = (await this.list(taskId)).find(item => item.status !== "complete" && item.cwd === cwd && item.purpose === purpose && !!item.network === network && item.scriptCommand === script && JSON.stringify(item.argv) === JSON.stringify(argv));
+      const existing = (await this.list(taskId)).find(item => item.status !== "complete" && item.cwd === cwd && item.purpose === purpose && !!item.network === network && item.contextId === contextId && item.scriptCommand === script && JSON.stringify(item.argv) === JSON.stringify(argv));
       if (existing) return existing;
       const risk = commandRisk([...argv, ...(script ? [script] : [])]);
-      const request: CommandRequest = { id: randomUUID(), taskId, cwd, argv, purpose, network, ...(script ? { scriptCommand: script } : {}), status: "pending", createdAt: new Date().toISOString(), reason: network ? "Command requests network access" : "Command is not a configured project check", risk };
+      const request: CommandRequest = { id: randomUUID(), taskId, cwd, argv, purpose, network, ...(contextId ? { contextId } : {}), ...(script ? { scriptCommand: script } : {}), status: "pending", createdAt: new Date().toISOString(), reason: network ? "Command requests network access" : "Command is not a configured project check", risk };
       await this.save(request);
       return request;
     });
@@ -136,9 +137,14 @@ export class CommandApprovalStore {
     });
   }
 
-  async execute(taskId: string, cwd: string, argv: string[], purpose: "check" | "other", signal?: AbortSignal, permission?: { mode: PermissionMode; roots: string[] }, reviewer?: IndependentReview, network = false): Promise<CommandRequest> {
+  async execute(taskId: string, cwd: string, argv: string[], purpose: "check" | "other", signal?: AbortSignal, permission?: { mode: PermissionMode; roots: string[] }, reviewer?: IndependentReview, network = false, existingId?: string, contextId?: string): Promise<CommandRequest> {
     signal?.throwIfAborted();
-    const request = await this.request(taskId, cwd, argv, purpose, network);
+    const request = existingId ? (await this.list(taskId)).find(item => item.id === existingId) : await this.request(taskId, cwd, argv, purpose, network, contextId);
+    if (!request || request.taskId !== taskId || request.cwd !== cwd || request.purpose !== purpose || !!request.network !== network || request.contextId !== contextId || JSON.stringify(request.argv) !== JSON.stringify(argv)) throw new Error("Approved command does not match the worker request");
+    if (request.status === "complete") {
+      if (!request.result || request.result.revision !== await fingerprintSource(cwd)) throw new Error("Completed installation workspace changed; inspect before retrying");
+      return request;
+    }
     if (network && permission?.mode !== "full" && request.risk !== "high") {
       request.risk = "high";
       await this.serial(() => this.save(request));

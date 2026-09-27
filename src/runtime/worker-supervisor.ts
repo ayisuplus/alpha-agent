@@ -1,13 +1,21 @@
-import { readFile, stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { readFile, realpath, stat } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { createTwoFilesPatch } from "diff";
 import { runModelWorkOrders } from "./model-workers";
 import { integratePreparedWorkOrder, prepareAgentWorkspace, validateOrders, type WorkBatchReport, type WorkOrder } from "./work-orders";
 import { randomUUID } from "node:crypto";
-import type { TaskLedger } from "./task-ledger";
+import { fingerprintSource, type TaskLedger } from "./task-ledger";
 import type { BrowserSession } from "./visible-browser";
 import { AgentMailbox } from "./agent-mailbox";
 import { SettingsStore } from "./settings";
+import { stripReadSelector } from "./file-tool-guard";
+import { ROLE_THINKING_POLICY_VERSION } from "./role-thinking";
+import { capabilityPool } from "./capability-pool";
+import { commandApprovalStore } from "./command-approval";
+import { MCPPermissionStore } from "./mcp-permissions";
+
+const workerToolCalls = 80;
+const workerWallTimeMs = 600_000;
 
 async function ensureWorktreeBase(projectRoot: string, managed: boolean): Promise<void> {
   const git = async (...args: string[]) => {
@@ -31,7 +39,7 @@ async function ensureWorktreeBase(projectRoot: string, managed: boolean): Promis
   }
 }
 
-type Attempt = { order: WorkOrder; controller: AbortController; promise?: Promise<void>; settling?: Promise<void>; inspected?: boolean; reserved?: boolean };
+type Attempt = { order: WorkOrder; controller: AbortController; promise?: Promise<void>; settling?: Promise<void>; inspected?: boolean; reserved?: boolean; cancelReason?: string };
 const liveSupervisors = new Map<string, WorkerSupervisor>();
 
 export async function inspectWorkerAttempt(ledger: TaskLedger, dataRoot: string, id: string) {
@@ -115,8 +123,8 @@ export class WorkerSupervisor {
   private releaseReservation(attempt: Attempt): void {
     if (!attempt.reserved) return;
     attempt.reserved = false;
-    this.reservedCalls -= 40;
-    this.reservedTimeMs -= 120_000;
+    this.reservedCalls -= workerToolCalls;
+    this.reservedTimeMs -= workerWallTimeMs;
   }
   private notify() {
     this.input.onChange?.();
@@ -144,7 +152,7 @@ export class WorkerSupervisor {
   }
   assertParentTool(name: string): void {
     if (!this.unsettled) return;
-    if (!["read", "grep", "edit", "write", "alpha_spawn", "alpha_continue", "alpha_inspect", "alpha_wait", "alpha_cancel", "alpha_integrate", "alpha_send", "alpha_inbox", "alpha_browser", "alpha_plan", "alpha_step", "alpha_gap", "alpha_gap_resolve", "alpha_expert_search", "alpha_search", "alpha_crawl", "alpha_site", "alpha_source"].includes(name)) throw new Error(`Wait for worker integration before using ${name}`);
+    if (!["read", "grep", "edit", "write", "alpha_spawn", "alpha_continue", "alpha_worker_resolve", "alpha_capability_search", "alpha_capability_mcp", "alpha_inspect", "alpha_wait", "alpha_cancel", "alpha_integrate", "alpha_send", "alpha_inbox", "alpha_browser", "alpha_plan", "alpha_step", "alpha_gap", "alpha_gap_resolve", "alpha_expert_search", "alpha_search", "alpha_crawl", "alpha_site", "alpha_source"].includes(name)) throw new Error(`Wait for worker integration before using ${name}`);
   }
 
   async spawn(orders: WorkOrder[], maxParallel = this.maxParallel): Promise<string[]> {
@@ -155,12 +163,23 @@ export class WorkerSupervisor {
       return ["queued", "running", "returned"].includes(instance?.status ?? "") && !(instance?.status === "returned" && instance.agentId && replacements.has(instance.agentId));
     }).map(([, value]) => value.order);
     validateOrders([...outstanding, ...orders], 16);
+    const catalog = await capabilityPool(this.input.dataRoot);
+    const mcpPermissions = await new MCPPermissionStore(this.input.dataRoot).list();
+    for (const order of orders) for (const id of order.capabilityIds ?? []) {
+      const capability = catalog.find(item => item.id === id && item.enabled);
+      if (!capability && !(order.capabilitySnapshots?.some(item => item.id === id && item.kind === "skill"))) throw new Error(`Capability is unavailable: ${id}`);
+      if (!capability) continue;
+      if (capability.kind === "builtin-tool" && this.input.plugins?.[capability.source as "comfyui"] === false) throw new Error(`Built-in plugin is disabled: ${capability.source}`);
+      if (order.mode !== "implement" && capability.kind === "builtin-tool") throw new Error(`Read-only worker cannot use ${id}`);
+      if (order.mode !== "implement" && capability.kind === "mcp-server") throw new Error(`Read-only worker needs individual MCP tool bindings: ${id}`);
+      if (order.mode !== "implement" && capability.kind === "mcp-tool" && mcpPermissions[id] !== "read") throw new Error(`Read-only worker requires read permission for ${id}`);
+    }
     const ids = new Set(orders.map(order => order.id));
     for (const order of orders) for (const dep of order.dependsOn ?? []) {
       if (!ids.has(dep) && this.ledger.state.cognition?.steps.find(step => step.id === dep)?.status !== "complete") throw new Error(`Unknown or incomplete dependency: ${order.id} -> ${dep}`);
     }
-    if (this.input.remainingCalls() - this.reservedCalls < orders.length * 40) throw new Error("Task-wide tool budget cannot reserve these workers");
-    if (this.input.remainingTimeMs && this.input.remainingTimeMs() - this.reservedTimeMs < orders.length * 120_000) throw new Error("Task-wide time budget cannot reserve these workers");
+    if (this.input.remainingCalls() - this.reservedCalls < orders.length * workerToolCalls) throw new Error("Task-wide tool budget cannot reserve these workers");
+    if (this.input.remainingTimeMs && this.input.remainingTimeMs() - this.reservedTimeMs < orders.length * workerWallTimeMs) throw new Error("Task-wide time budget cannot reserve these workers");
     await ensureWorktreeBase(this.ledger.state.projectRoot, ["generated", "copy"].includes(this.ledger.state.workspaceOrigin?.kind ?? ""));
     const workerModels = (await new SettingsStore(this.input.dataRoot).get()).workerModels;
     this.maxParallel = maxParallel;
@@ -175,36 +194,102 @@ export class WorkerSupervisor {
       await this.ledger.queueWorker({ id, parentId: this.input.parentId, order, expert: order.preset ? { id: order.preset.id, name: order.preset.name, hash: order.preset.hash } : undefined });
       this.attempts.set(id, { order, controller: new AbortController(), reserved: true });
       assigned.push(id);
-      this.reservedCalls += 40;
-      this.reservedTimeMs += 120_000;
+      this.reservedCalls += workerToolCalls;
+      this.reservedTimeMs += workerWallTimeMs;
     }
     this.pump();
     this.notify();
     return assigned;
   }
 
-  async continue(agentId: string, instruction: string, mode?: WorkOrder["mode"]): Promise<string> {
+  async continue(agentId: string, instruction: string, mode?: WorkOrder["mode"], addedCapabilities: string[] = [], install?: WorkOrder["install"]): Promise<string> {
     if (!instruction.trim()) throw new Error("Continuation instruction is required");
     if (mode && !["investigate", "implement", "review"].includes(mode)) throw new Error("Invalid subagent mode");
     const agent = this.ledger.state.cognition?.agents?.find(item => item.id === agentId);
     if (!agent) throw new Error("Persistent subagent not found");
     const prior = this.instance(agent.lastAttemptId);
     if (!prior?.order || ["queued", "running"].includes(prior.status)) throw new Error("Subagent run is still active");
+    const catalog = await capabilityPool(this.input.dataRoot);
+    for (const capability of addedCapabilities) if (!catalog.some(item => item.id === capability && item.enabled)) throw new Error(`Capability is unavailable: ${capability}`);
+    const capabilityIds = [...new Set([...(agent.capabilityIds ?? prior.order.capabilityIds ?? []), ...addedCapabilities])];
     const id = randomUUID();
     const order: WorkOrder = { ...prior.order, agentId, instanceId: id, mode: mode ?? agent.mode,
       objective: `${prior.order.objective}\nFollow-up: ${instruction.trim()}`,
+      decisionReason: `Continue the assigned result: ${instruction.trim()}`.slice(0, 500),
       ownedPaths: mode && mode !== "implement" ? [] : prior.order.ownedPaths,
       readPaths: [...new Set(prior.order.readPaths ?? [])],
       skillIds: [...agent.skillIds], skillSnapshots: agent.skillSnapshots?.map(item => ({ ...item })), preset: agent.expert,
+      capabilityIds, capabilitySnapshots: agent.capabilitySnapshots?.map(item => ({ ...item })), contextRevision: (agent.contextRevision ?? 1) + (install || addedCapabilities.some(item => !(agent.capabilityIds ?? []).includes(item)) ? 1 : 0),
+      install,
       contractVersion: this.ledger.state.contractVersion ?? 1,
       cognitionRevision: this.ledger.state.cognition?.revision ?? 1,
       baseRevision: this.ledger.state.revision ?? undefined,
     };
     const report = prior.workRoot ? await readFile(join(prior.workRoot, "merge.json"), "utf8").then(value => JSON.parse(value) as WorkBatchReport).catch(() => null) : null;
     if (order.mode !== "implement" && prior.integration !== "merged" && report?.changes[prior.orderId]?.length) throw new Error("Integrate or discard prior source edits before switching this subagent to a read-only mode");
-    order.readPaths = [...new Set([...(order.readPaths ?? []), ...(prior.integration === "merged" ? [] : report?.results[prior.orderId]?.readPaths ?? [])])];
+    order.readPaths = [...new Set([...(order.readPaths ?? []), ...(prior.integration === "merged" ? [] : report?.results[prior.orderId]?.readPaths ?? []).map(stripReadSelector)])];
     await this.spawn([order], this.maxParallel);
     return id;
+  }
+
+  async resolveRequest(requestId: string, action: "grant" | "answer" | "install" | "reject", reason: string, options: { capabilityIds?: string[]; argv?: string[]; targetEnvironment?: string; availabilityPath?: string; network?: boolean } = {}): Promise<{ status: string; runId?: string; approvalId?: string }> {
+    const request = this.ledger.state.workerRequests?.find(item => item.id === requestId);
+    if (!request) throw new Error("Worker request not found");
+    if (request.status === "applied" || request.status === "rejected") return { status: request.status, runId: request.resolutionRunId, approvalId: request.approvalId };
+    if (!reason.trim() || reason.length > 500) throw new Error("Resolution reason is required");
+    if ((this.ledger.state.contractVersion ?? 1) !== request.contractVersion) throw new Error("Task contract changed; review the worker request again");
+    const agent = this.ledger.state.cognition?.agents?.find(item => item.id === request.agentId);
+    if (!agent || ["queued", "running"].includes(agent.status)) throw new Error("Subagent is unavailable for request resolution");
+    if (action === "reject") {
+      await this.mailbox.send(request.agentId, "decision", reason, request.id, request.id);
+      await this.ledger.updateWorkerRequest(request.id, { status: "rejected", reason });
+      await this.mailbox.inbox([request.id]);
+      return { status: "rejected" };
+    }
+    if (action === "install") {
+      if (request.kind !== "dependency" || agent.mode !== "implement") throw new Error("Dependency installation requires an implementing worker request");
+      const argv = request.installArgv ?? options.argv ?? request.proposedArgv;
+      const cwdRelative = request.cwdRelative ?? options.targetEnvironment ?? request.targetEnvironment ?? ".";
+      const availabilityPath = request.availabilityPath ?? options.availabilityPath;
+      const network = request.installNetwork ?? options.network ?? request.network ?? false;
+      if (!argv?.length || argv.length > 16 || cwdRelative.length > 300 || !availabilityPath || availabilityPath.length > 300) throw new Error("Exact dependency command, target environment, and availability path are required");
+      const workspace = join(this.input.dataRoot, "worker-agents", this.ledger.state.id, request.agentId, "project");
+      const target = resolve(workspace, cwdRelative);
+      const relativeTarget = relative(workspace, target);
+      if (relativeTarget.startsWith("..") || isAbsolute(relativeTarget) || !await stat(target).then(item => item.isDirectory(), () => false)) throw new Error("Dependency target is not inside the worker workspace");
+      const canonicalTarget = relative(await realpath(workspace), await realpath(target));
+      if (canonicalTarget.startsWith("..") || isAbsolute(canonicalTarget)) throw new Error("Dependency target escapes the worker workspace through a link");
+      const artifact = resolve(target, availabilityPath);
+      const relativeArtifact = relative(target, artifact);
+      if (!relativeArtifact || relativeArtifact.startsWith("..") || isAbsolute(relativeArtifact)) throw new Error("Availability path must be inside the dependency target");
+      const approvals = commandApprovalStore(this.input.dataRoot);
+      const approval = request.approvalId
+        ? (await approvals.list(this.ledger.state.id)).find(item => item.id === request.approvalId)
+        : await approvals.request(this.ledger.state.id, target, argv, "other", network, request.id);
+      if (!approval || approval.cwd !== target || approval.contextId !== request.id || JSON.stringify(approval.argv) !== JSON.stringify(argv) || !!approval.network !== network) throw new Error("Stored installation approval does not match the request");
+      if (!request.approvalId || request.status === "uncertain") await this.ledger.updateWorkerRequest(request.id, { status: "awaiting-approval", reason, approvalId: approval.id, installArgv: argv, cwdRelative, availabilityPath, installNetwork: network });
+      if (approval.status === "pending" && this.ledger.state.permissionMode !== "full" && this.ledger.state.permissionMode !== "auto") { await this.mailbox.inbox([request.id]); return { status: "awaiting-approval", approvalId: approval.id }; }
+      if (approval.status === "denied") { await this.ledger.updateWorkerRequest(request.id, { status: "rejected", reason: "Installation approval denied" }); await this.mailbox.inbox([request.id]); return { status: "rejected", approvalId: approval.id }; }
+      if (["running", "uncertain"].includes(approval.status) || approval.status === "complete" && (approval.result?.exitCode !== 0 || approval.result.revision !== await fingerprintSource(target))) { await this.ledger.updateWorkerRequest(request.id, { status: "uncertain", reason: "Installation receipt requires inspection", commandReceipt: { id: approval.id, status: approval.status, exitCode: approval.result?.exitCode, logPath: approval.result?.logPath, revision: approval.result?.revision } }); return { status: "uncertain", approvalId: approval.id }; }
+      await this.mailbox.send(request.agentId, "decision", reason, request.id, request.id);
+      const runId = await this.continue(request.agentId, `Dependency request ${request.id}: ${reason}`, "implement", [], { requestId: request.id, approvalId: approval.id, argv, cwdRelative, availabilityPath, network });
+      await this.ledger.updateWorkerRequest(request.id, { status: "awaiting-approval", reason, resolutionRunId: runId });
+      await this.mailbox.inbox([request.id]);
+      return { status: "running", runId, approvalId: approval.id };
+    }
+    const ids = action === "grant" ? [...new Set(options.capabilityIds ?? request.capabilityIds)] : [];
+    if (action === "grant" && !ids.length) throw new Error("Grant requires selected capabilities");
+    await this.mailbox.send(request.agentId, "decision", reason, request.id, request.id);
+    const runId = await this.continue(request.agentId, reason, undefined, ids);
+    await this.ledger.updateWorkerRequest(request.id, { status: "applied", reason, resolutionRunId: runId });
+    await this.mailbox.inbox([request.id]);
+    return { status: "applied", runId };
+  }
+
+  async resumeApprovedRequest(requestId: string): Promise<void> {
+    const request = this.ledger.state.workerRequests?.find(item => item.id === requestId);
+    if (request?.status !== "awaiting-approval" || !request.approvalId) return;
+    await this.resolveRequest(requestId, "install", request.reason ?? "Approved dependency installation");
   }
 
   private pump(): void {
@@ -231,21 +316,20 @@ export class WorkerSupervisor {
   private async execute(id: string, attempt: Attempt): Promise<void> {
     const { ledger, dataRoot, modelSelector, browser, browserUrl, browserAccess, plugins, generation, comfyUrl } = this.input;
     const manager = this;
+    const workspace = attempt.order.agentId ? join(dataRoot, "worker-agents", ledger.state.id, attempt.order.agentId, "project") : undefined;
     const signal = this.input.signal ? AbortSignal.any([this.input.signal, attempt.controller.signal]) : attempt.controller.signal;
     try {
       signal.throwIfAborted();
       await ledger.refreshRevision();
       signal.throwIfAborted();
       const agentId = attempt.order.agentId;
-      const workspace = agentId ? join(dataRoot, "worker-agents", ledger.state.id, agentId, "project") : undefined;
       const previous = agentId ? ledger.state.cognition?.instances?.filter(item => item.agentId === agentId && item.id !== id).at(-1) : undefined;
       let mergeBaseRoot: string | undefined;
       if (workspace) {
-        if (previous) {
+        if (previous?.workRoot) {
           if (!await Bun.file(join(workspace, ".git")).exists()) throw new Error("Persistent subagent workspace is missing");
-          if (previous.integration === "merged") await prepareAgentWorkspace(ledger.state.projectRoot, workspace, join(previous.workRoot!, previous.orderId));
+          if (previous.integration === "merged") await prepareAgentWorkspace(ledger.state.projectRoot, workspace, join(previous.workRoot, previous.orderId));
           else {
-            if (!previous.workRoot) throw new Error("Previous subagent base is missing");
             mergeBaseRoot = join(previous.workRoot, "base");
             const frozen = join(previous.workRoot, previous.orderId);
             if (await stat(frozen).then(item => item.isDirectory(), () => false)) await prepareAgentWorkspace(ledger.state.projectRoot, workspace, frozen, false);
@@ -258,19 +342,29 @@ export class WorkerSupervisor {
         workerContext: { taskType: ledger.state.taskType, workspaceOrigin: ledger.state.workspaceOrigin, capabilities: ledger.state.capabilities, permissionMode: ledger.state.permissionMode },
         browserLease: { claim: worker => this.claimBrowser(worker), release: worker => this.releaseBrowser(worker) },
         async onWorkerEvent(order, state) {
-          if (state === "started") { attempt.order.skillSnapshots = order.skillSnapshots; await ledger.updateWorker(id, "running", { skills: order.skillSnapshots ?? [] }); manager.notify(); }
+          if (state === "started") { attempt.order.skillSnapshots = order.skillSnapshots; attempt.order.capabilitySnapshots = order.capabilitySnapshots; await ledger.updateWorker(id, "running", { skills: order.skillSnapshots ?? [], capabilities: order.capabilitySnapshots ?? [] }); manager.notify(); }
         },
         async onWorkerUsage(order, usage) {
-          await ledger.recordRun({ model: usage.model, stage: "worker", instanceId: id, toolCalls: usage.incomplete ? 40 : usage.toolCalls, maxToolCalls: 40, wallTimeMs: 120_000, elapsedMs: usage.incomplete ? 120_000 : usage.elapsedMs, childElapsedMs: usage.elapsedMs, usageIncomplete: usage.incomplete, usage: usage.tokens, outcome: usage.outcome ?? "returned" });
+          await ledger.recordRun({ model: usage.model, stage: "worker", instanceId: id, thinkingPolicyVersion: ROLE_THINKING_POLICY_VERSION, toolCalls: usage.incomplete ? workerToolCalls : usage.toolCalls, maxToolCalls: workerToolCalls, wallTimeMs: workerWallTimeMs, elapsedMs: usage.incomplete ? workerWallTimeMs : usage.elapsedMs, childElapsedMs: usage.elapsedMs, usageIncomplete: usage.incomplete, usage: usage.tokens, outcome: usage.outcome ?? "returned" });
+        },
+        async onInstallReceipt(order, receipt, available) {
+          const requestId = order.install?.requestId;
+          if (!requestId) return;
+          const status = available ? "applied" : receipt.status === "denied" ? "rejected" : receipt.status === "pending" ? "awaiting-approval" : "uncertain";
+          await ledger.updateWorkerRequest(requestId, { status, reason: status === "applied" ? "Dependency installed and available in worker workspace" : `Installation ${receipt.status}; availability ${available}`, commandReceipt: { id: receipt.id, status: receipt.status, exitCode: receipt.result?.exitCode, logPath: receipt.result?.logPath, revision: receipt.result?.revision } });
         },
       });
       if (signal.aborted) throw new Error("Worker cancelled");
       const outcome = report.results[attempt.order.id];
       if (outcome?.status === "needs-context") {
         const reason = outcome.findings?.join("; ") || report.reason || "Worker needs task input";
+        if (!attempt.order.agentId && ledger.state.status === "active") await ledger.needInput(reason, "worker-approval");
         await ledger.updateWorker(id, "blocked", { workRoot: report.workRoot, findings: [reason], cognition: outcome.cognition });
-        if (attempt.order.agentId) { await this.mailbox.report(attempt.order.agentId, id, reason); await this.pollMessages(); }
-        else if (ledger.state.status === "active") await ledger.needInput(reason, "worker-approval");
+        if (attempt.order.agentId) {
+          await this.mailbox.collect();
+          if (!(await this.mailbox.inbox()).some(message => message.fromRunId === id && message.kind === "request")) await this.mailbox.report(attempt.order.agentId, id, reason);
+          await this.pollMessages();
+        }
         this.input.onStatus?.(`子实例 ${attempt.order.id} 等待任务授权或输入`);
         return;
       }
@@ -278,14 +372,22 @@ export class WorkerSupervisor {
         const reason = report.reason ?? "Worker result was rejected";
         const status = outcome?.status === "blocked" ? "blocked" : "failed";
         await ledger.updateWorker(id, status, { workRoot: report.workRoot, findings: [reason], cognition: outcome?.cognition });
-        if (status === "blocked" && attempt.order.agentId) { await this.mailbox.report(attempt.order.agentId, id, reason); await this.pollMessages(); }
+        if (status === "blocked" && attempt.order.agentId) {
+          await this.mailbox.collect();
+          if (!(await this.mailbox.inbox()).some(message => message.fromRunId === id && message.kind === "request")) await this.mailbox.report(attempt.order.agentId, id, reason);
+          await this.pollMessages();
+        }
         this.input.onStatus?.(`子实例 ${attempt.order.id} ${status === "blocked" ? "等待主代理" : "失败"}`);
         return;
       }
       await ledger.updateWorker(id, "returned", { workRoot: report.workRoot, worktreePath: workspace ?? join(report.workRoot, attempt.order.id), integration: "pending", findings: report.results[attempt.order.id]?.findings ?? [], cognition: outcome?.cognition });
       this.input.onStatus?.(`子实例 ${attempt.order.id} 已返回，等待检查和集成`);
     } catch (error) {
-      await ledger.updateWorker(id, signal.aborted ? "cancelled" : "failed", { findings: [error instanceof Error ? error.message : String(error)] });
+      const workRoot = join(dataRoot, "workers", ledger.state.id, id);
+      const frozen = join(workRoot, attempt.order.id);
+      const recoverable = await stat(join(workRoot, "base")).then(item => item.isDirectory(), () => false)
+        && await stat(frozen).then(item => item.isDirectory(), () => false);
+      await ledger.updateWorker(id, signal.aborted ? "cancelled" : "failed", { ...(recoverable ? { workRoot, worktreePath: workspace ?? frozen } : {}), findings: [attempt.cancelReason ?? (error instanceof Error ? error.message : String(error))] });
       this.input.onStatus?.(`子实例 ${attempt.order.id} ${signal.aborted ? "已取消" : "失败"}`);
     } finally {
       this.releaseReservation(attempt);
@@ -318,7 +420,8 @@ export class WorkerSupervisor {
     return Promise.all(ids.map(id => presented ? this.inspect(id) : inspectWorkerAttempt(this.ledger, this.input.dataRoot, id)));
   }
 
-  async integrate(id: string): Promise<WorkBatchReport | { status: "accepted" }> {
+  async integrate(id: string, reason = "Coordinator accepted the inspected result"): Promise<WorkBatchReport | { status: "accepted" }> {
+    if (!reason.trim() || reason.length > 500) throw new Error("Integration reason is required");
     const attempt = this.attempts.get(id);
     if (!attempt || this.instance(id)?.status !== "returned") throw new Error("Worker attempt is not awaiting integration");
     if (!attempt.inspected) throw new Error("Inspect the worker result and diff before integration");
@@ -326,10 +429,12 @@ export class WorkerSupervisor {
       if (this.instance(id)?.status !== "returned") throw new Error("Worker attempt is no longer awaiting integration");
       const result = await this.inspect(id);
       if (result.report?.status !== "ready") throw new Error("Worker output is not ready");
+      await this.ledger.refreshRevision();
+      const sourceRevision = this.ledger.state.revision;
       const report = await integratePreparedWorkOrder(this.ledger.state.projectRoot, this.input.dataRoot, this.ledger.state.id, id, attempt.order, this.input.signal);
       if (report.status !== "merged") throw new Error(report.reason ?? "Integration failed");
       await this.ledger.refreshRevision();
-      await this.ledger.updateWorker(id, "completed", { integration: "merged" });
+      await this.ledger.updateWorker(id, "completed", { integration: "merged", integrationDecision: { action: "integrate", reason: reason.trim(), runId: id, contractVersion: this.ledger.state.contractVersion ?? 1, sourceRevision, recordedAt: new Date().toISOString() } });
       this.pump(); this.notify();
       return report;
     });
@@ -338,19 +443,22 @@ export class WorkerSupervisor {
     catch (error) { await this.ledger.updateWorker(id, "returned", { integration: "conflict", findings: [error instanceof Error ? error.message : String(error)] }); throw error; }
   }
 
-  async cancel(id: string): Promise<void> {
+  async cancel(id: string, reason = "Cancelled by coordinator"): Promise<void> {
+    if (!reason.trim() || reason.length > 500) throw new Error("Cancellation reason is required");
     const attempt = this.attempts.get(id);
     if (!attempt) throw new Error("Worker attempt not found");
     const state = this.instance(id)?.status;
     if (state === "returned") { await this.integration; if (this.instance(id)?.status !== "returned") throw new Error("Worker result was already integrated"); }
     if (state === "queued" && this.active.has(id)) {
-      attempt.controller.abort(new Error("Worker cancelled"));
+      attempt.cancelReason = reason.trim();
+      attempt.controller.abort(new Error(reason.trim()));
       await attempt.promise;
     } else if (state === "queued" || state === "returned") {
-      await this.ledger.updateWorker(id, "cancelled", { findings: ["Cancelled by coordinator"] });
+      if (state === "returned" && attempt.inspected) await this.ledger.refreshRevision();
+      await this.ledger.updateWorker(id, "cancelled", { findings: [reason.trim()], ...(state === "returned" && attempt.inspected ? { integrationDecision: { action: "reject" as const, reason: reason.trim(), runId: id, contractVersion: this.ledger.state.contractVersion ?? 1, sourceRevision: this.ledger.state.revision, recordedAt: new Date().toISOString() } } : {}) });
       if (state === "queued") this.releaseReservation(attempt);
       this.pump(); this.notify();
-    } else if (state === "running") attempt.controller.abort(new Error("Worker cancelled"));
+    } else if (state === "running") { attempt.cancelReason = reason.trim(); attempt.controller.abort(new Error(reason.trim())); }
   }
   async cancelAll(): Promise<void> {
     for (const id of this.attempts.keys()) if (["queued", "running", "returned"].includes(this.instance(id)?.status ?? "")) await this.cancel(id);

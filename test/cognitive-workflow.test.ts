@@ -8,7 +8,7 @@ import { executeWorkOrders } from "../src/runtime/work-orders";
 import { publicSkillQuery, discoverForGap } from "../src/runtime/skill-discovery";
 import { validateSkillBindings } from "../src/runtime/skill-binding";
 import { checkFileToolCall } from "../src/runtime/file-tool-guard";
-import { initialExpertCandidates } from "../src/runtime/expert-selection";
+import { initialExpertCandidates, searchExpertCandidates } from "../src/runtime/expert-selection";
 import { SkillPluginStore, hashSkillDirectory } from "../src/plugins/third-party";
 import { AgentPresetStore } from "../src/runtime/agent-presets";
 import { createCognitionTools } from "../src/runtime/cognition-tool";
@@ -117,6 +117,10 @@ test("neutral read-only work succeeds without edits; reviewer file access is lim
     await expect(checkFileToolCall("grep", { path: "." }, projectRoot, undefined, [], true)).rejects.toThrow("explicit file");
     await writeFile(join(projectRoot, ".env"), "secret");
     await expect(checkFileToolCall("read", { path: ".env" }, projectRoot, undefined, [], true)).rejects.toThrow("protected file");
+    for (const suffix of [":10", ":1,2", ":5-", ":-3", ":raw:1-2", ":2-4:raw", ":img"]) {
+      await expect(checkFileToolCall("read", { path: `.env${suffix}` }, projectRoot, undefined, [], true)).rejects.toThrow("protected file");
+      await expect(checkFileToolCall("grep", { path: `.env${suffix}`, pattern: "secret" }, projectRoot, undefined, [], true)).rejects.toThrow("protected file");
+    }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -156,6 +160,9 @@ test("worker reads only owned or explicitly assigned source paths", async () => 
     const order = { id: "edit", objective: "Edit app", mode: "implement" as const, ownedPaths: ["app.ts"], readPaths: ["app.test.ts"], resources: [] };
     await checkFileToolCall("read", { path: "app.ts" }, projectRoot, order);
     await checkFileToolCall("grep", { path: "app.test.ts", pattern: "test" }, projectRoot, order);
+    const reads: string[] = [];
+    await checkFileToolCall("read", { path: "app.test.ts:-40" }, projectRoot, { ...order, fullAccess: true }, [], false, undefined, path => reads.push(path));
+    expect(reads).toEqual(["app.test.ts"]);
     await expect(checkFileToolCall("read", { path: "private.ts" }, projectRoot, order)).rejects.toThrow("unassigned file");
     await expect(checkFileToolCall("grep", { path: ".", pattern: "test" }, projectRoot, order)).rejects.toThrow("unassigned file");
     await expect(checkFileToolCall("glob", { pattern: "**/*" }, projectRoot, order)).rejects.toThrow("cannot enumerate");
@@ -229,9 +236,13 @@ test("initial expert matching shortlists without starting instances; legacy Supe
   const { root } = await fixture();
   try {
     expect(initialExpertCandidates("Fix React frontend component", [
-      { id: "front", name: "Frontend", description: "React frontend components", instructions: "Review components", hash: "x" },
+      { id: "front", name: "Frontend", description: "React frontend components", instructions: "Review components", hash: "x", package: { revision: "r", skills: [{ id: "front:react", hash: "h" }] } },
       { id: "data", name: "Database", description: "SQL schema", instructions: "Review schema", hash: "y" },
     ])).toEqual(["front"]);
+    expect(searchExpertCandidates("Python SymPy Permutation subclassing source code", [
+      { id: "source-radar", name: "Source radar", description: "Content source analysis", instructions: "Content", hash: "x", package: { revision: "r", skills: [{ id: "radar:content", hash: "h" }] } },
+      { id: "code-review", name: "Code review", description: "Review source changes", instructions: "Review", hash: "y", package: { revision: "r", skills: [{ id: "review:code", hash: "h" }] } },
+    ])).toEqual([]);
     const dataRoot = join(root, "state");
     const skillDir = join(dataRoot, "plugin-packs", "superpowers", "skills", "sample");
     await mkdir(skillDir, { recursive: true });

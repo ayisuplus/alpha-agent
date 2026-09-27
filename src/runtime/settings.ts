@@ -22,7 +22,7 @@ export const DEFAULT_SETTINGS: AlphaSettings = {
   revision: 0,
   model: { default: null, translation: null },
   workerModels: { investigate: null, implement: null, review: null },
-  budget: { maxToolCalls: 120, wallTimeMinutes: 15, maxTotalToolCalls: 1200, totalWallTimeMinutes: 120 },
+  budget: { maxToolCalls: 120, wallTimeMinutes: 30, maxTotalToolCalls: 1200, totalWallTimeMinutes: 120 },
   generation: { comfyUrl: "http://127.0.0.1:8188", image: true, voice: true, video: true },
   plugins: { comfyui: true },
   notifications: { enabled: true },

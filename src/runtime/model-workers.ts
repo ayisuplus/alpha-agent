@@ -2,12 +2,17 @@ import { createHash, randomUUID } from "node:crypto";
 import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { executeWorkOrders, type WorkBatchReport, type WorkOrder, type WorkerResult } from "./work-orders";
-import { SkillPluginStore, type SkillPlugin } from "../plugins/third-party";
+import { hashSkillDirectory, SkillPluginStore, type SkillPlugin } from "../plugins/third-party";
 import { AgentPresetStore } from "./agent-presets";
 import { createBrowserTool } from "./browser-tool";
 import type { BrowserSession } from "./visible-browser";
 import { parseWorkerBrowserRequest } from "./worker-browser-tool";
 import type { TaskState } from "./task-ledger";
+import { capabilityPool, resolvePoolSkill } from "./capability-pool";
+import { guardMCPTools, MCPPermissionStore } from "./mcp-permissions";
+import { parseWorkerMCPRequest, writeWorkerMCPResponse, type WorkerMCPDescriptor } from "./worker-mcp-proxy";
+import { commandApprovalStore, type CommandRequest } from "./command-approval";
+import { independentCommandReviewer } from "./auto-reviewer";
 
 const appRoot = resolve(import.meta.dir, "..", "..");
 
@@ -36,30 +41,50 @@ async function copySkill(source: string, target: string): Promise<string> {
 }
 
 export async function snapshotSkills(dataRoot: string, stateRoot: string, order: WorkOrder): Promise<WorkOrder> {
-  if (!order.skillIds?.length) return order;
   const pluginStore = new SkillPluginStore(dataRoot);
-  const [available, installed] = await Promise.all([pluginStore.loadSkills(), pluginStore.list()]);
+  const [available, installed, catalog] = await Promise.all([pluginStore.loadSkills(), pluginStore.list(), capabilityPool(dataRoot)]);
   const bundled = order.preset ? await new AgentPresetStore(dataRoot).loadBundledSkills(order.preset) : [];
   const selected: SkillPlugin[] = [];
   const skillSnapshots: NonNullable<WorkOrder["skillSnapshots"]> = [];
-  for (const id of order.skillIds) {
+  const capabilitySnapshots: NonNullable<WorkOrder["capabilitySnapshots"]> = [];
+  for (const id of order.capabilityIds ?? []) {
+    const previous = order.capabilitySnapshots?.find(entry => entry.id === id);
+    if (previous?.kind === "skill") { capabilitySnapshots.push(previous); continue; }
+    const item = catalog.find(entry => entry.id === id && entry.enabled);
+    if (!item) throw new Error(`Capability is unavailable: ${id}`);
+    if (previous && (previous.revision !== item.revision || previous.hash !== item.hash)) throw new Error(`Capability changed since delegation: ${id}`);
+    capabilitySnapshots.push({ id, kind: item.kind, revision: item.revision, ...(item.hash ? { hash: item.hash } : {}) });
+  }
+  const skillIds = [...new Set([...(order.skillIds ?? []), ...capabilitySnapshots.filter(item => item.kind === "skill").map(item => item.id)])];
+  for (const id of skillIds) {
+    const previous = order.skillSnapshots?.find(item => item.id === id);
+    if (previous) {
+      const match = /^([a-z][a-z0-9-]*):([a-z][a-z0-9-]*)$/.exec(id);
+      if (!match) throw new Error(`Worker Skill snapshot is invalid: ${id}`);
+      const existing = previous.path ? join(stateRoot, "plugin-packs", previous.path) : join(stateRoot, "plugin-packs", match[1], "skills", match[2]);
+      if (await hashSkillDirectory(existing) !== previous.hash) throw new Error(`Worker Skill snapshot changed: ${id}`);
+      skillSnapshots.push(previous);
+      continue;
+    }
     const bundledSkill = bundled.find(item => item.name === id);
-    const skill = bundledSkill ?? available.find(item => item.name === id);
+    const pooled = bundledSkill ? undefined : await resolvePoolSkill(dataRoot, id);
+    const skill = bundledSkill ?? pooled?.skill ?? available.find(item => item.name === id);
     const pluginId = id.split(":")[0];
     const plugin = bundledSkill
       ? { id: pluginId, name: pluginId, source: `expert:${order.preset!.id}`, revision: order.preset!.package!.revision, enabled: true, skillCount: 0, hookCount: 0, hooksEnabled: false, mcpCount: 0, mcpEnabled: false }
-      : installed.find(item => item.id === pluginId && item.enabled);
+      : installed.find(item => item.id === pluginId && item.enabled) ?? (pooled && id.startsWith("expert-") ? { id: pluginId, name: pluginId, source: `pool:${id}`, revision: pooled.revision, enabled: true, skillCount: 0, hookCount: 0, hooksEnabled: false, mcpCount: 0, mcpEnabled: false } : undefined);
     const pathWithin = skill?.containRoot ? relative(await realpath(skill.containRoot), await realpath(skill.baseDir)) : "..";
     if (!skill || !plugin || !skill.containRoot || pathWithin === ".." || pathWithin.startsWith(`..${sep}`) || isAbsolute(pathWithin)) throw new Error(`Skill 不可用于 worker：${id}`);
-    const target = join(stateRoot, "plugin-packs", pluginId, "skills", id.slice(pluginId.length + 1));
+    const path = id.startsWith("expert-") ? `selected/${pooled!.hash}` : undefined;
+    const target = path ? join(stateRoot, "plugin-packs", path) : join(stateRoot, "plugin-packs", pluginId, "skills", id.slice(pluginId.length + 1));
     const hash = await copySkill(skill.baseDir, target);
-    skillSnapshots.push({ id, hash, revision: plugin.revision });
+    skillSnapshots.push({ id, hash, revision: plugin.revision, ...(path ? { path } : {}) });
     if (!selected.some(item => item.id === pluginId)) selected.push({ ...plugin, enabled: true, skillCount: 0, hookCount: 0, hooksEnabled: false, mcpCount: 0, mcpEnabled: false });
     selected.find(item => item.id === pluginId)!.skillCount++;
   }
   await mkdir(join(stateRoot, "plugin-packs"), { recursive: true });
   await writeFile(join(stateRoot, "plugin-packs", "installed.json"), JSON.stringify({ plugins: selected }));
-  return { ...order, skillSnapshots };
+  return { ...order, skillIds, skillSnapshots, capabilitySnapshots };
 }
 
 export function runModelWorkOrders(input: {
@@ -86,11 +111,37 @@ export function runModelWorkOrders(input: {
   browserLease?: { claim: (instanceId: string) => boolean; release: (instanceId: string) => void };
   onWorkerEvent?: (order: WorkOrder, state: "started" | "completed" | "failed") => void | Promise<void>;
   onWorkerUsage?: (order: WorkOrder, usage: NonNullable<WorkerResult["usage"]>) => void | Promise<void>;
+  onInstallReceipt?: (order: WorkOrder, receipt: CommandRequest, available: boolean) => void | Promise<void>;
 }): Promise<WorkBatchReport> {
   let browserQueue: Promise<unknown> = Promise.resolve();
   return executeWorkOrders({ ...input, async runWorker(order, directory, signal) {
     signal?.throwIfAborted();
     const modelSelector = order.modelSelector ?? input.modelSelector;
+    if (order.install) {
+      if (order.mode !== "implement" || !order.agentId) throw new Error("Dependency installation requires an implementing persistent subagent");
+      const cwd = resolve(directory, order.install.cwdRelative);
+      const relativeCwd = relative(directory, cwd);
+      if (relativeCwd.startsWith("..") || isAbsolute(relativeCwd)) throw new Error("Dependency installation target escapes the worker workspace");
+      const canonicalCwd = relative(await realpath(directory), await realpath(cwd));
+      if (canonicalCwd.startsWith("..") || isAbsolute(canonicalCwd)) throw new Error("Dependency installation target escapes the worker workspace through a link");
+      const receipt = await commandApprovalStore(input.dataRoot).execute(input.taskId, cwd, order.install.argv, "other", signal,
+        input.workerContext?.permissionMode ? { mode: input.workerContext.permissionMode, roots: [directory] } : undefined,
+        input.workerContext?.permissionMode === "auto" && input.modelSelector ? independentCommandReviewer(input.dataRoot, input.modelSelector) : undefined,
+        order.install.network, order.install.approvalId, order.install.requestId);
+      const artifact = resolve(cwd, order.install.availabilityPath);
+      const relativeArtifact = relative(cwd, artifact);
+      if (!relativeArtifact || relativeArtifact.startsWith("..") || isAbsolute(relativeArtifact)) throw new Error("Installation availability path escapes the worker workspace");
+      let available = receipt.status === "complete" && receipt.result?.exitCode === 0 && await stat(artifact).then(() => true, () => false);
+      if (available) {
+        const canonicalArtifact = relative(await realpath(cwd), await realpath(artifact));
+        available = !canonicalArtifact.startsWith("..") && !isAbsolute(canonicalArtifact);
+      }
+      await input.onInstallReceipt?.(order, receipt, available);
+      if (!available) {
+        const reason = receipt.status === "pending" ? `Installation approval required: ${receipt.id}` : receipt.status === "complete" && receipt.result?.exitCode === 0 ? `Installed dependency is unavailable at ${order.install.availabilityPath}` : `Installation ${receipt.status} (${receipt.result?.exitCode ?? "no exit code"}): ${receipt.id}`;
+        return { status: "needs-context", findings: [reason], evidence: receipt.result?.logPath ? [receipt.result.logPath] : [], unresolved: [reason] };
+      }
+    }
     const localAbort = new AbortController();
     const workerSignal = signal ? AbortSignal.any([signal, localAbort.signal]) : localAbort.signal;
     const runDir = join(input.dataRoot, "worker-runs", input.taskId, order.instanceId ?? `${order.id}-${randomUUID()}`);
@@ -99,14 +150,63 @@ export function runModelWorkOrders(input: {
     const resultFile = join(runDir, "result.json");
     const browserDirectory = join(runDir, "browser-requests");
     await mkdir(browserDirectory, { recursive: true });
+    const mcpDirectory = join(runDir, "mcp-requests");
+    await mkdir(mcpDirectory, { recursive: true });
     const stateRoot = order.agentId ? join(input.dataRoot, "worker-agents", input.taskId, order.agentId, "state") : join(runDir, "state");
-    const withSkills = order.skillSnapshots?.length ? order : await snapshotSkills(input.dataRoot, stateRoot, order);
+    const withSkills = await snapshotSkills(input.dataRoot, stateRoot, order);
+    const mcpSelections = (withSkills.capabilitySnapshots ?? []).filter(item => item.kind === "mcp-server" || item.kind === "mcp-tool");
+    const catalog = mcpSelections.length ? await capabilityPool(input.dataRoot) : [];
+    const mcpPlugins = [...new Set(mcpSelections.map(item => catalog.find(entry => entry.id === item.id)?.source).filter((item): item is string => !!item))];
+    const mcp = mcpPlugins.length ? await new SkillPluginStore(input.dataRoot).loadMCP(directory, mcpPlugins) : null;
+    if (mcp?.errors.length) {
+      await mcp.manager.disconnectAll();
+      return { status: "needs-context", findings: mcp.errors, evidence: [], unresolved: mcp.errors };
+    }
+    const allowedMCP = (mcp?.tools ?? []).filter(tool => mcpSelections.some(item => item.kind === "mcp-tool" ? item.id === tool.name : item.id === tool.mcpServerName));
+    const permissions = await new MCPPermissionStore(input.dataRoot).list();
+    const selectedMCP = (order.mode === "implement" ? allowedMCP : allowedMCP.filter(tool => permissions[tool.name] === "read"));
+    const guardedMCP = guardMCPTools(selectedMCP, new MCPPermissionStore(input.dataRoot), input.taskId, async () => undefined);
+    const descriptors: WorkerMCPDescriptor[] = selectedMCP.map(tool => ({ name: tool.name, label: tool.label, description: tool.description, parameters: tool.parameters, server: tool.mcpServerName ?? "" }));
+    if (descriptors.length) {
+      const pluginRevisions = await new SkillPluginStore(input.dataRoot).list();
+      const file = join(input.dataRoot, "mcp-tool-catalog.json");
+      const prior = await readFile(file, "utf8").then(value => JSON.parse(value) as Array<{ name: string; server: string; description: string; revision: string }>).catch(() => []);
+      const current = descriptors.map(item => ({ name: item.name, server: item.server, description: item.description, revision: pluginRevisions.find(plugin => item.server.startsWith(`alpha_${plugin.id}_`))?.revision ?? "" }));
+      const merged = [...prior.filter(item => !current.some(next => next.name === item.name)), ...current];
+      const temp = `${file}.${randomUUID()}.tmp`;
+      await writeFile(temp, JSON.stringify(merged));
+      await rename(temp, file);
+    }
     const { preset, ...workOrder } = withSkills;
-    await writeFile(requestFile, JSON.stringify({ taskId: input.taskId, projectRoot: directory, dataRoot: stateRoot, authorizationRoot: input.dataRoot, workerContext: input.workerContext, plugins: input.plugins, generation: input.generation, comfyUrl: input.comfyUrl, objective: order.objective, workOrder, workerPreset: preset, modelSelector, browserProxyDir: browserDirectory, eventFile: join(runDir, "events.jsonl") }));
+    await writeFile(requestFile, JSON.stringify({ taskId: input.taskId, projectRoot: directory, dataRoot: stateRoot, authorizationRoot: input.dataRoot, workerContext: input.workerContext, plugins: input.plugins, generation: input.generation, comfyUrl: input.comfyUrl, objective: order.objective, workOrder, workerPreset: preset, modelSelector, browserProxyDir: browserDirectory, mcpProxyDir: mcpDirectory, mcpDescriptors: descriptors, eventFile: join(runDir, "events.jsonl") }));
     await input.onWorkerEvent?.(withSkills, "started");
     const browserTool = createBrowserTool(() => input.browserAccess?.() === false ? null : input.browser ?? null, input.dataRoot, input.browserUrl);
     const handled = new Set<string>();
     let browserPump: Promise<void> | undefined;
+    const handledMCP = new Set<string>();
+    let mcpPump: Promise<void> | undefined;
+    const serveMCP = () => {
+      if (mcpPump) return mcpPump;
+      mcpPump = (async () => {
+        for (const name of (await readdir(mcpDirectory)).filter(item => /^[0-9a-f-]{36}\.request\.json$/.test(item)).sort()) {
+          if (handledMCP.has(name)) continue;
+          handledMCP.add(name);
+          const id = name.slice(0, 36);
+          let result: unknown;
+          try {
+            const file = join(mcpDirectory, name);
+            const info = await lstat(file);
+            if (!info.isFile() || info.size > 64_000) throw new Error("Invalid worker MCP request");
+            const request = parseWorkerMCPRequest(JSON.parse(await readFile(file, "utf8")), id, new Set(guardedMCP.map(tool => tool.name)));
+            if (await Bun.file(join(mcpDirectory, `${id}.cancel`)).exists() || workerSignal.aborted) throw new Error("Worker MCP request was cancelled");
+            const tool = guardedMCP.find(item => item.name === request.name)!;
+            result = await tool.execute(request.callId, request.args as never, undefined, undefined as never, workerSignal);
+          } catch (error) { result = { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true }; }
+          await writeWorkerMCPResponse(mcpDirectory, id, result);
+        }
+      })().finally(() => { mcpPump = undefined; });
+      return mcpPump;
+    };
     const serveBrowser = () => {
       if (browserPump) return browserPump;
       browserPump = (async () => {
@@ -153,10 +253,11 @@ export function runModelWorkOrders(input: {
     };
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();
-    const timeout = setTimeout(abort, 125_000);
+    const timeout = setTimeout(abort, 610_000);
     const started = performance.now();
     let usageRecorded = false;
     const browserPoll = setInterval(() => { void serveBrowser().catch(() => undefined); }, 50);
+    const mcpPoll = setInterval(() => { void serveMCP().catch(() => undefined); }, 50);
     try {
       const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       const result = await readFile(resultFile, "utf8").then(text => JSON.parse(text) as WorkerResult & { error?: string }).catch(() => null);
@@ -171,7 +272,10 @@ export function runModelWorkOrders(input: {
       throw error;
     } finally {
       clearInterval(browserPoll);
+      clearInterval(mcpPoll);
       await browserPump;
+      await mcpPump;
+      await mcp?.manager.disconnectAll();
       clearTimeout(timeout);
       if (hardKill) clearTimeout(hardKill);
       signal?.removeEventListener("abort", abort);

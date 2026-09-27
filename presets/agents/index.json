@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "revision": "alpha-core-2026-09-27",
+  "revision": "alpha-content-2026-09-27",
   "presets": [
     {
       "id": "general",
@@ -51,6 +51,34 @@
       "skill": "release-service"
     },
     {
+      "id": "game-designer",
+      "name": "游戏系统设计师",
+      "description": "2D 游戏核心循环、机制优先级、数值与经济系统、关卡结构与难度曲线、教学与反馈契约；game design core loop mechanics economy level design balance。",
+      "file": "game-designer.md",
+      "skill": "design-game-systems"
+    },
+    {
+      "id": "gameplay-engineer",
+      "name": "2D 游戏程序工程师",
+      "description": "2D 游戏主循环、场景状态机、碰撞与手感、输入、存档、图集批处理与帧预算实现；2D game engine gameplay loop collision physics sprite input performance。",
+      "file": "gameplay-engineer.md",
+      "skill": "implement-gameplay"
+    },
+    {
+      "id": "game-artist",
+      "name": "2D 游戏美术与动画专家",
+      "description": "2D 游戏像素与矢量风格规范、精灵图集、帧动画与骨骼动画、瓦片场景、UI 皮肤与特效；pixel art sprite atlas tileset animation UI skin VFX。",
+      "file": "game-artist.md",
+      "skill": "craft-game-art"
+    },
+    {
+      "id": "game-playtest",
+      "name": "游戏测试与数值平衡专家",
+      "description": "2D 游戏试玩验证、数值平衡核对、难度曲线与手感验收、性能稳定性与缺陷回归；playtest balance difficulty curve difficulty tuning QA performance regression。",
+      "file": "game-playtest.md",
+      "skill": "playtest-game"
+    },
+    {
       "id": "literature-researcher",
       "name": "文献与证据研究员",
       "description": "AI 与计算机论文检索、精读、Related Work、引用核验和研究空白；literature research citations evidence。",
@@ -98,6 +126,90 @@
       "description": "真实参考、资产一致性、分镜、图像提示、视频生成包与音画节奏；visual storyboard image video audio。",
       "file": "visual-director.md",
       "skill": "direct-visuals"
+    },
+    {
+      "id": "short-video-operator",
+      "name": "短视频增长专家（抖音/快手）",
+      "description": "抖音为主的定位起号、发布优化、流量池诊断与长效赛马，兼顾快手老铁生态；Douyin Kuaishou short video growth。",
+      "file": "short-video-operator.md",
+      "skill": "grow-short-video"
+    },
+    {
+      "id": "bilibili-operator",
+      "name": "B站社区运营专家",
+      "description": "B站分区文化、中长视频选题系列化、标题封面、弹幕三连设计与投稿增长；Bilibili UP主 danmaku community。",
+      "file": "bilibili-operator.md",
+      "skill": "grow-bilibili"
+    },
+    {
+      "id": "xiaohongshu-planner",
+      "name": "小红书种草策划",
+      "description": "搜索关键词、种草选题、封面标题、笔记结构与搜索推荐双流量；Xiaohongshu RED note SEO planting。",
+      "file": "xiaohongshu-planner.md",
+      "skill": "plant-xiaohongshu"
+    },
+    {
+      "id": "wechat-operator",
+      "name": "微信生态运营专家",
+      "description": "视频号社交裂变、公众号完读、小绿书与公私域联动；WeChat Channels 公众号 private traffic。",
+      "file": "wechat-operator.md",
+      "skill": "grow-wechat"
+    },
+    {
+      "id": "content-growth-analyst",
+      "name": "内容数据复盘师",
+      "description": "跨平台指标口径、漏斗诊断、对标拆解、PDCA复盘与增长假设验证；content analytics review PDCA benchmark。",
+      "file": "content-growth-analyst.md",
+      "skill": "review-content-analytics"
+    },
+    {
+      "id": "live-stream-operator",
+      "name": "直播运营与主播教练",
+      "description": "人货场搭建、直播脚本话术、场控 SOP、起号破层与播后复盘；live stream commerce Douyin Channels。",
+      "file": "live-stream-operator.md",
+      "skill": "run-live-stream"
+    },
+    {
+      "id": "compliance-reviewer",
+      "name": "内容合规审核员",
+      "description": "强制标注、广告法、特殊品类资质、版权与平台红线的发布前审核分级；compliance moderation China platforms。",
+      "file": "compliance-reviewer.md",
+      "skill": "check-content-compliance"
+    },
+    {
+      "id": "doc-writer",
+      "name": "Word 文档专家",
+      "description": "Word 文档撰写、Markdown 转 Word、格式套版、公文排版、修订追踪与报告交付；docx Word report proposal。",
+      "file": "doc-writer.md",
+      "skill": "craft-documents"
+    },
+    {
+      "id": "data-sheet-expert",
+      "name": "Excel 表格专家",
+      "description": "Excel/CSV 数据清洗、公式、透视表、条件统计、图表生成与数据报表；excel spreadsheet data analysis。",
+      "file": "data-sheet-expert.md",
+      "skill": "process-data"
+    },
+    {
+      "id": "presentation-designer",
+      "name": "PPT 演示专家",
+      "description": "演示文稿从零制作、结构重组、美化编辑与演讲备注；PPT slides presentation deck。",
+      "file": "presentation-designer.md",
+      "skill": "build-slides"
+    },
+    {
+      "id": "document-processor",
+      "name": "PDF 与文档处理专家",
+      "description": "PDF 创建/合并/拆分/水印/表单填写，多办公格式互转与内容提取；PDF convert OCR document processing。",
+      "file": "document-processor.md",
+      "skill": "handle-documents"
+    },
+    {
+      "id": "file-manager",
+      "name": "文件管理助手",
+      "description": "本地文件语义搜索、分类整理方案规划、大文件与重复文件清理分析；file organization search cleanup。",
+      "file": "file-manager.md",
+      "skill": "organize-files"
     }
   ]
 }

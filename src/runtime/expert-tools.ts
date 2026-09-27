@@ -20,12 +20,12 @@ export function createExpertTools(store: AgentPresetStore, plugins: SkillPluginS
   return [
     {
       name: "alpha_expert_search", label: "Search experts", loadMode: "essential",
-      description: "Search the enabled expert library by specialty. Returns a small metadata shortlist; expert persona and bundled Skills load only when selected for a work order.",
+      description: "Search enabled experts that have a dispatchable Skill package. Choose one only when its specialty fits the task; an empty result means dispatch a neutral scoped worker instead.",
       parameters: type({ query: "string" }),
       async execute(_id, args) {
         try {
           const matches = searchExpertCandidates(args.query, await store.enabled());
-          return { content: [{ type: "text", text: JSON.stringify(matches.map(item => ({ id: item.id, name: item.name, description: item.description, skillIds: item.skillIds ?? [] }))) }] };
+          return { content: [{ type: "text", text: JSON.stringify(matches.map(item => ({ id: item.id, name: item.name, description: item.description, skillIds: item.skillIds ?? [], dispatchable: true }))) }] };
         } catch (error) { return fail(error); }
       },
     },
