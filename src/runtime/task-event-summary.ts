@@ -1,5 +1,5 @@
 import type { PauseReasonCode, StopReasonCode } from "./pause-reasons";
-import type { TaskActor, TaskEvent, TaskEventType } from "./task-events";
+import type { TaskActor, TaskEvent, TaskEventType, WorkerStopReason } from "./task-events";
 
 /**
  * Display projection of the task event log: the durable track of the workbench timeline. The activity log keeps the
@@ -54,6 +54,13 @@ const WORKER_LABELS: Record<string, string> = {
 
 const VERDICT_LABELS: Record<string, string> = { pass: "通过", "changes-requested": "要求修改", inconclusive: "无法判定" };
 
+const WORKER_STOP_LABELS: Record<WorkerStopReason, string> = {
+  completed: "已交结果", "needs-input": "等待任务输入", aborted: "已中止", error: "运行出错",
+  "max-tokens": "回复超出 token 上限", budget: "预算用尽", refusal: "模型拒绝", "no-result": "未交结果",
+};
+
+const MESSAGE_KIND_LABELS: Record<string, string> = { information: "信息", request: "请求", decision: "决定" };
+
 function detail(text: string | undefined | null): string | undefined {
   const value = text?.trim();
   if (!value) return undefined;
@@ -104,6 +111,15 @@ export function summarizeTaskEvent(event: TaskEvent): TaskTimelineEvent | null {
     case "worker/finished": return { ...row, label: `子实例 ${short(event.payload.id)}：${WORKER_LABELS[event.payload.status] ?? event.payload.status}`, detail: detail(event.payload.findings.join("；")), tone: event.payload.status === "completed" ? "success" : "warning", refs: { workerId: event.payload.id } };
     case "workers/reconciled": return { ...row, label: "子实例已对账", detail: detail(event.payload.reason), tone: "warning" };
     case "worker-outcome/recorded": return { ...row, label: `子代理结果：${event.payload.outcome.status}`, detail: detail(event.payload.outcome.findings.join("；")) };
+    case "worker/activated": return { ...row, label: `子实例 ${short(event.payload.attemptId)} 已启动`, detail: detail(event.payload.worktreePath ?? event.payload.workRoot), refs: { workerId: event.payload.attemptId, orderId: event.payload.orderId } };
+    case "worker/result": return {
+      ...row,
+      label: `子实例 ${short(event.payload.attemptId)} ${WORKER_STOP_LABELS[event.payload.stopReason]}`,
+      detail: detail(event.payload.findings.join("；") || event.payload.detail),
+      tone: event.payload.stopReason === "completed" ? "success" : event.payload.stopReason === "no-result" || event.payload.stopReason === "error" ? "danger" : "warning",
+      refs: { workerId: event.payload.attemptId, ...(event.payload.reviewVerdict ? { verdict: event.payload.reviewVerdict } : {}) },
+    };
+    case "worker/message-queued": return { ...row, label: `消息 → ${event.payload.message.toAgentId ? `子代理 ${short(event.payload.message.toAgentId)}` : "主代理"} · ${MESSAGE_KIND_LABELS[event.payload.message.kind] ?? event.payload.message.kind}`, detail: detail(event.payload.message.body), tone: event.payload.message.kind === "request" ? "warning" : "info" };
     case "status/changed": {
       if (event.payload.status === "complete") return { ...row, label: "已验收", tone: "success" };
       if (event.payload.status === "stopped") return { ...row, label: `已停止：${STOP_LABELS[event.payload.reason]}`, detail: detail(event.payload.detail), tone: "warning", refs: { stopReason: event.payload.reason } };
@@ -119,6 +135,7 @@ export function summarizeTaskEvent(event: TaskEvent): TaskTimelineEvent | null {
     case "failure/cleared":
     case "worker-cognition/updated":
     case "worker-run/prepared":
+    case "worker/message-acknowledged":
       return null;
     // No default: the switch must stay exhaustive, so a new event type fails to compile until it is classified here.
   }

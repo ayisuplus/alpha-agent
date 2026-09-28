@@ -54,6 +54,7 @@ import { ompAgentId, ompSessionSettings, sessionEditMode } from "./omp-settings"
 import { alphaContract, cognitionSnapshot, isCodeWork, sessionToolNames, taskPrompt, type SessionFacts, type SessionRole } from "./session-profile";
 import type { BrowserSession } from "./visible-browser";
 import type { PauseReasonCode } from "./pause-reasons";
+import { WorkerStopError } from "./worker-stop";
 
 export interface RunOptions {
   projectRoot: string;
@@ -526,11 +527,12 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     }
     if (answering && needsInputReason) throw new Error(needsInputReason);
     if (!answering && String(ledger.state.status) === "needs-input") throw new NeedsInputError(needsInputReason ?? ledger.state.pendingQuestion ?? "User input required");
-    if (stalledReason) throw new Error(stalledReason);
-    if (budgetReason) throw new Error(budgetReason);
+    // A stall means the run produced nothing; keep it structured so a worker's parent logs no-result, not a string.
+    if (stalledReason) throw new WorkerStopError("no-result", stalledReason);
+    if (budgetReason) throw new WorkerStopError("budget", budgetReason);
     const lastMessage = session.getLastAssistantMessage();
     if (lastMessage?.stopReason === "error" || lastMessage?.stopReason === "length") {
-      throw new Error(lastMessage.errorMessage ?? `Model response ended with ${lastMessage.stopReason}`);
+      throw new WorkerStopError(lastMessage.stopReason === "length" ? "max-tokens" : "error", lastMessage.errorMessage ?? `Model response ended with ${lastMessage.stopReason}`);
     }
     if (answering) {
       if (options.signal?.aborted) {
@@ -560,7 +562,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     }
     outcome = String(ledger.state.status) === "needs-input" ? "needs-input" : stalledReason ? "error" : budgetReason ? "budget" : options.signal?.aborted ? "cancelled" : "error";
     failureReason = needsInputReason ?? stalledReason ?? budgetReason ?? (error instanceof Error ? error.message : String(error));
-    if (answering) throw stalledReason ? new Error(stalledReason) : budgetReason ? new Error(budgetReason) : error;
+    if (answering) throw stalledReason ? new WorkerStopError("no-result", stalledReason) : budgetReason ? new WorkerStopError("budget", budgetReason) : error;
     if (outcome === "needs-input") throw new NeedsInputError(failureReason);
     const perRunBudget = budgetReason === `Model run exceeded ${wallTimeMs} ms` && remainingTime > wallTimeMs
       || budgetReason === `Model run exceeded ${maxToolCalls} tool calls` && remainingCalls > maxToolCalls;
@@ -574,7 +576,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       // `recordFailure` already stored the text; the code says what kind of failure ended the run.
       await ledger.stop(budgetReason ? "budget" : stalledReason ? "model" : "error");
     }
-    throw stalledReason ? new Error(stalledReason) : budgetReason ? new Error(budgetReason) : error;
+    throw stalledReason ? new WorkerStopError("no-result", stalledReason) : budgetReason ? new WorkerStopError("budget", budgetReason) : error;
   } finally {
     clearTimeout(timeout);
     clearTimeout(firstResponseTimer);

@@ -5,6 +5,7 @@ import { contractReducers } from "./apply/contract";
 import { evidenceReducers } from "./apply/evidence";
 import { lifecycleReducers } from "./apply/lifecycle";
 import { planReducers } from "./apply/plan";
+import { mailboxReducers } from "./apply/mailbox";
 import { workerReducers } from "./apply/worker";
 
 /**
@@ -17,6 +18,7 @@ const reducers = {
   ...contractReducers,
   ...evidenceReducers,
   ...lifecycleReducers,
+  ...mailboxReducers,
   ...planReducers,
   ...workerReducers,
 } as unknown as Partial<Record<TaskEventType, AnyReducer>>;

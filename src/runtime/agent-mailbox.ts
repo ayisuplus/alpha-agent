@@ -3,7 +3,7 @@ import { link, mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promi
 import { dirname, join } from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
-import { fingerprintSource, type TaskLedger } from "./task-ledger";
+import { fingerprintSource, type TaskLedger, type TaskState } from "./task-ledger";
 import type { WorkOrder } from "./work-orders";
 import { validateReviewEvidence } from "./development-review-tool";
 
@@ -69,13 +69,32 @@ async function readPending(directory: string): Promise<AgentMessage[]> {
   return pending;
 }
 
-async function acknowledge(directory: string, ids: string[]): Promise<void> {
+async function acknowledge(directory: string, ids: string[], onAck?: (id: string) => Promise<void>): Promise<void> {
   for (const id of ids) {
     if (!/^[0-9a-f]{64}$/.test(id) || !await Bun.file(join(directory, `${id}.json`)).exists()) throw new Error(`Unknown mailbox message: ${id}`);
     const ack = join(directory, "ack", id);
     await mkdir(join(directory, "ack"), { recursive: true });
     await writeFile(ack, new Date().toISOString(), { flag: "wx" }).catch(error => { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; });
+    await onAck?.(id);
   }
+}
+
+/**
+ * The event log mirrors the file transport so a restart can rebuild who has what pending; the files stay the
+ * transport the worker children poll, so a missing ledger or a failed append is logged and never breaks delivery.
+ * Deduped by id: a replayed `collect()` redelivers the same message and the reducer would fold it away, but the
+ * append is avoided.
+ */
+async function recordMessage(ledger: TaskLedger | undefined, message: AgentMessage): Promise<void> {
+  try {
+    if (!ledger || ledger.state.workerMessages?.some(item => item.id === message.id)) return;
+    await ledger.recordWorkerMessage(message);
+  } catch (error) { console.error("ALPHA_MAILBOX_EVENT_FAILED", error); }
+}
+
+async function recordAck(ledger: TaskLedger | undefined, id: string, agentId: string | null): Promise<void> {
+  try { await ledger?.acknowledgeWorkerMessage(id, agentId); }
+  catch (error) { console.error("ALPHA_MAILBOX_ACK_FAILED", error); }
 }
 
 export class AgentMailbox {
@@ -95,6 +114,7 @@ export class AgentMailbox {
         const target = join(mainInbox(this.root, this.ledger.state.id), name);
         const existed = await Bun.file(target).exists();
         await createMessage(target, item);
+        await recordMessage(this.ledger, item);
         if (item.kind === "request") await this.ledger.recordWorkerRequest({ id: item.id, agentId: agent.id, runId: item.fromRunId!, orderId: this.ledger.state.cognition!.instances!.find(run => run.id === item.fromRunId)!.orderId, kind: item.request?.kind ?? "context", blockedStep: item.request?.blockedStep ?? item.body, capabilityIds: item.request?.capabilityIds ?? [], evidence: item.evidence, sourceEvidence: item.sourceEvidence, recommendation: item.recommendation, targetEnvironment: item.request?.targetEnvironment, proposedArgv: item.request?.proposedArgv, network: item.request?.network, contractVersion: item.contractVersion, sourceRevision: item.sourceRevision ?? item.baseRevision });
         if (!existed) added = true;
       }
@@ -105,7 +125,7 @@ export class AgentMailbox {
 
   async inbox(ack: string[] = []): Promise<AgentMessage[]> {
     const directory = mainInbox(this.root, this.ledger.state.id);
-    await acknowledge(directory, ack);
+    await acknowledge(directory, ack, id => recordAck(this.ledger, id, null));
     const pending = await readPending(directory);
     this.unread = pending.length;
     return pending;
@@ -119,12 +139,15 @@ export class AgentMailbox {
     const id = hashId(this.ledger.state.id, "coordinator", toolCallId, toAgentId, body);
     const item: AgentMessage = { id, taskId: this.ledger.state.id, fromAgentId: null, fromRunId: null, toAgentId, kind, body: body.trim(), ...(replyTo ? { replyTo } : {}), evidence: [], contractVersion: this.ledger.state.contractVersion ?? 1, baseRevision: this.ledger.state.revision, recordedAt: new Date().toISOString() };
     await createMessage(join(agentState(this.root, this.ledger.state.id, toAgentId), "inbox", `${id}.json`), item);
+    await recordMessage(this.ledger, item);
     return id;
   }
 
   async report(agentId: string, runId: string, body: string): Promise<void> {
     const id = hashId(this.ledger.state.id, agentId, runId, "needs-context");
-    await createMessage(join(mainInbox(this.root, this.ledger.state.id), `${id}.json`), { id, taskId: this.ledger.state.id, fromAgentId: agentId, fromRunId: runId, toAgentId: null, kind: "request", body, evidence: [], contractVersion: this.ledger.state.contractVersion ?? 1, baseRevision: this.ledger.state.revision, recordedAt: new Date().toISOString() });
+    const item: AgentMessage = { id, taskId: this.ledger.state.id, fromAgentId: agentId, fromRunId: runId, toAgentId: null, kind: "request", body, evidence: [], contractVersion: this.ledger.state.contractVersion ?? 1, baseRevision: this.ledger.state.revision, recordedAt: new Date().toISOString() };
+    await createMessage(join(mainInbox(this.root, this.ledger.state.id), `${id}.json`), item);
+    await recordMessage(this.ledger, item);
     await this.ledger.recordWorkerRequest({ id, agentId, runId, orderId: this.ledger.state.cognition?.instances?.find(run => run.id === runId)?.orderId ?? "unknown", kind: "context", blockedStep: body, capabilityIds: [], contractVersion: this.ledger.state.contractVersion ?? 1, sourceRevision: this.ledger.state.revision });
     this.unread = (await readPending(mainInbox(this.root, this.ledger.state.id))).length;
   }
@@ -165,7 +188,7 @@ export function createWorkerMailboxTools(stateRoot: string, taskId: string, orde
     async execute(_toolCallId, args) {
       try {
         const directory = join(root, "inbox");
-        await acknowledge(directory, args.ack ?? []);
+        await acknowledge(directory, args.ack ?? [], ackId => recordAck(ledger, ackId, order.agentId!));
         const items = await readPending(directory);
         return { content: [{ type: "text", text: JSON.stringify(items.filter(item => item.taskId === taskId && item.toAgentId === order.agentId)) }] };
       } catch (error) { return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true }; }
@@ -205,3 +228,14 @@ export function createCoordinatorMailboxTools(mailbox: AgentMailbox): [CustomToo
 }
 
 export async function pendingWorkerMessages(stateRoot: string): Promise<AgentMessage[]> { return readPending(join(stateRoot, "inbox")); }
+
+/**
+ * Rebuilds a recipient's pending inbox from a folded task state: queued messages minus the acknowledgements of
+ * that recipient, ordered by `recordedAt` then id. `recipientAgentId` is `null` for the coordinator. Read-only;
+ * the supervisor's pending count uses this after a restart instead of walking the file inbox.
+ */
+export function pendingFromState(state: TaskState, recipientAgentId: string | null): AgentMessage[] {
+  const acknowledged = new Set((state.workerMessageAcks ?? []).filter(ack => ack.agentId === recipientAgentId).map(ack => ack.id));
+  const byTimeThenId = (a: AgentMessage, b: AgentMessage) => (a.recordedAt < b.recordedAt ? -1 : a.recordedAt > b.recordedAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  return (state.workerMessages ?? []).filter(message => message.toAgentId === recipientAgentId && !acknowledged.has(message.id)).sort(byTimeThenId);
+}

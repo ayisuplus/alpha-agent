@@ -52,7 +52,7 @@ export const planReducers: FamilyReducers = {
     for (const id of ids) visit(id);
     const previous = state.cognition ?? { revision: 0, recipeVersion: 1, summary: state.objective, candidates: [], steps: [], gaps: [], amendments: [] };
     if (state.designatedExpertId && (!input.candidates.includes(state.designatedExpertId) || (input.steps.length > 0 && !input.steps.some(step => step.expertId === state.designatedExpertId)))) throw new InvariantError("apply/designated-expert-dropped", `用户指定专家必须保留在计划中：${state.designatedExpertId}`);
-    for (const prior of previous.steps.filter(step => step.status === "running" || step.status === "complete")) {
+    for (const prior of previous.steps.filter(step => step.status === "running" || step.status === "complete" || step.claimedBy !== undefined)) {
       const next = input.steps.find(step => step.id === prior.id);
       if (!next || next.objective !== prior.objective || next.mode !== prior.mode || next.expertId !== prior.expertId || JSON.stringify(next.dependsOn) !== JSON.stringify(prior.dependsOn) || JSON.stringify(next.skillIds) !== JSON.stringify(prior.skillIds)) throw new InvariantError("apply/dispatched-step-rewritten", `已派发或完成的认知步骤不可改写：${prior.id}`);
     }
@@ -62,15 +62,19 @@ export const planReducers: FamilyReducers = {
     const nextConstraints = clean(input.constraints, previous.constraints);
     const stepDefinition = (step: CognitionStep) => JSON.stringify([step.objective, step.mode, step.expertId ?? null, step.dependsOn, step.skillIds]);
     const materialChange = !!state.planApproval && (JSON.stringify(nextScope) !== JSON.stringify(previous.scope) || JSON.stringify(nextConstraints) !== JSON.stringify(previous.constraints) || input.steps.some(step => !previous.steps.some(prior => prior.id === step.id)) || previous.steps.some(prior => prior.status !== "complete" && prior.status !== "running" && !input.steps.some(step => step.id === prior.id && stepDefinition(step) === stepDefinition(prior))));
-    state.cognition = { ...previous, revision, basedOnRevision: state.revision, summary: input.summary.trim(), scope: nextScope, constraints: nextConstraints, openQuestions: clean(input.openQuestions, previous.openQuestions), candidates: [...new Set(input.candidates)], steps: input.steps.map(step => ({ ...step, status: previous.steps.find(prior => prior.id === step.id)?.status ?? "planned", statusReason: previous.steps.find(prior => prior.id === step.id)?.statusReason, dependsOn: [...step.dependsOn], skillIds: [...step.skillIds] })), amendments: [...previous.amendments, { revision, reason: input.reason.trim(), affectedSteps: input.steps.map(step => step.id), recordedAt: event.payload.recordedAt }] };
+    state.cognition = { ...previous, revision, basedOnRevision: state.revision, summary: input.summary.trim(), scope: nextScope, constraints: nextConstraints, openQuestions: clean(input.openQuestions, previous.openQuestions), candidates: [...new Set(input.candidates)], steps: input.steps.map(step => {
+      const prior = previous.steps.find(item => item.id === step.id);
+      return { ...step, status: prior?.status ?? "planned", statusReason: prior?.statusReason, revision: prior?.revision, claimedBy: prior?.claimedBy, dependsOn: [...step.dependsOn], skillIds: [...step.skillIds] };
+    }), amendments: [...previous.amendments, { revision, reason: input.reason.trim(), affectedSteps: input.steps.map(step => step.id), recordedAt: event.payload.recordedAt }] };
     if (materialChange) { state.phase = "plan-review"; delete state.planApproval; }
   },
 
   "step/changed": (state, event) => {
-    const { id, status, reason } = event.payload;
+    const { id, status, reason, expectedRevision, claimedBy } = event.payload;
     assertActive(state);
     const step = state.cognition?.steps.find(item => item.id === id);
     if (!step || !["running", "complete", "blocked", "cancelled"].includes(status) || !reason.trim()) throw new InvariantError("apply/step-required", "Step and reason are required");
+    if (expectedRevision !== undefined && expectedRevision !== (step.revision ?? 0)) throw new InvariantError("apply/step-revision-conflict", `Step ${id} moved on: expected revision ${expectedRevision}, found ${step.revision ?? 0}`);
     if (step.status === "complete" || step.status === "cancelled") throw new InvariantError("apply/step-finished", "Finished step cannot be rewritten");
     if (state.cognition?.instances?.some(instance => instance.orderId === id)) throw new InvariantError("apply/step-delegated", "Delegated step status is owned by the work order result");
     if (state.phase === "plan" && step.mode !== "investigate") throw new InvariantError("apply/step-plan-mode", "Planning can only finish investigation steps");
@@ -78,6 +82,8 @@ export const planReducers: FamilyReducers = {
     if (status === "complete" && step.dependsOn.some(dep => state.cognition?.steps.find(item => item.id === dep)?.status !== "complete")) throw new InvariantError("apply/step-deps-incomplete", "Step dependencies are not complete");
     step.status = status;
     step.statusReason = reason.trim();
+    step.revision = (step.revision ?? 0) + 1;
+    if (claimedBy !== undefined) step.claimedBy = claimedBy;
   },
 
   "candidates/set": (state, event) => {

@@ -4,6 +4,7 @@ import { AgentPresetStore } from "./agent-presets";
 import { runTask, type RunOptions } from "./omp-runner";
 import { snapshotSource, sourceChanges } from "./source-review";
 import { taskBudgetUsed, type TaskLedger } from "./task-ledger";
+import type { WorkerStopReason } from "./task-events";
 import { WorkerSupervisor, inspectWorkerAttempt } from "./worker-supervisor";
 import { validateReviewEvidence } from "./development-review-tool";
 import { taskProfile } from "./task-profile";
@@ -20,6 +21,21 @@ function currentReviewPassed(ledger: TaskLedger): boolean {
 
 /** A review that returns nothing is usually a budget or model failure; retry the independent review this many times. */
 const REVIEW_RETRIES = 1;
+
+/**
+ * What to do when an independent review ended without a result (plan §4.4 `worker-no-result`): retry the review first,
+ * pause only when a retry cannot help, and never hand the verdict to the primary agent reviewing its own work.
+ */
+export function reviewNoResultDecision(
+  attempt: { status?: string; stopReason?: WorkerStopReason; findings?: string[] } | undefined,
+  retriesUsed: number,
+  maxRetries: number,
+): { action: "retry"; retriesLeft: number } | { action: "pause"; reason: string } {
+  if (attempt?.stopReason === "needs-input") return { action: "pause", reason: `独立审查需要任务输入：${attempt.findings?.join("；") || "见实例记录"}` };
+  return retriesUsed < maxRetries
+    ? { action: "retry", retriesLeft: maxRetries - retriesUsed }
+    : { action: "pause", reason: "独立审查连续未返回可检查结果，请检查实例记录后决定重派、直接审阅或忽略该子代理。" };
+}
 
 /** Persist only a final review that the coordinator already inspected and integrated. */
 export async function recordIntegratedFinalReview(ledger: TaskLedger, dataRoot: string, projectRoot: string, instanceId?: string): Promise<boolean> {
@@ -141,18 +157,21 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
     }
     while (["queued", "running"].includes(ledger.state.cognition?.instances?.find(item => item.id === instanceId)?.status ?? "") && ledger.state.status === "active" && !options.signal?.aborted) await supervisor.wait([instanceId], 60_000, false);
     if (ledger.state.status !== "active" || options.signal?.aborted) return ledger;
-    const reviewStatus = ledger.state.cognition?.instances?.find(item => item.id === instanceId)?.status;
+    const attempt = ledger.state.cognition?.instances?.find(item => item.id === instanceId);
+    const reviewStatus = attempt?.status;
     if (reviewStatus !== "returned") {
       // No result is the worker's failure, not a reason to stop the task (plan §4.4): retry the independent review
       // first, and only pause when a retry cannot help. The primary agent must not review its own work, so it cannot
       // simply take over the verdict.
       if (reviewStatus === "queued" || reviewStatus === "running") await ledger.updateWorker(instanceId, "failed", { findings: ["Independent review returned no result"] });
-      if (reviewRetries++ < REVIEW_RETRIES) {
+      const decision = reviewNoResultDecision(attempt, reviewRetries, REVIEW_RETRIES);
+      if (decision.action === "retry") {
+        reviewRetries++;
         options.onEvent?.({ type: "status", value: `审查子实例未返回结果，重试独立审查 · 第 ${reviewRetries} 次` });
         comparison = after;
         continue;
       }
-      await ledger.needInput("独立审查连续未返回可检查结果，请检查实例记录后决定重派、直接审阅或忽略该子代理。", "worker-no-result");
+      await ledger.needInput(decision.reason, "worker-no-result");
       return ledger;
     }
     currentToolCalls = 0;

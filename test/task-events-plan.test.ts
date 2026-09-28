@@ -349,6 +349,50 @@ describe("plan/revised", () => {
     expect(next.scope).toBeUndefined();
     expect(next.recipeVersion).toBe(1);
   });
+
+  test("carries step revisions and claims over by id", () => {
+    const state = baseState({
+      phase: "execute",
+      cognition: cognition({
+        steps: [
+          step("build-api", { status: "running", statusReason: "工单 wo-1 运行中", revision: 3, claimedBy: "inst-1" }),
+          step("docs", { status: "planned", revision: 1 }),
+        ],
+      }),
+    });
+    apply(state, "plan/revised", {
+      // The input resets the board fields; the reducer must restore them from the prior steps.
+      input: reviseInput({ steps: [step("build-api", { revision: 99, claimedBy: "inst-fake" }), step("docs"), step("ship-it")] }),
+      recordedAt: AT,
+    });
+    expect(state.cognition!.steps.map(item => [item.id, item.status, item.revision, item.claimedBy])).toEqual([
+      ["build-api", "running", 3, "inst-1"],
+      ["docs", "planned", 1, undefined],
+      ["ship-it", "planned", undefined, undefined],
+    ]);
+  });
+
+  test("refuses to rewrite or drop a claimed step", () => {
+    const rewritten = baseState({ cognition: cognition({ steps: [step("build-api", { status: "blocked", claimedBy: "inst-1" })] }) });
+    expectInvariant(
+      () => apply(rewritten, "plan/revised", {
+        input: reviseInput({ steps: [step("build-api", { objective: "Something else" })] }),
+        recordedAt: AT,
+      }),
+      "apply/dispatched-step-rewritten",
+      "已派发或完成的认知步骤不可改写：build-api",
+    );
+    const dropped = baseState({ cognition: cognition({ steps: [step("write-tests", { claimedBy: "inst-2" })] }) });
+    expectInvariant(
+      () => apply(dropped, "plan/revised", { input: reviseInput({ steps: [step("build-api")] }), recordedAt: AT }),
+      "apply/dispatched-step-rewritten",
+      "已派发或完成的认知步骤不可改写：write-tests",
+    );
+    // An unchanged claimed step passes.
+    const kept = baseState({ cognition: cognition({ steps: [step("build-api", { claimedBy: "inst-1" })] }) });
+    apply(kept, "plan/revised", { input: reviseInput({ steps: [step("build-api")] }), recordedAt: AT });
+    expect(kept.cognition!.steps[0]).toMatchObject({ claimedBy: "inst-1", status: "planned" });
+  });
 });
 
 describe("step/changed", () => {
@@ -425,6 +469,49 @@ describe("step/changed", () => {
     const state = baseState({ phase: "execute", cognition: cognition({ steps: [step("a", { status: "running", dependsOn: ["dep"] })] }) });
     apply(state, "step/changed", { id: "a", status: "blocked", reason: " waiting on review " });
     expect(state.cognition!.steps[0]).toMatchObject({ status: "blocked", statusReason: "waiting on review" });
+  });
+
+  test("compare-and-swap accepts a matching revision and rejects a stale one", () => {
+    const matched = baseState({ phase: "execute", cognition: cognition({ steps: [step("a", { revision: 2 })] }) });
+    apply(matched, "step/changed", { id: "a", status: "running", reason: "go", expectedRevision: 2 });
+    expect(matched.cognition!.steps[0]).toMatchObject({ status: "running", revision: 3 });
+    const stale = baseState({ phase: "execute", cognition: cognition({ steps: [step("a", { revision: 2 })] }) });
+    expectInvariant(
+      () => apply(stale, "step/changed", { id: "a", status: "running", reason: "go", expectedRevision: 1 }),
+      "apply/step-revision-conflict",
+      "Step a moved on: expected revision 1, found 2",
+    );
+    // A rejected swap leaves the step untouched.
+    expect(stale.cognition!.steps[0]).toMatchObject({ status: "planned", revision: 2 });
+    // A step that never moved compares against revision 0.
+    const untouched = baseState({ phase: "execute", cognition: cognition({ steps: [step("a")] }) });
+    expectInvariant(
+      () => apply(untouched, "step/changed", { id: "a", status: "running", reason: "go", expectedRevision: 1 }),
+      "apply/step-revision-conflict",
+      "Step a moved on: expected revision 1, found 0",
+    );
+  });
+
+  test("an absent expectedRevision still folds legacy events", () => {
+    const state = baseState({ phase: "execute", cognition: cognition({ steps: [step("a", { revision: 5 })] }) });
+    apply(state, "step/changed", { id: "a", status: "running", reason: "go" });
+    expect(state.cognition!.steps[0]).toMatchObject({ status: "running", revision: 6 });
+  });
+
+  test("every accepted transition bumps the revision", () => {
+    const state = baseState({ phase: "execute", cognition: cognition({ steps: [step("a")] }) });
+    apply(state, "step/changed", { id: "a", status: "running", reason: "go", expectedRevision: 0 });
+    apply(state, "step/changed", { id: "a", status: "blocked", reason: "stuck", expectedRevision: 1 });
+    apply(state, "step/changed", { id: "a", status: "running", reason: "retry", expectedRevision: 2 });
+    expect(state.cognition!.steps[0].revision).toBe(3);
+  });
+
+  test("records claimedBy when provided and keeps it when not", () => {
+    const state = baseState({ phase: "execute", cognition: cognition({ steps: [step("a")] }) });
+    apply(state, "step/changed", { id: "a", status: "running", reason: "go", claimedBy: "inst-1" });
+    expect(state.cognition!.steps[0]).toMatchObject({ status: "running", claimedBy: "inst-1", revision: 1 });
+    apply(state, "step/changed", { id: "a", status: "blocked", reason: "stuck", expectedRevision: 1 });
+    expect(state.cognition!.steps[0]).toMatchObject({ status: "blocked", claimedBy: "inst-1", revision: 2 });
   });
 });
 

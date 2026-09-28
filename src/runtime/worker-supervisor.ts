@@ -13,6 +13,8 @@ import { ROLE_THINKING_POLICY_VERSION } from "./role-thinking";
 import { capabilityPool } from "./capability-pool";
 import { commandApprovalStore } from "./command-approval";
 import { MCPPermissionStore } from "./mcp-permissions";
+import { WorkerStopError, workerStopReason } from "./worker-stop";
+import type { WorkerStopReason } from "./task-events";
 
 const workerToolCalls = 80;
 const workerWallTimeMs = 600_000;
@@ -344,6 +346,13 @@ export class WorkerSupervisor {
         async onWorkerEvent(order, state) {
           if (state === "started") { attempt.order.skillSnapshots = order.skillSnapshots; attempt.order.capabilitySnapshots = order.capabilitySnapshots; await ledger.updateWorker(id, "running", { skills: order.skillSnapshots ?? [], capabilities: order.capabilitySnapshots ?? [] }); manager.notify(); }
         },
+        // The child's pid goes into the parent log so recovery can reap an orphan after a hard kill.
+        async onWorkerStart(order, info) {
+          await ledger.recordWorkerActivation({
+            attemptId: id, orderId: order.id, ...(order.agentId ? { agentId: order.agentId } : {}), pid: info.pid,
+            workRoot: join(dataRoot, "workers", ledger.state.id, id), ...(workspace ? { worktreePath: workspace } : {}),
+          });
+        },
         async onWorkerUsage(order, usage) {
           await ledger.recordRun({ model: usage.model, stage: "worker", instanceId: id, thinkingPolicyVersion: ROLE_THINKING_POLICY_VERSION, toolCalls: usage.incomplete ? workerToolCalls : usage.toolCalls, maxToolCalls: workerToolCalls, wallTimeMs: workerWallTimeMs, elapsedMs: usage.incomplete ? workerWallTimeMs : usage.elapsedMs, childElapsedMs: usage.elapsedMs, usageIncomplete: usage.incomplete, usage: usage.tokens, outcome: usage.outcome ?? "returned" });
         },
@@ -360,6 +369,7 @@ export class WorkerSupervisor {
         const reason = outcome.findings?.join("; ") || report.reason || "Worker needs task input";
         if (!attempt.order.agentId && ledger.state.status === "active") await ledger.needInput(reason, "approval");
         await ledger.updateWorker(id, "blocked", { workRoot: report.workRoot, findings: [reason], cognition: outcome.cognition });
+        await ledger.recordWorkerResult({ attemptId: id, stopReason: report.stopReasons?.[attempt.order.id] ?? "needs-input", findings: [reason], ...(outcome.reviewVerdict ? { reviewVerdict: outcome.reviewVerdict } : {}), detail: report.reason });
         if (attempt.order.agentId) {
           await this.mailbox.collect();
           if (!(await this.mailbox.inbox()).some(message => message.fromRunId === id && message.kind === "request")) await this.mailbox.report(attempt.order.agentId, id, reason);
@@ -372,6 +382,7 @@ export class WorkerSupervisor {
         const reason = report.reason ?? "Worker result was rejected";
         const status = outcome?.status === "blocked" ? "blocked" : "failed";
         await ledger.updateWorker(id, status, { workRoot: report.workRoot, findings: [reason], cognition: outcome?.cognition });
+        await ledger.recordWorkerResult({ attemptId: id, stopReason: report.stopReasons?.[attempt.order.id] ?? workerStopReason({ cancelled: signal.aborted, errorText: reason }), findings: [reason], ...(outcome?.reviewVerdict ? { reviewVerdict: outcome.reviewVerdict } : {}), detail: reason });
         if (status === "blocked" && attempt.order.agentId) {
           await this.mailbox.collect();
           if (!(await this.mailbox.inbox()).some(message => message.fromRunId === id && message.kind === "request")) await this.mailbox.report(attempt.order.agentId, id, reason);
@@ -381,6 +392,7 @@ export class WorkerSupervisor {
         return;
       }
       await ledger.updateWorker(id, "returned", { workRoot: report.workRoot, worktreePath: workspace ?? join(report.workRoot, attempt.order.id), integration: "pending", findings: report.results[attempt.order.id]?.findings ?? [], cognition: outcome?.cognition });
+      await ledger.recordWorkerResult({ attemptId: id, stopReason: report.stopReasons?.[attempt.order.id] ?? "completed", findings: outcome?.findings ?? [], ...(outcome?.reviewVerdict ? { reviewVerdict: outcome.reviewVerdict } : {}) });
       this.input.onStatus?.(`子实例 ${attempt.order.id} 已返回，等待检查和集成`);
     } catch (error) {
       const workRoot = join(dataRoot, "workers", ledger.state.id, id);
@@ -388,6 +400,9 @@ export class WorkerSupervisor {
       const recoverable = await stat(join(workRoot, "base")).then(item => item.isDirectory(), () => false)
         && await stat(frozen).then(item => item.isDirectory(), () => false);
       await ledger.updateWorker(id, signal.aborted ? "cancelled" : "failed", { ...(recoverable ? { workRoot, worktreePath: workspace ?? frozen } : {}), findings: [attempt.cancelReason ?? (error instanceof Error ? error.message : String(error))] });
+      const failureText = attempt.cancelReason ?? (error instanceof Error ? error.message : String(error));
+      const stopReason: WorkerStopReason = error instanceof WorkerStopError ? error.stopReason : workerStopReason({ cancelled: signal.aborted || !!attempt.cancelReason, errorText: failureText });
+      await ledger.recordWorkerResult({ attemptId: id, stopReason, findings: [failureText], detail: failureText });
       this.input.onStatus?.(`子实例 ${attempt.order.id} ${signal.aborted ? "已取消" : "失败"}`);
     } finally {
       this.releaseReservation(attempt);
@@ -461,7 +476,12 @@ export class WorkerSupervisor {
     } else if (state === "running") { attempt.cancelReason = reason.trim(); attempt.controller.abort(new Error(reason.trim())); }
   }
   async cancelAll(): Promise<void> {
-    for (const id of this.attempts.keys()) if (["queued", "running", "returned"].includes(this.instance(id)?.status ?? "")) await this.cancel(id);
+    for (const id of this.attempts.keys()) {
+      const status = this.instance(id)?.status ?? "";
+      if (["queued", "running", "returned"].includes(status)) await this.cancel(id);
+      // An instance closed outside this supervisor (restart reconciliation) still leaves a live child: abort it too.
+      else this.attempts.get(id)?.controller.abort(new Error("Cancelled by coordinator"));
+    }
     await Promise.allSettled([...this.attempts.values()].flatMap(item => [item.promise, item.settling].filter((promise): promise is Promise<void> => !!promise)));
   }
   async cancelExecuting(): Promise<void> {

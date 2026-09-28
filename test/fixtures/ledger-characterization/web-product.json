@@ -359,6 +359,11 @@
       "outcome": "ok",
       "changed": [
         {
+          "path": "cognition.steps[0].revision",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
           "path": "cognition.steps[0].status",
           "before": "planned",
           "after": "complete"
@@ -833,13 +838,44 @@
       "changed": []
     },
     {
+      "name": "recordWorkerActivation",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.instances[1].activatedAt",
+          "before": "<absent>",
+          "after": "<at:29>"
+        },
+        {
+          "path": "cognition.instances[1].pid",
+          "before": "<absent>",
+          "after": 4242
+        },
+        {
+          "path": "cognition.instances[1].workRoot",
+          "before": "<absent>",
+          "after": "workers/attempt-worker"
+        },
+        {
+          "path": "cognition.instances[1].worktreePath",
+          "before": "<absent>",
+          "after": "worker-agents/agent-1/project"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:28>",
+          "after": "<at:30>"
+        }
+      ]
+    },
+    {
       "name": "recordWorkerCheckReceipt",
       "outcome": "ok",
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:28>",
-          "after": "<at:29>"
+          "before": "<at:30>",
+          "after": "<at:31>"
         },
         {
           "path": "workerReceipts[0].attemptId",
@@ -869,7 +905,7 @@
         {
           "path": "workerReceipts[0].recordedAt",
           "before": "<absent>",
-          "after": "<at:30>"
+          "after": "<at:32>"
         },
         {
           "path": "workerReceipts[0].sourceRevision",
@@ -884,8 +920,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:29>",
-          "after": "<at:31>"
+          "before": "<at:31>",
+          "after": "<at:33>"
         },
         {
           "path": "workerCognition.attemptId",
@@ -925,7 +961,7 @@
         {
           "path": "workerCognition.updatedAt",
           "before": "<absent>",
-          "after": "<at:32>"
+          "after": "<at:34>"
         }
       ]
     },
@@ -950,19 +986,14 @@
           "after": "running"
         },
         {
-          "path": "cognition.instances[1].workRoot",
-          "before": "<absent>",
-          "after": "workers/attempt-worker"
-        },
-        {
           "path": "cognition.steps[1].statusReason",
           "before": "工单 attempt-worker 排队中",
           "after": "工单 attempt-worker running"
         },
         {
           "path": "updatedAt",
-          "before": "<at:31>",
-          "after": "<at:33>"
+          "before": "<at:33>",
+          "after": "<at:35>"
         }
       ]
     },
@@ -972,8 +1003,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:33>",
-          "after": "<at:34>"
+          "before": "<at:35>",
+          "after": "<at:36>"
         },
         {
           "path": "workerRequests[0].agentId",
@@ -1013,7 +1044,7 @@
         {
           "path": "workerRequests[0].recordedAt",
           "before": "<absent>",
-          "after": "<at:35>"
+          "after": "<at:37>"
         },
         {
           "path": "workerRequests[0].runId",
@@ -1044,8 +1075,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:34>",
-          "after": "<at:36>"
+          "before": "<at:36>",
+          "after": "<at:38>"
         },
         {
           "path": "workerRequests[0].status",
@@ -1060,8 +1091,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:36>",
-          "after": "<at:37>"
+          "before": "<at:38>",
+          "after": "<at:39>"
         },
         {
           "path": "workerRequests[0].reason",
@@ -1071,7 +1102,7 @@
         {
           "path": "workerRequests[0].resolvedAt",
           "before": "<absent>",
-          "after": "<at:38>"
+          "after": "<at:40>"
         },
         {
           "path": "workerRequests[0].status",
@@ -1098,7 +1129,7 @@
         {
           "path": "cognition.instances[1].endedAt",
           "before": "<absent>",
-          "after": "<at:39>"
+          "after": "<at:41>"
         },
         {
           "path": "cognition.instances[1].findings[0]",
@@ -1122,8 +1153,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:37>",
-          "after": "<at:40>"
+          "before": "<at:39>",
+          "after": "<at:42>"
         }
       ]
     },
@@ -1138,8 +1169,8 @@
         },
         {
           "path": "cognition.instances[1].endedAt",
-          "before": "<at:39>",
-          "after": "<at:41>"
+          "before": "<at:41>",
+          "after": "<at:43>"
         },
         {
           "path": "cognition.instances[1].integration",
@@ -1193,8 +1224,111 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:40>",
-          "after": "<at:42>"
+          "before": "<at:42>",
+          "after": "<at:44>"
+        }
+      ]
+    },
+    {
+      "name": "recordWorkerResult",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.instances[1].stopReason",
+          "before": "<absent>",
+          "after": "completed"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:44>",
+          "after": "<at:45>"
+        }
+      ]
+    },
+    {
+      "name": "recordWorkerMessage",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "updatedAt",
+          "before": "<at:45>",
+          "after": "<at:46>"
+        },
+        {
+          "path": "workerMessages[0].baseRevision",
+          "before": "<absent>",
+          "after": "<rev:1>"
+        },
+        {
+          "path": "workerMessages[0].body",
+          "before": "<absent>",
+          "after": "Need a capability to continue"
+        },
+        {
+          "path": "workerMessages[0].contractVersion",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "workerMessages[0].fromAgentId",
+          "before": "<absent>",
+          "after": "agent-1"
+        },
+        {
+          "path": "workerMessages[0].fromRunId",
+          "before": "<absent>",
+          "after": "attempt-worker"
+        },
+        {
+          "path": "workerMessages[0].id",
+          "before": "<absent>",
+          "after": "<id:5>"
+        },
+        {
+          "path": "workerMessages[0].kind",
+          "before": "<absent>",
+          "after": "request"
+        },
+        {
+          "path": "workerMessages[0].recordedAt",
+          "before": "<absent>",
+          "after": "<at:1>"
+        },
+        {
+          "path": "workerMessages[0].taskId",
+          "before": "<absent>",
+          "after": "<id:1>"
+        },
+        {
+          "path": "workerMessages[0].toAgentId",
+          "before": "<absent>",
+          "after": null
+        }
+      ]
+    },
+    {
+      "name": "acknowledgeWorkerMessage",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "updatedAt",
+          "before": "<at:46>",
+          "after": "<at:47>"
+        },
+        {
+          "path": "workerMessageAcks[0].acknowledgedAt",
+          "before": "<absent>",
+          "after": "<at:48>"
+        },
+        {
+          "path": "workerMessageAcks[0].agentId",
+          "before": "<absent>",
+          "after": null
+        },
+        {
+          "path": "workerMessageAcks[0].id",
+          "before": "<absent>",
+          "after": "<id:5>"
         }
       ]
     },
@@ -1211,7 +1345,7 @@
         {
           "path": "cognition.instances[0].endedAt",
           "before": "<absent>",
-          "after": "<at:43>"
+          "after": "<at:49>"
         },
         {
           "path": "cognition.instances[0].findings[0]",
@@ -1225,8 +1359,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:42>",
-          "after": "<at:44>"
+          "before": "<at:47>",
+          "after": "<at:50>"
         }
       ]
     },
@@ -1241,8 +1375,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:44>",
-          "after": "<at:45>"
+          "before": "<at:50>",
+          "after": "<at:51>"
         },
         {
           "path": "workerOutcome.findings[0]",
@@ -1283,7 +1417,7 @@
         {
           "path": "development.review.recordedAt",
           "before": "<absent>",
-          "after": "<at:47>"
+          "after": "<at:53>"
         },
         {
           "path": "development.review.revision",
@@ -1297,8 +1431,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:45>",
-          "after": "<at:46>"
+          "before": "<at:51>",
+          "after": "<at:52>"
         }
       ]
     },
@@ -1313,8 +1447,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:46>",
-          "after": "<at:48>"
+          "before": "<at:52>",
+          "after": "<at:54>"
         }
       ]
     },
@@ -1329,8 +1463,8 @@
         },
         {
           "path": "development.review.recordedAt",
-          "before": "<at:47>",
-          "after": "<at:50>"
+          "before": "<at:53>",
+          "after": "<at:56>"
         },
         {
           "path": "development.review.verdict",
@@ -1339,8 +1473,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:48>",
-          "after": "<at:49>"
+          "before": "<at:54>",
+          "after": "<at:55>"
         }
       ]
     },
@@ -1377,7 +1511,7 @@
         {
           "path": "preview.recordedAt",
           "before": "<absent>",
-          "after": "<at:51>"
+          "after": "<at:57>"
         },
         {
           "path": "preview.revision",
@@ -1391,8 +1525,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:49>",
-          "after": "<at:52>"
+          "before": "<at:55>",
+          "after": "<at:58>"
         }
       ]
     },
@@ -1431,7 +1565,7 @@
         {
           "path": "evidence[0].id",
           "before": "<absent>",
-          "after": "<id:5>"
+          "after": "<id:6>"
         },
         {
           "path": "evidence[0].kind",
@@ -1446,7 +1580,7 @@
         {
           "path": "evidence[0].recordedAt",
           "before": "<absent>",
-          "after": "<at:53>"
+          "after": "<at:59>"
         },
         {
           "path": "evidence[0].revision",
@@ -1471,7 +1605,7 @@
         {
           "path": "evidence[1].id",
           "before": "<absent>",
-          "after": "<id:6>"
+          "after": "<id:7>"
         },
         {
           "path": "evidence[1].kind",
@@ -1491,7 +1625,7 @@
         {
           "path": "evidence[1].recordedAt",
           "before": "<absent>",
-          "after": "<at:54>"
+          "after": "<at:60>"
         },
         {
           "path": "evidence[1].revision",
@@ -1505,8 +1639,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:52>",
-          "after": "<at:55>"
+          "before": "<at:58>",
+          "after": "<at:61>"
         }
       ]
     },
@@ -1551,8 +1685,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:55>",
-          "after": "<at:56>"
+          "before": "<at:61>",
+          "after": "<at:62>"
         }
       ]
     },
@@ -1587,8 +1721,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:56>",
-          "after": "<at:57>"
+          "before": "<at:62>",
+          "after": "<at:63>"
         }
       ]
     },
@@ -1630,7 +1764,7 @@
         {
           "path": "runs[0].recordedAt",
           "before": "<absent>",
-          "after": "<at:58>"
+          "after": "<at:64>"
         },
         {
           "path": "runs[0].stage",
@@ -1649,8 +1783,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:57>",
-          "after": "<at:59>"
+          "before": "<at:63>",
+          "after": "<at:65>"
         }
       ]
     },
@@ -1665,8 +1799,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:59>",
-          "after": "<at:60>"
+          "before": "<at:65>",
+          "after": "<at:66>"
         }
       ]
     },
@@ -1687,8 +1821,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:60>",
-          "after": "<at:61>"
+          "before": "<at:66>",
+          "after": "<at:67>"
         }
       ]
     },
@@ -1703,8 +1837,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:61>",
-          "after": "<at:62>"
+          "before": "<at:67>",
+          "after": "<at:68>"
         }
       ]
     },
@@ -1744,8 +1878,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:62>",
-          "after": "<at:63>"
+          "before": "<at:68>",
+          "after": "<at:69>"
         }
       ]
     },
@@ -1765,8 +1899,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:63>",
-          "after": "<at:64>"
+          "before": "<at:69>",
+          "after": "<at:70>"
         }
       ]
     },
@@ -1781,8 +1915,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:64>",
-          "after": "<at:65>"
+          "before": "<at:70>",
+          "after": "<at:71>"
         },
         {
           "path": "workerOutcome.findings[0]",
@@ -1812,8 +1946,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:65>",
-          "after": "<at:66>"
+          "before": "<at:71>",
+          "after": "<at:72>"
         }
       ]
     },
@@ -1839,8 +1973,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:66>",
-          "after": "<at:67>"
+          "before": "<at:72>",
+          "after": "<at:73>"
         }
       ]
     },
@@ -1871,8 +2005,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:67>",
-          "after": "<at:68>"
+          "before": "<at:73>",
+          "after": "<at:74>"
         }
       ]
     },
@@ -1894,7 +2028,7 @@
         {
           "path": "guidanceHistory[1].recordedAt",
           "before": "<absent>",
-          "after": "<at:69>"
+          "after": "<at:75>"
         },
         {
           "path": "pauseReason",
@@ -1918,8 +2052,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:68>",
-          "after": "<at:70>"
+          "before": "<at:74>",
+          "after": "<at:76>"
         }
       ]
     },
@@ -1951,12 +2085,12 @@
         {
           "path": "stop.stoppedAt",
           "before": "<absent>",
-          "after": "<at:71>"
+          "after": "<at:77>"
         },
         {
           "path": "updatedAt",
-          "before": "<at:70>",
-          "after": "<at:71>"
+          "before": "<at:76>",
+          "after": "<at:77>"
         }
       ]
     },
@@ -1978,7 +2112,7 @@
         {
           "path": "contractHistory[0].revisedAt",
           "before": "<absent>",
-          "after": "<at:72>"
+          "after": "<at:78>"
         },
         {
           "path": "contractHistory[0].version",
@@ -2037,7 +2171,7 @@
         },
         {
           "path": "preview.recordedAt",
-          "before": "<at:51>",
+          "before": "<at:57>",
           "after": "<absent>"
         },
         {
@@ -2072,13 +2206,13 @@
         },
         {
           "path": "stop.stoppedAt",
-          "before": "<at:71>",
+          "before": "<at:77>",
           "after": "<absent>"
         },
         {
           "path": "updatedAt",
-          "before": "<at:71>",
-          "after": "<at:73>"
+          "before": "<at:77>",
+          "after": "<at:79>"
         }
       ]
     },
@@ -2109,8 +2243,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:73>",
-          "after": "<at:74>"
+          "before": "<at:79>",
+          "after": "<at:80>"
         }
       ]
     },
@@ -2135,8 +2269,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:74>",
-          "after": "<at:75>"
+          "before": "<at:80>",
+          "after": "<at:81>"
         }
       ]
     }
@@ -2153,7 +2287,7 @@
       {
         "version": 1,
         "objective": "Build a cart page that shows totals in cents",
-        "revisedAt": "<at:72>"
+        "revisedAt": "<at:78>"
       }
     ],
     "guidanceHistory": [
@@ -2165,7 +2299,7 @@
       },
       {
         "instruction": "Approved; continue with the regression test",
-        "recordedAt": "<at:69>"
+        "recordedAt": "<at:75>"
       }
     ],
     "cognition": {
@@ -2183,7 +2317,8 @@
           "dependsOn": [],
           "skillIds": [],
           "status": "complete",
-          "statusReason": "Read src/cart.ts and the existing tests"
+          "statusReason": "Read src/cart.ts and the existing tests",
+          "revision": 1
         },
         {
           "id": "s2",
@@ -2267,7 +2402,7 @@
           "findings": [
             "Coordinator inspection recorded"
           ],
-          "endedAt": "<at:43>"
+          "endedAt": "<at:49>"
         },
         {
           "id": "attempt-worker",
@@ -2302,12 +2437,15 @@
           "baseRevision": "<rev:1>",
           "status": "completed",
           "startedAt": "<at:27>",
+          "activatedAt": "<at:29>",
+          "pid": 4242,
           "workRoot": "workers/attempt-worker",
+          "worktreePath": "worker-agents/agent-1/project",
           "findings": [
             "Rounding fixed"
           ],
           "integration": "merged",
-          "endedAt": "<at:41>",
+          "endedAt": "<at:43>",
           "integrationDecision": {
             "action": "integrate",
             "reason": "Patch matches the plan",
@@ -2315,7 +2453,8 @@
             "contractVersion": 1,
             "sourceRevision": "<rev:1>",
             "recordedAt": "<at:1>"
-          }
+          },
+          "stopReason": "completed"
         }
       ],
       "agents": [
@@ -2367,8 +2506,8 @@
         "revision": "<rev:1>",
         "source": "evidence/build.log",
         "contractVersion": 1,
-        "id": "<id:5>",
-        "recordedAt": "<at:53>"
+        "id": "<id:6>",
+        "recordedAt": "<at:59>"
       },
       {
         "criterionId": "user-path",
@@ -2378,8 +2517,8 @@
         "previewId": "preview-1",
         "source": "evidence/user-path.log",
         "contractVersion": 1,
-        "id": "<id:6>",
-        "recordedAt": "<at:54>"
+        "id": "<id:7>",
+        "recordedAt": "<at:60>"
       }
     ],
     "runs": [
@@ -2392,12 +2531,12 @@
         "elapsedMs": 5000,
         "outcome": "returned",
         "contractVersion": 1,
-        "recordedAt": "<at:58>"
+        "recordedAt": "<at:64>"
       }
     ],
     "preview": null,
     "createdAt": "<at:1>",
-    "updatedAt": "<at:75>",
+    "updatedAt": "<at:81>",
     "development": {
       "enabled": true,
       "repairAttempts": 1,
@@ -2407,7 +2546,7 @@
         "instanceId": "attempt-worker",
         "revision": "<rev:1>",
         "contractVersion": 1,
-        "recordedAt": "<at:50>"
+        "recordedAt": "<at:56>"
       }
     },
     "workerReceipts": [
@@ -2418,7 +2557,7 @@
         "passed": true,
         "path": "check-logs/test.log",
         "kind": "check",
-        "recordedAt": "<at:30>"
+        "recordedAt": "<at:32>"
       }
     ],
     "workerCognition": {
@@ -2438,7 +2577,7 @@
       "attemptId": "attempt-worker",
       "revision": 1,
       "sourceRevision": "<rev:1>",
-      "updatedAt": "<at:32>"
+      "updatedAt": "<at:34>"
     },
     "workerRequests": [
       {
@@ -2454,9 +2593,31 @@
         "contractVersion": 1,
         "sourceRevision": "<rev:1>",
         "status": "applied",
-        "recordedAt": "<at:35>",
+        "recordedAt": "<at:37>",
         "reason": "Installed csv-fixtures",
-        "resolvedAt": "<at:38>"
+        "resolvedAt": "<at:40>"
+      }
+    ],
+    "workerMessages": [
+      {
+        "id": "<id:5>",
+        "taskId": "<id:1>",
+        "fromAgentId": "agent-1",
+        "fromRunId": "attempt-worker",
+        "toAgentId": null,
+        "kind": "request",
+        "body": "Need a capability to continue",
+        "evidence": [],
+        "contractVersion": 1,
+        "baseRevision": "<rev:1>",
+        "recordedAt": "<at:1>"
+      }
+    ],
+    "workerMessageAcks": [
+      {
+        "id": "<id:5>",
+        "agentId": null,
+        "acknowledgedAt": "<at:48>"
       }
     ],
     "inputs": [

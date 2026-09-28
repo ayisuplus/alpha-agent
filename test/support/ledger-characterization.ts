@@ -139,6 +139,7 @@ export const probeSteps: ProbeStep[] = [
   { name: "recordDispatch", run: ledger => ledger.recordDispatch({ id: "attempt-coordinator", orderId: "coordinator", mode: "investigate", skills: [], decisionReason: "Coordinator inspects first" }) },
   { name: "queueWorker", run: ledger => ledger.queueWorker({ id: "attempt-worker", order: workOrder(), expert: { id: "backend", name: "后端工程师", hash: "f".repeat(64) } }) },
   { name: "queueWorker:duplicate", run: ledger => ledger.queueWorker({ id: "attempt-worker", order: workOrder() }) },
+  { name: "recordWorkerActivation", run: ledger => ledger.recordWorkerActivation({ attemptId: "attempt-worker", orderId: "s2", agentId: "agent-1", pid: 4242, workRoot: "workers/attempt-worker", worktreePath: "worker-agents/agent-1/project" }) },
   { name: "recordWorkerCheckReceipt", run: async (ledger, context) => {
     context.receiptId = await ledger.recordWorkerCheckReceipt({ attemptId: "attempt-worker", sourceRevision: ledger.state.revision, passed: true, path: "check-logs/test.log" });
   } },
@@ -155,6 +156,9 @@ export const probeSteps: ProbeStep[] = [
   { name: "updateWorkerRequest:resolved", run: (ledger, context) => ledger.updateWorkerRequest(context.requestId!, { status: "rejected" }) },
   { name: "updateWorker:returned", run: ledger => ledger.updateWorker("attempt-worker", "returned", { findings: ["Rounding fixed"], integration: "pending" }) },
   { name: "updateWorker:completed", run: ledger => ledger.updateWorker("attempt-worker", "completed", { integration: "merged", integrationDecision: { action: "integrate", reason: "Patch matches the plan", runId: "run-integrate", contractVersion: 1, sourceRevision: ledger.state.revision, recordedAt } }) },
+  { name: "recordWorkerResult", run: ledger => ledger.recordWorkerResult({ attemptId: "attempt-worker", stopReason: "completed", findings: ["Rounding fixed"], reviewVerdict: "pass", detail: "Worker submitted alpha_worker_result" }) },
+  { name: "recordWorkerMessage", run: ledger => ledger.recordWorkerMessage({ id: "11111111-2222-4333-8444-555555555555", taskId: ledger.state.id, fromAgentId: "agent-1", fromRunId: "attempt-worker", toAgentId: null, kind: "request", body: "Need a capability to continue", evidence: [], contractVersion: ledger.state.contractVersion ?? 1, baseRevision: ledger.state.revision, recordedAt }) },
+  { name: "acknowledgeWorkerMessage", run: ledger => ledger.acknowledgeWorkerMessage("11111111-2222-4333-8444-555555555555", null) },
   { name: "updateWorker:missing", run: ledger => ledger.updateWorker("attempt-missing", "completed") },
   { name: "finishDispatch", run: ledger => ledger.finishDispatch("attempt-coordinator", "completed", ["Coordinator inspection recorded"]) },
   { name: "finishDispatch:finished", run: ledger => ledger.finishDispatch("attempt-coordinator", "failed") },

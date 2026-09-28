@@ -5,6 +5,8 @@ import { fingerprintSource } from "./task-ledger";
 import type { AgentPresetSnapshot } from "./agent-presets";
 import { isAllowedModelSelector } from "./model-policy";
 import { excludedSourceDirectory } from "./source-review";
+import type { WorkerStopReason } from "./task-events";
+import { WorkerStopError, workerStopReason } from "./worker-stop";
 
 export interface WorkOrder {
   id: string;
@@ -40,6 +42,8 @@ export interface WorkOrder {
 
 export interface WorkerResult {
   status?: "completed" | "needs-context" | "blocked" | "failed";
+  /** Why the child run ended; the parent task records it as `worker/result` instead of parsing a message. */
+  stopReason?: WorkerStopReason;
   findings?: string[];
   reviewVerdict?: "pass" | "changes-requested" | "inconclusive";
   reviewEvidence?: Array<{ path: string; excerpt: string }>;
@@ -68,6 +72,8 @@ export interface WorkBatchReport {
   results: Record<string, WorkerResult>;
   presets?: Record<string, Pick<AgentPresetSnapshot, "id" | "name" | "hash" | "source">>;
   reason?: string;
+  /** Per-order end reason, so the parent task records `worker/result` without parsing `reason`. */
+  stopReasons?: Record<string, WorkerStopReason>;
 }
 
 type Snapshot = Map<string, string>;
@@ -288,8 +294,15 @@ export async function executeWorkOrders(input: {
       const changes = changedFiles(base, workerSnapshot);
       report.changes[order.id] = changes;
       (report.outputHashes ??= {})[order.id] = Object.fromEntries(changes.map(file => [file, workerSnapshot.get(file) ?? null]));
-      if (outcome.status === "rejected") throw new Error(`Worker ${order.id} failed: ${String(outcome.reason)}`);
+      if (outcome.status === "rejected") {
+        const reason = outcome.reason;
+        (report.stopReasons ??= {})[order.id] = reason instanceof WorkerStopError ? reason.stopReason : workerStopReason({ errorText: String(reason) });
+        // Keep the historical message shape: callers and recorded baselines match on "Error: <text>".
+        const text = reason instanceof WorkerStopError ? `Error: ${reason.message}` : String(reason);
+        throw new Error(`Worker ${order.id} failed: ${text}`);
+      }
       report.results[order.id] = outcome.value;
+      if (outcome.value.stopReason) (report.stopReasons ??= {})[order.id] = outcome.value.stopReason;
       if (changedFiles(runStart, workerSnapshot).length && order.mode && order.mode !== "implement") throw new Error(`Read-only worker ${order.id} changed source`);
       if (outcome.value.status && outcome.value.status !== "completed") throw new Error(`Worker ${order.id} ended ${outcome.value.status}`);
       if (outcome.value.unresolved.length) throw new Error(`Worker ${order.id} has unresolved items: ${outcome.value.unresolved.join("; ")}`);

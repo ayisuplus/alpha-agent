@@ -1,3 +1,4 @@
+import type { AgentMessage } from "../agent-mailbox";
 import type { AgentPresetSnapshot } from "../agent-presets";
 import type { PauseReasonCode, StopReasonCode } from "../pause-reasons";
 import type {
@@ -18,6 +19,13 @@ import type { WorkOrder } from "../work-orders";
 export type TaskActor = "user" | "runtime" | "coordinator" | "reviewer" | `worker:${string}`;
 
 export type TaskInstanceRecord = NonNullable<CognitionState["instances"]>[number];
+
+/**
+ * Why a subagent attempt ended. `no-result` is the case the plan calls out: the attempt finished without submitting
+ * `alpha_worker_result`, which used to be indistinguishable from any other failure except by matching a message.
+ * `refusal` has no producer yet — no model signal for it exists in the SDK — and is reserved for when one does.
+ */
+export type WorkerStopReason = "completed" | "needs-input" | "aborted" | "error" | "max-tokens" | "budget" | "refusal" | "no-result";
 
 export interface TaskEventPayloads {
   /** Written once by `TaskLedger.create`; the payload is the initial state. */
@@ -49,7 +57,8 @@ export interface TaskEventPayloads {
     input: { summary: string; candidates: string[]; steps: CognitionStep[]; reason: string; scope?: string[]; constraints?: string[]; openQuestions?: string[] };
     recordedAt: string;
   };
-  "step/changed": { id: string; status: CognitionStep["status"]; reason: string };
+  /** `expectedRevision` is the board revision the caller read; a mismatch means someone else moved the step first. */
+  "step/changed": { id: string; status: CognitionStep["status"]; reason: string; expectedRevision?: number; claimedBy?: string };
   "candidates/set": { candidates: string[] };
 
   "capability-gap/recorded": { kind: CognitionState["gaps"][number]["kind"]; description: string; recordedAt: string };
@@ -121,6 +130,28 @@ export interface TaskEventPayloads {
   "worker/finished": { id: string; status: "completed" | "blocked" | "failed" | "cancelled"; findings: string[]; endedAt: string };
   "workers/reconciled": { reason: string; endedAt: string };
   "worker-outcome/recorded": { outcome: NonNullable<TaskState["workerOutcome"]> };
+  /** A subagent process is live: where it works, which pid to reap, and which model it runs. */
+  "worker/activated": {
+    attemptId: string;
+    orderId: string;
+    agentId?: string;
+    pid?: number;
+    workRoot?: string;
+    worktreePath?: string;
+    activatedAt: string;
+  };
+  /** The attempt's outcome, recorded whether or not the worker submitted a result. */
+  "worker/result": {
+    attemptId: string;
+    stopReason: WorkerStopReason;
+    findings: string[];
+    reviewVerdict?: "pass" | "changes-requested" | "inconclusive";
+    detail?: string;
+    recordedAt: string;
+  };
+  /** A message queued for the coordinator or for one agent; the inbox is these minus the acknowledgements. */
+  "worker/message-queued": { message: AgentMessage };
+  "worker/message-acknowledged": { id: string; agentId: string | null; acknowledgedAt: string };
 
   /** Every status change carries its reason: a pause code when waiting for a person, a stop code when the run ended. */
   "status/changed":

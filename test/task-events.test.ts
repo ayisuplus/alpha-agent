@@ -268,7 +268,8 @@ test("a lock left by a dead process is taken over instead of blocking the task",
     const dir = taskLogDir(ledger.file);
     const dead = Bun.spawnSync([process.execPath, "--version"]);
     expect(dead.exitCode).toBe(0);
-    await writeFile(join(dir, "events.lock"), JSON.stringify({ pid: dead.pid, at: Date.now() }));
+    await mkdir(join(dir, "events.lock"));
+    await writeFile(join(dir, "events.lock", "owner.json"), JSON.stringify({ pid: dead.pid, at: Date.now() }));
 
     await ledger.recordFailure("Written after the dead owner's lock was taken over");
     expect(ledger.state.lastFailure).toBe("Written after the dead owner's lock was taken over");

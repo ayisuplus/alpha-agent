@@ -7,11 +7,12 @@ import { excludedSourceDirectory } from "./source-review";
 import { computeCompletionGaps } from "./task-completion";
 import { checkTaskInvariants } from "./task-invariants";
 import {
-  SNAPSHOT_INTERVAL, appendEvent, applyEvent, eventLogPath, foldTask, latestSnapshot, readEvents, readTaskLog,
-  replaceState, taskLogDir, writeSnapshot, EventConflictError,
+  SNAPSHOT_INTERVAL, appendEvent, appendPlannedEvent, applyEvent, eventLogPath, foldTask, latestSnapshot, readEvents,
+  readTaskLog, replaceState, taskLogDir, writeSnapshot,
 } from "./task-events";
-import type { TaskActor, TaskEvent, TaskEventPlan } from "./task-events";
+import type { TaskActor, TaskEvent, TaskEventPayloads, TaskEventPlan, WorkerStopReason } from "./task-events";
 import type { PauseReasonCode, StopReasonCode } from "./pause-reasons";
+import type { AgentMessage } from "./agent-mailbox";
 
 export type EvidenceKind = "build" | "test" | "browser" | "asset" | "preview" | "source" | "artifact";
 export type TaskType = "web-product" | "code-change" | "research" | "file-work" | "general";
@@ -142,6 +143,10 @@ export interface CognitionStep {
   skillIds: string[];
   status: "planned" | "running" | "complete" | "blocked" | "cancelled";
   statusReason?: string;
+  /** Board revision of this step; every transition bumps it and callers pass the value they read (compare-and-swap). */
+  revision?: number;
+  /** The subagent attempt that claimed the step, when one did. */
+  claimedBy?: string;
 }
 export interface CognitionState {
   revision: number;
@@ -159,7 +164,7 @@ export interface CognitionState {
   skillSearches?: Array<{ key: string; gapDescription: string; query: string; resultCount: number; error?: string; recordedAt: string }>;
   skillProposals?: Array<{ id: string; key: string; name: string; description: string; source: string; revision: string; path: string; installs: number; requirements?: { tools: string[]; services: string[]; conflicts: string[] }; status: "pending" | "rejected" | "installed"; installedSkillId?: string; recordedAt: string }>;
   agents?: AgentRecord[];
-  instances?: Array<{ id: string; agentId?: string; parentId?: string; orderId: string; mode: ExecutionMode; expert?: { id: string; name: string; hash: string }; skills: NonNullable<import("./work-orders").WorkOrder["skillSnapshots"]>; contractVersion: number; cognitionRevision: number; baseRevision: string | null; status: "queued" | "running" | "returned" | "completed" | "blocked" | "failed" | "cancelled"; integration?: "pending" | "merged" | "conflict"; decisionReason?: string; integrationDecision?: { action: "integrate" | "reject"; reason: string; runId: string; contractVersion: number; sourceRevision: string | null; recordedAt: string }; workRoot?: string; worktreePath?: string; order?: import("./work-orders").WorkOrder; startedAt: string; endedAt?: string; findings?: string[] }>;
+  instances?: Array<{ id: string; agentId?: string; parentId?: string; orderId: string; mode: ExecutionMode; expert?: { id: string; name: string; hash: string }; skills: NonNullable<import("./work-orders").WorkOrder["skillSnapshots"]>; contractVersion: number; cognitionRevision: number; baseRevision: string | null; status: "queued" | "running" | "returned" | "completed" | "blocked" | "failed" | "cancelled"; integration?: "pending" | "merged" | "conflict"; decisionReason?: string; integrationDecision?: { action: "integrate" | "reject"; reason: string; runId: string; contractVersion: number; sourceRevision: string | null; recordedAt: string }; workRoot?: string; worktreePath?: string; order?: import("./work-orders").WorkOrder; stopReason?: WorkerStopReason; pid?: number; activatedAt?: string; startedAt: string; endedAt?: string; findings?: string[] }>;
 }
 export interface DevelopmentState {
   enabled: true;
@@ -187,6 +192,9 @@ export interface TaskState {
   workerRequests?: WorkerRequestRecord[];
   development?: DevelopmentState;
   workerOutcome?: { status: "completed" | "needs-context" | "blocked" | "failed"; findings: string[]; reviewVerdict?: "pass" | "changes-requested" | "inconclusive"; reviewEvidence?: Array<{ path: string; excerpt: string }>; requests?: Array<{ capability: string; reason: string; details: string }> };
+  /** Agent mailbox as events: a recipient's inbox is `workerMessages` minus `workerMessageAcks`. */
+  workerMessages?: AgentMessage[];
+  workerMessageAcks?: Array<{ id: string; agentId: string | null; acknowledgedAt: string }>;
   projectRoot: string;
   criteria: AcceptanceCriterion[];
   status: "active" | "stopped" | "complete" | "needs-input";
@@ -272,10 +280,6 @@ export async function fingerprintSource(projectRoot: string): Promise<string> {
   }
   return hash.digest("hex");
 }
-
-/** How often a mutation is re-planned after another writer appended to the same task log first, and how long to wait. */
-const COMMIT_RETRIES = 8;
-const COMMIT_BACKOFF_MS = 10;
 
 export class TaskLedger {
   /** Commits for one task file are serialized in-process; the log lock serializes them across processes. */
@@ -458,7 +462,11 @@ export class TaskLedger {
   }
 
   async updateStep(id: string, status: CognitionStep["status"], reason: string): Promise<void> {
-    await this.commit(() => ({ type: "step/changed", payload: { id, status, reason } }));
+    await this.commit(() => {
+      const step = this.state.cognition?.steps.find(item => item.id === id);
+      // Compare-and-swap on the board revision: a concurrent claim or completion makes this call re-plan.
+      return { type: "step/changed", payload: { id, status, reason, expectedRevision: step?.revision ?? 0 } };
+    });
   }
 
   async enableDevelopmentWorkflow(): Promise<void> {
@@ -589,6 +597,26 @@ export class TaskLedger {
       : null));
   }
 
+  /** A subagent process is live; the pid lets recovery reap an orphan after a hard kill. */
+  async recordWorkerActivation(input: Omit<TaskEventPayloads["worker/activated"], "activatedAt">): Promise<void> {
+    await this.commit(() => ({ type: "worker/activated", payload: { ...input, activatedAt: new Date().toISOString() } }));
+  }
+
+  /** The attempt's outcome, recorded even when the worker never submitted a result. */
+  async recordWorkerResult(input: Omit<TaskEventPayloads["worker/result"], "recordedAt">): Promise<void> {
+    await this.commit(() => ({ type: "worker/result", payload: { ...input, recordedAt: new Date().toISOString() } }));
+  }
+
+  async recordWorkerMessage(message: AgentMessage): Promise<void> {
+    await this.commit(() => ({ type: "worker/message-queued", payload: { message } }));
+  }
+
+  async acknowledgeWorkerMessage(id: string, agentId: string | null): Promise<void> {
+    await this.commit(() => (this.state.workerMessageAcks?.some(ack => ack.id === id && ack.agentId === agentId)
+      ? null
+      : { type: "worker/message-acknowledged", payload: { id, agentId, acknowledgedAt: new Date().toISOString() } }));
+  }
+
   async recordDevelopmentReview(input: { verdict: NonNullable<DevelopmentState["review"]>["verdict"]; findings: string[]; evidence?: Array<{ path: string; excerpt: string }>; instanceId: string; expectedRevision?: string; expectedContractVersion?: number }): Promise<void> {
     this.assertActive();
     if (!this.state.development?.enabled || !this.state.revision || !input.instanceId) throw new Error("开发审查状态无效");
@@ -704,12 +732,13 @@ export class TaskLedger {
   }
 
   /**
-   * Validate → append → apply → project. The plan closure rebuilds the event from the current state, so a writer that
-   * loses the sequence compare-and-swap re-folds the winner's events and re-plans instead of failing or overwriting.
+   * Validate → append → apply → project. Commits for one task file are serialized in-process and, across processes, by
+   * the log lock: planning happens inside that lock, so a writer that finds the log moved on re-folds and re-plans
+   * there instead of losing a retry race or overwriting the winner's events.
    */
   private commit(plan: () => TaskEventPlan | null): Promise<TaskEvent | null> {
     const prior = TaskLedger.commitQueues.get(this.file) ?? Promise.resolve();
-    const work = prior.then(() => this.appendWithRetry(plan), () => this.appendWithRetry(plan));
+    const work = prior.then(() => this.appendPlanned(plan), () => this.appendPlanned(plan));
     TaskLedger.commitQueues.set(this.file, work);
     void work.then(
       () => { if (TaskLedger.commitQueues.get(this.file) === work) TaskLedger.commitQueues.delete(this.file); },
@@ -718,29 +747,29 @@ export class TaskLedger {
     return work;
   }
 
-  private async appendWithRetry(plan: () => TaskEventPlan | null): Promise<TaskEvent | null> {
-    for (let attempt = 0; ; attempt++) {
-      const draft = plan();
-      if (!draft) return null;
-      const event = { ...draft, at: new Date().toISOString(), actor: this.actor, ...(this.runId ? { runId: this.runId } : {}) } as TaskEvent;
-      // Dry run: the reducer's guards reject the event before anything reaches the log.
-      applyEvent(structuredClone(this.state), event);
-      try {
+  private async appendPlanned(plan: () => TaskEventPlan | null): Promise<TaskEvent | null> {
+    return appendPlannedEvent(
+      this.logDir,
+      this.seq,
+      async () => {
+        const draft = plan();
+        if (!draft) return null;
+        const event = { ...draft, at: new Date().toISOString(), actor: this.actor, ...(this.runId ? { runId: this.runId } : {}) } as TaskEvent;
+        // Dry run: the reducer's guards reject the event before anything reaches the log.
+        applyEvent(structuredClone(this.state), event);
+        return event;
+      },
+      async () => { await this.reload(); return this.seq; },
+      async appended => {
         // Applying and projecting inside the log lock keeps the JSON file from ever lagging behind the log tip.
-        return await appendEvent(this.logDir, event, this.seq, async appended => {
-          applyEvent(this.state, appended);
-          this.seq = appended.seq;
-          await this.save();
-          if (process.env.ALPHA_TASK_INVARIANTS) {
-            for (const violation of checkTaskInvariants(this.state)) console.warn(`ALPHA_INVARIANT ${this.state.id} ${violation.code}: ${violation.message}`);
-          }
-        });
-      } catch (error) {
-        if (!(error instanceof EventConflictError) || attempt >= COMMIT_RETRIES) throw error;
-        await this.reload();
-        await Bun.sleep(COMMIT_BACKOFF_MS * (attempt + 1));
-      }
-    }
+        applyEvent(this.state, appended);
+        this.seq = appended.seq;
+        await this.save();
+        if (process.env.ALPHA_TASK_INVARIANTS) {
+          for (const violation of checkTaskInvariants(this.state)) console.warn(`ALPHA_INVARIANT ${this.state.id} ${violation.code}: ${violation.message}`);
+        }
+      },
+    );
   }
 
   /** Re-folds the log after another writer won the sequence compare-and-swap. */

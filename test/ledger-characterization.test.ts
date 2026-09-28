@@ -47,7 +47,7 @@ test("the baseline covers the whole lifecycle, accepted calls and the guards tha
 // Keeps the baseline honest as the ledger grows: a new mutating method without a probe step fails here, not silently.
 test("the probe covers every mutating ledger method", () => {
   // Reads, private helpers and the event-log plumbing are not task mutations, so the probe does not cover them.
-  const notMutations = ["completionGaps", "assertActive", "save", "commit", "appendWithRetry", "reload", "bindRun", "eventSeq", "eventsFile"];
+  const notMutations = ["completionGaps", "assertActive", "save", "commit", "appendPlanned", "reload", "bindRun", "eventSeq", "eventsFile"];
   const methods = Object.getOwnPropertyNames(TaskLedger.prototype).filter(name => name !== "constructor" && !notMutations.includes(name)).sort();
   const probed = [...new Set(probeSteps.map(step => step.name.split(":")[0]))].sort();
   expect(probed.filter(name => !methods.includes(name))).toEqual([]);

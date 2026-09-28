@@ -7,6 +7,9 @@ import type { FamilyReducers } from "../types";
 /** Reserved order ids that never map to a plan step; today's ledger skips them when marking steps. */
 const RESERVED_ORDER_IDS: Record<string, true> = { coordinator: true, "final-review": true, "review-repair": true };
 
+/** Attempt statuses that are already closed; a later result adds the reason but cannot rewrite them. */
+const TERMINAL_INSTANCE: Record<string, true> = { completed: true, blocked: true, failed: true, cancelled: true };
+
 function assertActive(state: TaskState): void {
   if (state.status !== "active") throw new InvariantError("apply/task-not-active", `Task is ${state.status}`);
 }
@@ -141,8 +144,10 @@ export const workerReducers: FamilyReducers = {
       instance.status = "failed";
       instance.findings = [event.payload.reason];
       instance.endedAt = event.payload.endedAt;
+      // An interrupted attempt never submitted a result; recovery says so per attempt instead of only in the batch reason.
+      instance.stopReason = "no-result";
       const step = state.cognition?.steps.find(item => item.id === instance.orderId);
-      if (step) step.status = "blocked";
+      if (step) { step.status = "blocked"; step.revision = (step.revision ?? 0) + 1; }
     }
   },
 
@@ -150,5 +155,34 @@ export const workerReducers: FamilyReducers = {
     assertActive(state);
     const outcome = event.payload.outcome;
     state.workerOutcome = { ...outcome, requests: outcome.requests ?? state.workerOutcome?.requests, findings: outcome.findings.map(item => item.trim()).filter(Boolean) };
+  },
+
+  "worker/activated": (state, event) => {
+    const { attemptId, orderId, pid, workRoot, worktreePath, activatedAt } = event.payload;
+    const instance = state.cognition?.instances?.find(item => item.id === attemptId);
+    if (!instance) throw new InvariantError("apply/worker-attempt-missing", "Worker attempt not found");
+    if (instance.orderId !== orderId) throw new InvariantError("apply/activation-order-mismatch", `Worker attempt ${attemptId} belongs to order ${instance.orderId}, not ${orderId}`);
+    instance.activatedAt = activatedAt;
+    if (pid !== undefined) instance.pid = pid;
+    if (workRoot) instance.workRoot = workRoot;
+    if (worktreePath) instance.worktreePath = worktreePath;
+  },
+
+  "worker/result": (state, event) => {
+    const { attemptId, stopReason, findings, recordedAt } = event.payload;
+    const instance = state.cognition?.instances?.find(item => item.id === attemptId);
+    if (!instance) throw new InvariantError("apply/worker-attempt-missing", "Worker attempt not found");
+    instance.stopReason = stopReason;
+    // A result for an attempt the supervisor already closed only records why it ended.
+    if (TERMINAL_INSTANCE[instance.status]) return;
+    instance.status = stopReason === "completed" ? "returned" : stopReason === "needs-input" ? "blocked" : "failed";
+    if (findings.length) instance.findings = findings;
+    instance.endedAt = recordedAt;
+    const step = RESERVED_ORDER_IDS[instance.orderId] ? undefined : state.cognition?.steps.find(item => item.id === instance.orderId);
+    if (step) {
+      step.status = instance.status === "returned" ? "running" : "blocked";
+      step.statusReason = findings.join("；") || `工单 ${attemptId} ${stopReason}`;
+      step.revision = (step.revision ?? 0) + 1;
+    }
   },
 };

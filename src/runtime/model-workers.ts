@@ -13,6 +13,7 @@ import { guardMCPTools, MCPPermissionStore } from "./mcp-permissions";
 import { parseWorkerMCPRequest, writeWorkerMCPResponse, type WorkerMCPDescriptor } from "./worker-mcp-proxy";
 import { commandApprovalStore, type CommandRequest } from "./command-approval";
 import { independentCommandReviewer } from "./auto-reviewer";
+import { WorkerStopError, workerStopReason } from "./worker-stop";
 
 const appRoot = resolve(import.meta.dir, "..", "..");
 
@@ -110,6 +111,8 @@ export function runModelWorkOrders(input: {
   browserAccess?: () => boolean;
   browserLease?: { claim: (instanceId: string) => boolean; release: (instanceId: string) => void };
   onWorkerEvent?: (order: WorkOrder, state: "started" | "completed" | "failed") => void | Promise<void>;
+  /** Fired once per child process with its pid, so the parent log can name the process to reap after a hard kill. */
+  onWorkerStart?: (order: WorkOrder, info: { pid: number }) => void | Promise<void>;
   onWorkerUsage?: (order: WorkOrder, usage: NonNullable<WorkerResult["usage"]>) => void | Promise<void>;
   onInstallReceipt?: (order: WorkOrder, receipt: CommandRequest, available: boolean) => void | Promise<void>;
 }): Promise<WorkBatchReport> {
@@ -246,6 +249,7 @@ export function runModelWorkOrders(input: {
       cwd: appRoot, stdin: "ignore", stdout: "pipe", stderr: "pipe",
     });
     let hardKill: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
     const abort = () => {
       localAbort.abort();
       child.kill("SIGINT");
@@ -253,7 +257,8 @@ export function runModelWorkOrders(input: {
     };
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();
-    const timeout = setTimeout(abort, 610_000);
+    const timeout = setTimeout(() => { timedOut = true; abort(); }, 610_000);
+    await input.onWorkerStart?.(withSkills, { pid: child.pid });
     const started = performance.now();
     let usageRecorded = false;
     const browserPoll = setInterval(() => { void serveBrowser().catch(() => undefined); }, 50);
@@ -262,8 +267,11 @@ export function runModelWorkOrders(input: {
       const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       const result = await readFile(resultFile, "utf8").then(text => JSON.parse(text) as WorkerResult & { error?: string }).catch(() => null);
       if (result?.usage) { await input.onWorkerUsage?.(withSkills, result.usage); usageRecorded = true; }
-      if (workerSignal.aborted) throw new Error(`Worker ${order.id} was cancelled or timed out`);
-      if (exitCode !== 0 || result?.error || !result) throw new Error(result?.error || stderr.trim().slice(-2_000) || stdout.trim().slice(-2_000) || `Worker ${order.id} exited ${exitCode}`);
+      if (workerSignal.aborted) throw new WorkerStopError(timedOut && !signal?.aborted ? "no-result" : "aborted", `Worker ${order.id} was cancelled or timed out`);
+      if (exitCode !== 0 || result?.error || !result) {
+        const message = result?.error || stderr.trim().slice(-2_000) || stdout.trim().slice(-2_000) || `Worker ${order.id} exited ${exitCode}`;
+        throw new WorkerStopError(workerStopReason({ resultStopReason: result?.stopReason, errorText: message, usageIncomplete: !result }), message);
+      }
       await input.onWorkerEvent?.(withSkills, "completed");
       return result;
     } catch (error) {

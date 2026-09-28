@@ -1,4 +1,4 @@
-import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, truncate, unlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, truncate, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { TaskState } from "../task-ledger";
 import { EventConflictError } from "./errors";
@@ -6,15 +6,17 @@ import type { TaskEvent, TaskEventDraft } from "./types";
 
 /**
  * Append-only task event log: `<dataRoot>/tasks/<id>/events.v1.jsonl`, one JSON object per line
- * (`{ seq, at, actor, runId?, type, payload }`). Appends are serialized by an owner-stamped lock file shared with
- * every Alpha process and use sequence compare-and-swap, so the main process and subagent processes can write the
- * same task safely; a lock whose owner died is taken over immediately. Snapshots are pure caches: deleting them
+ * (`{ seq, at, actor, runId?, type, payload }`). Appends are serialized by an owner-stamped lock directory shared
+ * with every Alpha process and use sequence compare-and-swap, so the main process and subagent processes can write
+ * the same task safely; a lock whose owner died is taken over immediately. Snapshots are pure caches: deleting them
  * changes nothing but load time.
  */
 export const EVENT_LOG_VERSION = 1;
 export const SNAPSHOT_INTERVAL = 200;
 /** Backstop for an unreadable lock owner; a dead owner is detected by pid without waiting. */
 const LOCK_STALE_MS = 10_000;
+/** How long a lock without an owner record is trusted: the window between creating the lock and stamping it. */
+const LOCK_GRACE_MS = 2_000;
 const LOCK_RETRY_MS = 20;
 const TAIL_WINDOW_BYTES = 64 * 1024;
 
@@ -114,22 +116,29 @@ async function withLogLock<T>(dir: string, run: () => Promise<T>): Promise<T> {
   const lock = join(dir, "events.lock");
   while (true) {
     try {
-      // Exclusive create writes the owner with it, so a reader never sees a lock it cannot attribute.
-      await writeFile(lock, JSON.stringify({ pid: process.pid, at: Date.now() }), { flag: "wx" });
+      // mkdir is the atomic, cross-process exclusion; a file created with "wx" proved not to be exclusive on Windows.
+      await mkdir(lock);
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const owner = JSON.parse(await orDefault(readFile(lock, "utf8"), "null")) as { pid?: number; at?: number } | null;
-      const fresh = Date.now() - (owner?.at ?? 0) <= LOCK_STALE_MS;
-      // A lock whose owner died (a killed run, a crashed app) is taken over at once instead of blocking the task.
-      if (owner?.pid !== undefined && fresh && (owner.pid === process.pid || processAlive(owner.pid))) {
+      const owner = JSON.parse(await orDefault(readFile(join(lock, "owner.json"), "utf8"), "null")) as { pid?: number } | null;
+      const age = Date.now() - await orDefault(stat(lock).then(item => item.mtimeMs), Date.now());
+      // A freshly created lock may not have its owner record yet: wait out that window before considering a takeover.
+      const held = owner?.pid === undefined ? age <= LOCK_GRACE_MS : (owner.pid === process.pid || processAlive(owner.pid)) && age <= LOCK_STALE_MS;
+      if (held) {
         await Bun.sleep(LOCK_RETRY_MS);
         continue;
       }
-      await unlink(lock).catch(() => undefined);
+      // A lock whose owner died (a killed run, a crashed app) is taken over at once instead of blocking the task.
+      await rm(lock, { recursive: true, force: true });
     }
   }
-  try { return await run(); } finally { await unlink(lock).catch(() => undefined); }
+  try {
+    await writeFile(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, at: Date.now() }));
+    return await run();
+  } finally {
+    await rm(lock, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -142,6 +151,35 @@ export async function appendEvent(dir: string, draft: TaskEventDraft, expectedSe
     const tail = await inspectLogTail(dir);
     if (tail.torn && tail.validBytes < tail.size) await truncate(eventLogPath(dir), tail.validBytes);
     if (tail.seq !== expectedSeq) throw new EventConflictError(expectedSeq, tail.seq);
+    const event = { seq: expectedSeq + 1, at: draft.at, actor: draft.actor, ...(draft.runId ? { runId: draft.runId } : {}), type: draft.type, payload: draft.payload } as TaskEvent;
+    await appendFile(eventLogPath(dir), `${JSON.stringify(event)}\n`);
+    if (afterAppend) await afterAppend(event);
+    return event;
+  });
+}
+
+/**
+ * Appends the event a plan produces, planning *inside* the lock. When another writer got there first the plan is
+ * re-made after `onStale` re-folds, so sustained contention resolves instead of exhausting a retry budget.
+ */
+export async function appendPlannedEvent(
+  dir: string,
+  expectedSeq: number,
+  plan: () => Promise<TaskEventDraft | null>,
+  onStale: () => Promise<number>,
+  afterAppend?: (event: TaskEvent) => Promise<void>,
+): Promise<TaskEvent | null> {
+  return withLogLock(dir, async () => {
+    let tail = await inspectLogTail(dir);
+    if (tail.torn && tail.validBytes < tail.size) await truncate(eventLogPath(dir), tail.validBytes);
+    if (tail.seq !== expectedSeq) {
+      // Holding the lock, no other writer can slip in between re-folding and appending.
+      expectedSeq = await onStale();
+      tail = await inspectLogTail(dir);
+      if (tail.seq !== expectedSeq) throw new EventConflictError(expectedSeq, tail.seq);
+    }
+    const draft = await plan();
+    if (!draft) return null;
     const event = { seq: expectedSeq + 1, at: draft.at, actor: draft.actor, ...(draft.runId ? { runId: draft.runId } : {}), type: draft.type, payload: draft.payload } as TaskEvent;
     await appendFile(eventLogPath(dir), `${JSON.stringify(event)}\n`);
     if (afterAppend) await afterAppend(event);

@@ -9,6 +9,7 @@ import type { TaskState } from "../src/runtime/task-ledger";
 import { TaskLedger } from "../src/runtime/task-ledger";
 import { pendingWorkerMessages } from "../src/runtime/agent-mailbox";
 import { createWorkerMCPProxyTools, type WorkerMCPDescriptor } from "../src/runtime/worker-mcp-proxy";
+import { WorkerStopError, workerStopReason } from "../src/runtime/worker-stop";
 
 const [requestFile, resultFile] = Bun.argv.slice(2);
 if (!requestFile || !resultFile) throw new Error("Worker request and result paths are required");
@@ -66,9 +67,10 @@ try {
   });
   await eventWrites;
   const run = ledger.state.runs?.at(-1);
-  if (!ledger.state.workerOutcome) throw new Error("Worker did not submit alpha_worker_result for this run");
+  if (!ledger.state.workerOutcome) throw new WorkerStopError("no-result", "Worker did not submit alpha_worker_result for this run");
   const result: WorkerResult = {
     ...ledger.state.workerOutcome,
+    stopReason: ledger.state.workerOutcome.status === "completed" ? "completed" : "needs-input",
     evidence: [ledger.file],
     readPaths: [...readPaths].sort(),
     unresolved: ledger.state.status === "active" ? ledger.state.workerOutcome.status === "completed" ? [] : ledger.state.workerOutcome.findings : [`Worker ended ${ledger.state.status}`],
@@ -84,9 +86,10 @@ try {
   const waiting = workerState?.status === "needs-input" ? workerState : null;
   if (error instanceof NeedsInputError && waiting) {
     const reason = waiting.pendingQuestion ?? error.message;
-    await writeFile(resultFile, JSON.stringify({ status: "needs-context", findings: [reason], evidence: [], unresolved: [reason], readPaths: [...readPaths].sort(), usage: run ? { model: run.model, toolCalls: run.toolCalls, elapsedMs: run.elapsedMs, tokens: run.usage, outcome: run.outcome } : undefined }));
+    await writeFile(resultFile, JSON.stringify({ status: "needs-context", stopReason: "needs-input", findings: [reason], evidence: [], unresolved: [reason], readPaths: [...readPaths].sort(), usage: run ? { model: run.model, toolCalls: run.toolCalls, elapsedMs: run.elapsedMs, tokens: run.usage, outcome: run.outcome } : undefined }));
   } else {
-    await writeFile(resultFile, JSON.stringify({ error: error instanceof Error ? error.message : String(error), usage: run ? { model: run.model, toolCalls: run.toolCalls, elapsedMs: run.elapsedMs, tokens: run.usage, outcome: run.outcome } : undefined }));
+    const message = error instanceof Error ? error.message : String(error);
+    await writeFile(resultFile, JSON.stringify({ error: message, stopReason: error instanceof WorkerStopError ? error.stopReason : workerStopReason({ errorText: message }), usage: run ? { model: run.model, toolCalls: run.toolCalls, elapsedMs: run.elapsedMs, tokens: run.usage, outcome: run.outcome } : undefined }));
     process.exitCode = 1;
   }
 }
