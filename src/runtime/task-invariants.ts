@@ -1,3 +1,4 @@
+import { PAUSE_REASONS, isPauseReasonCode, isStopReasonCode } from "./pause-reasons";
 import { computeCompletionGaps } from "./task-completion";
 import type { TaskState } from "./task-ledger";
 
@@ -24,27 +25,10 @@ export interface TaskOperationRecord {
 }
 
 /**
- * Pause reasons currently written to `blockedService`. Inventoried from every `needInput` call site on 2026-09-28;
- * P2 replaces them with the reason codes of plan §4.4, and this list becomes the migration table.
+ * The eight reason codes of plan §4.4. Before P2 this list held the sixteen free-text service names that producers
+ * passed to `needInput`; `LEGACY_SERVICE_TO_REASON` in `pause-reasons.ts` is the migration table for imported ledgers.
  */
-export const KNOWN_PAUSE_REASONS = [
-  "approval",
-  "capability",
-  "git-backup",
-  "git-worktree",
-  "MCP",
-  "model",
-  "project",
-  "project-state",
-  "recovery",
-  "review-repair",
-  "web-approval",
-  "web-source",
-  "windows-sandbox",
-  "worker-approval",
-  "worker-integration",
-  "worker-review",
-] as const;
+export const KNOWN_PAUSE_REASONS = PAUSE_REASONS;
 
 /** Invariants that a mutable ledger snapshot cannot express; they become checkable once the event log exists. */
 export const UNCHECKABLE_INVARIANTS: Array<{ code: string; reason: string }> = [
@@ -120,16 +104,16 @@ export function checkTaskInvariants(state: TaskState, operations: TaskOperationR
     add("I5/review-without-instance", "I5", `开发审查引用不存在的实例 ${review.instanceId}`);
   }
 
-  // I6 — every pause carries a reason code and nothing else keeps pause fields.
+  // I6 — every pause carries a reason code, every stop records its cause, and no other status keeps those fields.
   if (state.status === "needs-input") {
     if (!state.pendingQuestion?.trim()) add("I6/needs-input-without-question", "I6", "任务等待输入但没有待回答问题");
-    if (!state.blockedService) add("I6/needs-input-without-reason-code", "I6", `任务等待输入但没有原因码：${state.pendingQuestion?.trim() ?? ""}`);
-    else if (!(KNOWN_PAUSE_REASONS as readonly string[]).includes(state.blockedService)) {
-      add("I6/unknown-reason-code", "I6", `未知暂停原因码 ${state.blockedService}`);
-    }
-  } else if (state.pendingQuestion || state.blockedService) {
-    add("S/leftover-pause-fields", "S", `任务状态为 ${state.status}，却仍保留暂停字段（问题：${state.pendingQuestion ?? "无"}；原因码：${state.blockedService ?? "无"}）`);
+    if (!state.pauseReason) add("I6/needs-input-without-reason-code", "I6", `任务等待输入但没有原因码：${state.pendingQuestion?.trim() ?? ""}`);
+    else if (!isPauseReasonCode(state.pauseReason)) add("I6/unknown-reason-code", "I6", `未知暂停原因码 ${String(state.pauseReason)}`);
+  } else if (state.pendingQuestion || state.pauseReason) {
+    add("S/leftover-pause-fields", "S", `任务状态为 ${state.status}，却仍保留暂停字段（问题：${state.pendingQuestion ?? "无"}；原因码：${state.pauseReason ?? "无"}）`);
   }
+  if (state.stop && !isStopReasonCode(state.stop.reason)) add("I6/unknown-stop-reason", "I6", `未知停止原因码 ${String(state.stop.reason)}`);
+  if (state.status !== "stopped" && state.stop) add("S/leftover-stop-record", "S", `任务状态为 ${state.status}，却保留停止记录（${state.stop.reason}）`);
 
   // I7 — revisions only move forward and match the phase they belong to.
   let previousAmendment = 0;
@@ -151,8 +135,8 @@ export function checkTaskInvariants(state: TaskState, operations: TaskOperationR
 
   // S — coherence the transition table will guarantee from P2 on.
   if (state.status === "complete" && state.lastFailure) add("S/complete-with-failure", "S", `任务已完成但保留失败原因：${state.lastFailure}`);
-  if (state.status === "stopped" && !state.lastFailure && !state.reopenReason && !state.goal?.stopReason) {
-    add("S/stopped-without-reason", "S", "任务已停止但没有停止原因（lastFailure / reopenReason / goal.stopReason 都为空）");
+  if (state.status === "stopped" && !state.stop && !state.lastFailure && !state.reopenReason && !state.goal?.stopReason) {
+    add("S/stopped-without-reason", "S", "任务已停止但没有停止原因（stop / lastFailure / reopenReason / goal.stopReason 都为空）");
   }
   const steps = cognition?.steps ?? [];
   for (const step of steps) {

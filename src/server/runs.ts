@@ -144,7 +144,7 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
     if (existingLedger?.state.projectId) {
       try { await ctx.projectStore.roots(existingLedger.state.projectId, existingLedger.state.projectVersion ?? 0); }
       catch (error) {
-        if (existingLedger.state.status === "active") await existingLedger.needInput(`项目目录已变化，需要重新检查：${error instanceof Error ? error.message : String(error)}`, "project");
+        if (existingLedger.state.status === "active") await existingLedger.needInput(`项目目录已变化，需要重新检查：${error instanceof Error ? error.message : String(error)}`, "project-state");
         throw error;
       }
     }
@@ -236,7 +236,7 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
       if (continuation.stopReason === "no-progress") {
         await currentLedger.recordFailure("Two consecutive goal cycles made no source, deliverable, or verified-evidence progress");
         await currentLedger.setGoalProgress(continuation.noProgressRuns, "no-progress");
-        await currentLedger.stop();
+        await currentLedger.stop("no-progress", "Two consecutive goal cycles made no progress");
         emitRun({ type: "task", task: ctx.taskView(currentLedger) });
         emitRun({ type: "status", phase: "无实际进展，已停止", runId, pending: currentLedger.completionGaps() });
         return;
@@ -250,7 +250,7 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
     const current = run.ledger ? await TaskLedger.load(run.ledger.file).catch(() => null) : null;
     if (current) {
       if (current.state.status === "active") {
-        if (error instanceof SandboxUnavailableError) await current.needInput(error.message, "windows-sandbox");
+        if (error instanceof SandboxUnavailableError) await current.needInput(error.message, "sandbox");
         else if (/^Authenticated model is unavailable:/.test(runError)) await current.needInput(runError, "model");
         else await current.recordFailure(runError);
       }
@@ -278,7 +278,7 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
     if (ledger) { ctx.flushText(ledger.state.id); ctx.operationIds.delete(ledger.state.id); }
     if (controller.signal.aborted && run.ledger) {
       const current = await TaskLedger.load(run.ledger.file).catch(() => null);
-      if (current?.state.status === "active") await current.stop();
+      if (current?.state.status === "active") await current.stop("user", "Cancelled");
     }
     if (projectTurn && ledger) {
       try {
@@ -430,7 +430,7 @@ async function startAutomation(ctx: ServerContext, pendingId: string, automation
         await ctx.automationStore.finish(pendingId, "complete", result.message);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        await ledger.needInput(reason, "git-backup");
+        await ledger.needInput(reason, "project-state");
         await ctx.automationStore.finish(pendingId, "needs-input", reason);
       }
       ctx.emit({ type: "task", taskId: ledger.state.id, task: ctx.taskView(ledger) });

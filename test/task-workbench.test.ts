@@ -120,7 +120,7 @@ test("workbench serves recorded evidence but refuses a ledger path outside its d
     await writeFile(browserLog, JSON.stringify({ results: [{ index: 0, action: "click", passed: false }], screenshot }));
     await ledger.recordPreview({ id: "preview-one", revision: ledger.state.revision!, path: join(dataRoot, "previews", "preview-one"), url: "http://127.0.0.1:12345", taskId: ledger.state.id });
     const browser = await ledger.recordEvidence({ criterionId: "user-path", kind: "browser", passed: false, source: browserLog, previewId: "preview-one", revision: ledger.state.revision! });
-    await ledger.stop();
+    await ledger.stop("error", "Browser verification failed");
     child = Bun.spawn([process.execPath, "run", join(import.meta.dir, "..", "src", "server.ts")], {
       cwd: root, env: { ...process.env, ALPHA_WORKSPACE_ROOT: root }, stdout: "pipe", stderr: "pipe",
     });

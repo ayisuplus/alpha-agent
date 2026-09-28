@@ -79,11 +79,13 @@ test("a stopped task retains its run budget record and can resume", async () => 
     const project = join(root, "product");
     await Bun.write(join(project, "app.txt"), "source");
     const ledger = await TaskLedger.create(join(root, "state"), { objective: "Build", projectRoot: project, criteria: [{ id: "build", description: "Build passes", kind: "build" }] });
-    await ledger.stop();
+    await ledger.stop("user", "User cancelled");
+    expect(ledger.state.stop).toMatchObject({ reason: "user", detail: "User cancelled" });
     await ledger.recordRun({ model: "test/model", toolCalls: 3, maxToolCalls: 10, wallTimeMs: 10_000, elapsedMs: 500, outcome: "cancelled", failureReason: "User cancelled" });
     await ledger.resume("Continue after cancellation");
     const restored = await TaskLedger.load(ledger.file);
     expect(restored.state.status).toBe("active");
+    expect(restored.state.stop).toBeUndefined();
     expect(restored.state.runs?.[0]?.outcome).toBe("cancelled");
     expect(restored.state.runs?.[0]?.failureReason).toBe("User cancelled");
     expect(taskPrompt(restored, "Keep working")).toContain("Continue after cancellation");

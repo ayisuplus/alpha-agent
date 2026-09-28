@@ -1,4 +1,4 @@
-import type { TaskLedger } from "./task-ledger";
+import type { GoalStopReason, TaskLedger } from "./task-ledger";
 
 /** A checked-off plan step alone is not evidence that the task advanced. */
 export function progressSignature(ledger: TaskLedger): string {
@@ -7,21 +7,25 @@ export function progressSignature(ledger: TaskLedger): string {
   return JSON.stringify({ revision: ledger.state.revision, passing, resolved });
 }
 
-export function goalStopReason(ledger: TaskLedger, cancelled: boolean, userControl: boolean, runError: string | null): string | null {
+export function goalStopReason(ledger: TaskLedger, cancelled: boolean, userControl: boolean, runError: string | null): GoalStopReason | null {
   if (!ledger.state.goal?.enabled) return null;
   if (ledger.state.goal.stopReason) return ledger.state.goal.stopReason;
   if (ledger.state.status === "complete") return "accepted";
-  if (ledger.state.status === "needs-input") return ledger.state.blockedService ? `needs-input:${ledger.state.blockedService}` : "needs-input";
+  if (ledger.state.status === "needs-input") return ledger.state.pauseReason ? `needs-input:${ledger.state.pauseReason}` : "needs-input";
   if (ledger.state.phase === "plan-review") return "plan-review";
   if (cancelled) return "cancelled";
-  if (ledger.state.status === "stopped") return /budget/i.test(ledger.state.lastFailure ?? runError ?? "") ? "budget-exhausted" : "stopped";
+  if (ledger.state.status === "stopped") {
+    // The stop code wins; the text match is only a fallback for ledgers stopped before codes existed.
+    if (ledger.state.stop) return ledger.state.stop.reason === "budget" ? "budget-exhausted" : "stopped";
+    return /budget/i.test(ledger.state.lastFailure ?? runError ?? "") ? "budget-exhausted" : "stopped";
+  }
   if (runError) return "hard-error";
   if (userControl) return "user-control";
   if (ledger.state.phase === "plan") return "planning-incomplete";
   return ledger.completionGaps().length ? null : "accepted";
 }
 
-export function nextGoalCycle(ledger: TaskLedger, before: string | null, cancelled: boolean, userControl: boolean): { continue: boolean; noProgressRuns: number; stopReason: string | null } {
+export function nextGoalCycle(ledger: TaskLedger, before: string | null, cancelled: boolean, userControl: boolean): { continue: boolean; noProgressRuns: number; stopReason: GoalStopReason | null } {
   const prior = ledger.state.goal?.noProgressRuns ?? 0;
   if (!ledger.state.goal?.enabled || ledger.state.status !== "active" || ledger.state.phase !== "execute" || !ledger.completionGaps().length || cancelled || userControl) {
     return { continue: false, noProgressRuns: prior, stopReason: goalStopReason(ledger, cancelled, userControl, null) };

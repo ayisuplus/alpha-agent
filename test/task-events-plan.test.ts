@@ -121,7 +121,7 @@ describe("plan/approved", () => {
   });
 
   test("records the approval, enters execute and resets the goal", () => {
-    const state = planned({ goal: { enabled: true, noProgressRuns: 3, stopReason: "no progress" } });
+    const state = planned({ goal: { enabled: true, noProgressRuns: 3, stopReason: "no-progress" } });
     apply(state, "plan/approved", { approval });
     expect(state.phase).toBe("execute");
     expect(Object.keys(state.planApproval!)).toEqual(["contractVersion", "cognitionRevision", "sourceRevision", "approvedAt"]);

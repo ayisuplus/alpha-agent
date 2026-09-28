@@ -176,7 +176,7 @@ test("planning exposes no write, command, generation, MCP, or plugin tools and b
   }
 });
 
-test("goal stopping distinguishes budget, cancellation, missing service and two idle cycles", async () => {
+test("goal stopping distinguishes budget, cancellation, pause reason and two idle cycles", async () => {
   const { root, ledger } = await fixture("execute");
   try {
     const before = progressSignature(ledger);
@@ -193,11 +193,16 @@ test("goal stopping distinguishes budget, cancellation, missing service and two 
     expect(goalStopReason(ledger, false, false, null)).toBe("no-progress");
     await ledger.setGoalProgress(0);
     await ledger.recordFailure("Task-wide model budget exhausted");
-    await ledger.stop();
+    await ledger.stop("budget", "Task-wide model budget exhausted");
+    expect(ledger.state.stop).toMatchObject({ reason: "budget" });
     expect(goalStopReason(ledger, false, false, null)).toBe("budget-exhausted");
     await ledger.resume("Try again");
-    await ledger.needInput("Service is unavailable", "MCP");
-    expect(goalStopReason(ledger, false, false, null)).toBe("needs-input:MCP");
+    await ledger.needInput("Service is unavailable", "approval");
+    expect(goalStopReason(ledger, false, false, null)).toBe("needs-input:approval");
+    await ledger.resume("Try again");
+    await ledger.stop("model", "Model produced no response within 45000 ms");
+    expect(ledger.state.stop).toMatchObject({ reason: "model", detail: "Model produced no response within 45000 ms" });
+    expect(goalStopReason(ledger, false, false, null)).toBe("stopped");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

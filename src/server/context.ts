@@ -9,6 +9,7 @@ import { generateTaskTitle } from "../runtime/task-title";
 import { setAllowedModelProviders } from "../runtime/model-policy";
 import { isModelAvailable } from "../runtime/models";
 import { TaskLedger } from "../runtime/task-ledger";
+import { pauseActions } from "../runtime/pause-reasons";
 import { TaskActivity, type ActivityKind } from "../runtime/task-activity";
 import { SettingsStore, WorkbenchMeta } from "../runtime/settings";
 import { ComfyClient } from "../runtime/comfy-client";
@@ -160,7 +161,7 @@ export async function createServerContext() {
           ? roots.some(item => item.toLowerCase() === root.toLowerCase())
           : root === join(productsRoot, `project-${ledger.state.projectId}`);
       } catch (error) {
-        if (ledger.state.status === "active") await ledger.needInput(`项目目录已变化，需要重新检查：${error instanceof Error ? error.message : String(error)}`, "project");
+        if (ledger.state.status === "active") await ledger.needInput(`项目目录已变化，需要重新检查：${error instanceof Error ? error.message : String(error)}`, "project-state");
         return false;
       }
     }
@@ -248,7 +249,9 @@ export async function createServerContext() {
       lastFailure: ledger.state.lastFailure ?? null,
       reopenReason: ledger.state.reopenReason ?? null,
       pendingQuestion: ledger.state.pendingQuestion ?? null,
-      blockedService: ledger.state.blockedService ?? null,
+      pauseReason: ledger.state.pauseReason ?? null,
+      pauseActions: pauseActions(ledger.state.pauseReason),
+      stop: ledger.state.stop ?? null,
       checkpoint: ledger.state.checkpoint ?? null,
       checkpointError: ledger.state.checkpointError ?? null,
       checkpointStatus: ledger.state.checkpointStatus ?? (ledger.state.checkpoint ? "committed" : null),
@@ -323,7 +326,7 @@ export async function createServerContext() {
   async function pauseTasksForProjectChange(projectId: string, version: number): Promise<void> {
     for (const ledger of await listTasks()) {
       if (ledger.state.projectId !== projectId || (ledger.state.projectVersion ?? 0) >= version || ledger.state.status !== "active") continue;
-      await ledger.needInput("项目目录范围已变化，请重新检查后继续", "project");
+      await ledger.needInput("项目目录范围已变化，请重新检查后继续", "project-state");
       emit({ type: "task", taskId: ledger.state.id, task: taskView(ledger) });
     }
   }

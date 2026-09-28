@@ -21,11 +21,13 @@ export const lifecycleReducers: FamilyReducers = {
         state.status = "complete";
         state.lastFailure = undefined;
         state.reopenReason = undefined;
+        delete state.stop;
         return;
       }
       case "stopped": {
         assertActive(state);
         state.status = "stopped";
+        state.stop = { reason: payload.reason, ...(payload.detail ? { detail: payload.detail } : {}), stoppedAt: event.at };
         return;
       }
       case "active": {
@@ -35,7 +37,8 @@ export const lifecycleReducers: FamilyReducers = {
           if (!payload.reopenReason.trim()) throw new InvariantError("apply/resume-reason-blank", "Resume reason is required");
           state.status = "active";
           delete state.pendingQuestion;
-          delete state.blockedService;
+          delete state.pauseReason;
+          delete state.stop;
           state.reopenReason = payload.reopenReason.trim();
           if (state.goal) { state.goal.stopReason = undefined; state.goal.noProgressRuns = 0; }
           state.guidanceHistory ??= [];
@@ -47,6 +50,7 @@ export const lifecycleReducers: FamilyReducers = {
         if (!payload.reopenReason.trim()) throw new InvariantError("apply/reopen-reason-blank", "Reopen reason is required");
         state.status = "active";
         state.reopenReason = payload.reopenReason.trim();
+        delete state.stop;
         return;
       }
       case "needs-input": {
@@ -54,7 +58,7 @@ export const lifecycleReducers: FamilyReducers = {
         if (!payload.question.trim()) throw new InvariantError("apply/question-blank", "A user question is required");
         state.status = "needs-input";
         state.pendingQuestion = payload.question.trim();
-        if (payload.service) state.blockedService = payload.service;
+        if (payload.reason) state.pauseReason = payload.reason;
         return;
       }
     }
@@ -66,7 +70,8 @@ export const lifecycleReducers: FamilyReducers = {
     if (state.status === "stopped" || state.status === "needs-input") state.status = "active";
     if (clearPause) {
       delete state.pendingQuestion;
-      delete state.blockedService;
+      delete state.pauseReason;
+      delete state.stop;
     }
     state.phase = phase;
     delete state.planApproval;

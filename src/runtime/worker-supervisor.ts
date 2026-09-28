@@ -358,7 +358,7 @@ export class WorkerSupervisor {
       const outcome = report.results[attempt.order.id];
       if (outcome?.status === "needs-context") {
         const reason = outcome.findings?.join("; ") || report.reason || "Worker needs task input";
-        if (!attempt.order.agentId && ledger.state.status === "active") await ledger.needInput(reason, "worker-approval");
+        if (!attempt.order.agentId && ledger.state.status === "active") await ledger.needInput(reason, "approval");
         await ledger.updateWorker(id, "blocked", { workRoot: report.workRoot, findings: [reason], cognition: outcome.cognition });
         if (attempt.order.agentId) {
           await this.mailbox.collect();

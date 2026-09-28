@@ -118,7 +118,8 @@ export const workerReducers: FamilyReducers = {
     if (state.status === "complete") throw new InvariantError("apply/worker-run-on-complete", "Completed worker state cannot be continued");
     state.status = "active";
     delete state.pendingQuestion;
-    delete state.blockedService;
+    delete state.pauseReason;
+    delete state.stop;
     delete state.workerOutcome;
   },
 

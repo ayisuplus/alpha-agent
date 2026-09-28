@@ -43,12 +43,13 @@ function expectInvariant(run: () => void, code: string, message: string): void {
 const guidance: GuidanceRecord = { instruction: "carry on", recordedAt: "2026-09-28T01:00:00.000Z" };
 
 describe("status/changed", () => {
-  test("complete clears failure and reopen reason", () => {
-    const state = makeState({ phase: "execute", lastFailure: "boom", reopenReason: "again" });
+  test("complete clears the failure, the reopen reason and the stop record", () => {
+    const state = makeState({ phase: "execute", lastFailure: "boom", reopenReason: "again", stop: { reason: "error", detail: "boom", stoppedAt: "2026-09-28T00:30:00.000Z" } });
     apply(state, "status/changed", { status: "complete" });
     expect(state.status).toBe("complete");
     expect(state.lastFailure).toBeUndefined();
     expect(state.reopenReason).toBeUndefined();
+    expect("stop" in state).toBe(false);
   });
 
   test("complete accepts a task without a phase", () => {
@@ -86,18 +87,27 @@ describe("status/changed", () => {
     expectInvariant(() => apply(state, "status/changed", { status: "complete" }), "apply/completion-gaps", "Task cannot complete: c1");
   });
 
-  test("stop requires an active task", () => {
+  test("stop requires an active task and records the reason it stopped", () => {
     const state = makeState();
-    apply(state, "status/changed", { status: "stopped" });
+    apply(state, "status/changed", { status: "stopped", reason: "no-progress", detail: "three runs added no evidence" });
     expect(state.status).toBe("stopped");
-    expectInvariant(() => apply(state, "status/changed", { status: "stopped" }), "apply/task-not-active", "Task is stopped");
+    expect(state.stop).toEqual({ reason: "no-progress", detail: "three runs added no evidence", stoppedAt: "2026-09-28T01:00:00.000Z" });
+    expectInvariant(() => apply(state, "status/changed", { status: "stopped", reason: "user" }), "apply/task-not-active", "Task is stopped");
+  });
+
+  test("stop without a detail records only the reason and the event timestamp", () => {
+    const state = makeState();
+    apply(state, "status/changed", { status: "stopped", reason: "sandbox" });
+    expect(state.stop).toEqual({ reason: "sandbox", stoppedAt: "2026-09-28T01:00:00.000Z" });
+    expect("detail" in (state.stop ?? {})).toBe(false);
   });
 
   test("reopen activates a completed task with a trimmed reason", () => {
-    const state = makeState({ status: "complete" });
+    const state = makeState({ status: "complete", stop: { reason: "budget", detail: "out of budget", stoppedAt: "2026-09-28T00:30:00.000Z" } });
     apply(state, "status/changed", { status: "active", reopenReason: "  user asked  " });
     expect(state.status).toBe("active");
     expect(state.reopenReason).toBe("user asked");
+    expect("stop" in state).toBe(false);
   });
 
   test("reopen rejects a task that is not complete", () => {
@@ -116,23 +126,24 @@ describe("status/changed", () => {
     const state = makeState({
       status: "needs-input",
       pendingQuestion: "which env?",
-      blockedService: "github",
-      goal: { enabled: true, noProgressRuns: 3, stopReason: "stuck" },
+      pauseReason: "approval",
+      goal: { enabled: true, noProgressRuns: 3, stopReason: "no-progress" },
     });
     apply(state, "status/changed", { status: "active", reopenReason: " user answered ", guidance });
     expect(state.status).toBe("active");
     expect("pendingQuestion" in state).toBe(false);
-    expect("blockedService" in state).toBe(false);
+    expect("pauseReason" in state).toBe(false);
     expect(state.reopenReason).toBe("user answered");
     expect(state.goal).toEqual({ enabled: true, noProgressRuns: 0, stopReason: undefined });
     expect(state.guidanceHistory).toEqual([guidance]);
   });
 
   test("resume from stopped without a goal leaves guidanceHistory initialized", () => {
-    const state = makeState({ status: "stopped" });
+    const state = makeState({ status: "stopped", stop: { reason: "model", stoppedAt: "2026-09-28T00:30:00.000Z" } });
     apply(state, "status/changed", { status: "active", reopenReason: "go", guidance });
     expect(state.status).toBe("active");
     expect(state.guidanceHistory).toEqual([guidance]);
+    expect("stop" in state).toBe(false);
   });
 
   test("resume rejects a task that is not paused", () => {
@@ -148,17 +159,17 @@ describe("status/changed", () => {
     expect(state.guidanceHistory).toBeUndefined();
   });
 
-  test("needInput records the trimmed question and the blocked service only when given", () => {
+  test("needInput records the trimmed question and the pause reason only when given", () => {
     const state = makeState();
     apply(state, "status/changed", { status: "needs-input", question: "  pick one  " });
     expect(state.status).toBe("needs-input");
     expect(state.pendingQuestion).toBe("pick one");
-    expect("blockedService" in state).toBe(false);
+    expect("pauseReason" in state).toBe(false);
 
-    const withService = makeState();
-    apply(withService, "status/changed", { status: "needs-input", question: "approve?", service: "github" });
-    expect(withService.pendingQuestion).toBe("approve?");
-    expect(withService.blockedService).toBe("github");
+    const withReason = makeState();
+    apply(withReason, "status/changed", { status: "needs-input", question: "approve?", reason: "approval" });
+    expect(withReason.pendingQuestion).toBe("approve?");
+    expect(withReason.pauseReason).toBe("approval");
   });
 
   test("needInput rejects a blank question and an inactive task", () => {
@@ -180,26 +191,28 @@ describe("phase/changed", () => {
     const state = makeState({
       status: "stopped",
       pendingQuestion: "which env?",
-      blockedService: "github",
+      pauseReason: "approval",
+      stop: { reason: "no-progress", stoppedAt: "2026-09-28T00:30:00.000Z" },
       phase: "execute",
       planApproval: { contractVersion: 1, cognitionRevision: 2, sourceRevision: "rev-1", approvedAt: "2026-09-28T00:00:00.000Z" },
-      goal: { enabled: true, noProgressRuns: 4, stopReason: "stalled" },
+      goal: { enabled: true, noProgressRuns: 4, stopReason: "no-progress" },
     });
     apply(state, "phase/changed", { phase: "plan", clearPause: true });
     expect(state.status).toBe("active");
     expect("pendingQuestion" in state).toBe(false);
-    expect("blockedService" in state).toBe(false);
+    expect("pauseReason" in state).toBe(false);
+    expect("stop" in state).toBe(false);
     expect(state.phase).toBe("plan");
     expect("planApproval" in state).toBe(false);
     expect(state.goal).toEqual({ enabled: true, noProgressRuns: 0, stopReason: undefined });
   });
 
   test("keeps the pause fields when clearPause is false", () => {
-    const state = makeState({ status: "needs-input", pendingQuestion: "which env?", blockedService: "github" });
+    const state = makeState({ status: "needs-input", pendingQuestion: "which env?", pauseReason: "approval" });
     apply(state, "phase/changed", { phase: "plan-review", clearPause: false });
     expect(state.status).toBe("active");
     expect(state.pendingQuestion).toBe("which env?");
-    expect(state.blockedService).toBe("github");
+    expect(state.pauseReason).toBe("approval");
     expect(state.phase).toBe("plan-review");
   });
 

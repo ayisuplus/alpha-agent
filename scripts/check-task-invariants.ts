@@ -3,6 +3,7 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { checkTaskInvariants, UNCHECKABLE_INVARIANTS, type InvariantViolation, type TaskOperationRecord } from "../src/runtime/task-invariants";
+import { readTaskState } from "../src/runtime/task-events";
 import type { TaskState } from "../src/runtime/task-ledger";
 
 const args = process.argv.slice(2);
@@ -18,6 +19,8 @@ interface TaskReport {
   phase: NonNullable<TaskState["phase"]> | null;
   taskType: NonNullable<TaskState["taskType"]> | null;
   contractVersion: number;
+  pauseReason: TaskState["pauseReason"] | null;
+  stopReason: NonNullable<TaskState["stop"]>["reason"] | null;
   evidence: number;
   runs: number;
   instances: number;
@@ -35,7 +38,7 @@ const unreadable: Array<{ file: string; error: string }> = [];
 for (const name of (await readdir(join(dataRoot, "tasks")).catch(() => [] as string[])).filter(name => /^[0-9a-f-]{36}\.json$/.test(name)).sort()) {
   const file = join(dataRoot, "tasks", name);
   try {
-    const state = JSON.parse(await readFile(file, "utf8")) as TaskState;
+    const state = await readTaskState(file);
     tasks.push({
       id: state.id,
       file: name,
@@ -43,6 +46,8 @@ for (const name of (await readdir(join(dataRoot, "tasks")).catch(() => [] as str
       phase: state.phase ?? null,
       taskType: state.taskType ?? null,
       contractVersion: state.contractVersion ?? 1,
+      pauseReason: state.pauseReason ?? null,
+      stopReason: state.stop?.reason ?? null,
       evidence: state.evidence.length,
       runs: state.runs?.length ?? 0,
       instances: state.cognition?.instances?.length ?? 0,
@@ -71,7 +76,7 @@ console.log(`任务账本 ${tasks.length} 个（${dataRoot}）；无法解析 ${
 console.log(`违反不变量的任务 ${report.tasksWithViolations} 个，共 ${report.violationCount} 条`);
 for (const [code, count] of Object.entries(byCode).sort((a, b) => b[1] - a[1])) console.log(`  ${String(count).padStart(3)}  ${code}`);
 for (const task of tasks) {
-  const state = `${task.status}/${task.phase ?? "-"} · ${task.taskType ?? "-"} · 契约 v${task.contractVersion} · 证据 ${task.evidence} · 运行 ${task.runs} · 实例 ${task.instances}`;
+  const state = `${task.status}/${task.phase ?? "-"} · ${task.taskType ?? "-"} · 契约 v${task.contractVersion} · 证据 ${task.evidence} · 运行 ${task.runs} · 实例 ${task.instances}${task.pauseReason ? ` · 暂停原因 ${task.pauseReason}` : ""}${task.stopReason ? ` · 停止原因 ${task.stopReason}` : ""}`;
   console.log(`\n${task.id}  ${state}`);
   for (const violation of task.violations) console.log(`  [${violation.code}] ${violation.message}`);
   if (!task.violations.length) console.log("  无违反");

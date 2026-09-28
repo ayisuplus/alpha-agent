@@ -56,25 +56,35 @@ test("an active ledger with a consistent plan has no violations", () => {
   expect(checkTaskInvariants(acceptedState())).toEqual([]);
 });
 
-test("every known pause reason is accepted while an unknown one is reported", () => {
+test("every reason code is accepted while an unknown one is reported", () => {
   for (const reason of KNOWN_PAUSE_REASONS) {
-    const state = cleanState({ status: "needs-input", pendingQuestion: "Approve the command?", blockedService: reason });
-    expect(checkTaskInvariants(state)).toEqual([]);
+    expect(checkTaskInvariants(cleanState({ status: "needs-input", pendingQuestion: "Approve the command?", pauseReason: reason }))).toEqual([]);
   }
-  const violations = checkTaskInvariants(cleanState({ status: "needs-input", pendingQuestion: "Approve?", blockedService: "something-new" }));
-  expect(violations.map(item => item.code)).toEqual(["I6/unknown-reason-code"]);
+  // A ledger imported from an older build can still carry a value that is not a code.
+  const legacy = cleanState({ status: "needs-input", pendingQuestion: "Approve?" });
+  legacy.pauseReason = "something-new" as TaskState["pauseReason"];
+  expect(checkTaskInvariants(legacy).map(item => item.code)).toEqual(["I6/unknown-reason-code"]);
 });
 
 test("a pause without a question or without a reason code is a violation", () => {
-  expect(checkTaskInvariants(cleanState({ status: "needs-input", blockedService: "approval" })).map(item => item.code))
+  expect(checkTaskInvariants(cleanState({ status: "needs-input", pauseReason: "approval" })).map(item => item.code))
     .toEqual(["I6/needs-input-without-question"]);
   expect(checkTaskInvariants(cleanState({ status: "needs-input", pendingQuestion: "Approve?" })).map(item => item.code))
     .toEqual(["I6/needs-input-without-reason-code"]);
 });
 
 test("pause fields left behind on a running task are reported", () => {
-  const violations = checkTaskInvariants(cleanState({ pendingQuestion: "Approve?", blockedService: "approval" }));
+  const violations = checkTaskInvariants(cleanState({ pendingQuestion: "Approve?", pauseReason: "approval" }));
   expect(violations.map(item => item.code)).toEqual(["S/leftover-pause-fields"]);
+});
+
+test("a stop record belongs to a stopped task and carries a known code", () => {
+  expect(checkTaskInvariants(cleanState({ status: "stopped", stop: { reason: "model", stoppedAt: now } }))).toEqual([]);
+  expect(checkTaskInvariants(cleanState({ stop: { reason: "model", stoppedAt: now } })).map(item => item.code))
+    .toEqual(["S/leftover-stop-record"]);
+  // A stop record from before the codes were enforced: deliberately not a StopReasonCode.
+  const unknownStop = { reason: "carrier-pigeon", stoppedAt: now } as unknown as NonNullable<TaskState["stop"]>;
+  expect(checkTaskInvariants(cleanState({ status: "stopped", stop: unknownStop })).map(item => item.code)).toEqual(["I6/unknown-stop-reason"]);
 });
 
 test("an operation journal entry still running for a paused task is a stale lock", () => {

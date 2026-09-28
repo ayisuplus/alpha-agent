@@ -7,7 +7,7 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { foldTask, readEvents, taskLogDir } from "../src/runtime/task-events";
-import { characterizeLedger, characterizeScenario, loadLedgerCopy, scenarios, withScratch, type Characterization } from "../test/support/ledger-characterization";
+import { characterizeLedger, characterizeScenario, diffStates, flatten, loadLedgerCopy, scenarios, withScratch, type Characterization } from "../test/support/ledger-characterization";
 
 const args = process.argv.slice(2);
 const fixtureDir = resolve("test/fixtures/ledger-characterization");
@@ -18,23 +18,30 @@ const outFile = outFlag >= 0 ? args[outFlag + 1] : `artifacts/ledger-characteriz
 
 if (args.includes("--verify-import")) {
   const files = (await readdir(join(dataRoot, "tasks")).catch(() => [] as string[])).filter(name => /^[0-9a-f-]{36}\.json$/.test(name)).sort();
-  let mismatched = 0;
+  // Importing normalizes the pre-code pause field; anything else must come back byte-identical.
+  const normalizedPaths = new Set(["blockedService", "pauseReason"]);
+  let unexpected = 0;
   await withScratch("alpha-import-check-", async scratch => {
     for (const name of files) {
       const original = join(dataRoot, "tasks", name);
       const before = await readFile(original, "utf8");
       const ledger = await loadLedgerCopy(original, scratch);
       const events = await readEvents(taskLogDir(ledger.file));
-      const folded = JSON.stringify(foldTask(events), null, 2);
       const projection = await readFile(ledger.file, "utf8");
       const imported = events.length === 1 && events[0].type === "task/imported";
-      const ok = imported && folded === before && projection === before;
-      if (!ok) mismatched++;
-      console.log(`${ok ? "一致" : "不一致"} ${name}：事件 ${events.length} 条（${events.map(event => event.type).join(", ") || "无"}），折叠${folded === before ? "等于" : "不等于"}原文件，投影${projection === before ? "等于" : "不等于"}原文件`);
+      const changes = diffStates(flatten(JSON.parse(before)), flatten(foldTask(events)));
+      const surprises = changes.filter(change => !normalizedPaths.has(change.path));
+      const ok = imported && projection === before && surprises.length === 0;
+      if (!ok) unexpected++;
+      const detail = changes.length
+        ? `归一化 ${changes.map(change => `${change.path}: ${JSON.stringify(change.before)} → ${JSON.stringify(change.after)}`).join("；")}`
+        : "折叠与原文件逐字节一致";
+      console.log(`${ok ? "通过" : "不通过"} ${name}：事件 ${events.length} 条，投影${projection === before ? "未改写" : "被改写"}，${detail}`);
+      for (const surprise of surprises) console.log(`  意外差异 ${surprise.path}: ${JSON.stringify(surprise.before)} → ${JSON.stringify(surprise.after)}`);
     }
   });
-  if (mismatched) { console.error(`\n${mismatched} 个账本导入后与原文件不一致`); process.exit(1); }
-  console.log(`\n${files.length} 个真实账本副本：导入 → 折叠 → 投影与原文件逐字节一致`);
+  if (unexpected) { console.error(`\n${unexpected} 个账本导入后出现意外差异`); process.exit(1); }
+  console.log(`\n${files.length} 个真实账本副本：导入 → 折叠只归一化暂停原因码，投影文件未被改写`);
 } else if (args.includes("--real")) {
   const files = (await readdir(join(dataRoot, "tasks")).catch(() => [] as string[])).filter(name => /^[0-9a-f-]{36}\.json$/.test(name)).sort();
   const tasks = await withScratch("alpha-characterize-real-", async scratch => {

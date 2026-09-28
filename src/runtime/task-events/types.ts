@@ -1,6 +1,7 @@
 import type { AgentPresetSnapshot } from "../agent-presets";
+import type { PauseReasonCode, StopReasonCode } from "../pause-reasons";
 import type {
-  AcceptanceCriterion, CognitionState, CognitionStep, DevelopmentState, Evidence, ExecutionMode, GoalBudget,
+  AcceptanceCriterion, CognitionState, CognitionStep, DevelopmentState, Evidence, ExecutionMode,
   GuidanceRecord, LocalPreview, RunRecord, TaskPhase, TaskState, WorkerCognition, WorkerRequestRecord,
 } from "../task-ledger";
 import type { WorkOrder } from "../work-orders";
@@ -38,8 +39,8 @@ export interface TaskEventPayloads {
   "guidance/recorded": { guidance: GuidanceRecord };
   "guidance/status-changed": { id: string; status: "delivered" | "processed" };
 
-  /** Full goal snapshot with its budget, matching the plan's `goal/changed`. */
-  "goal/changed": { goal: { enabled: boolean; budget?: GoalBudget; noProgressRuns?: number; stopReason?: string } };
+  /** Full goal snapshot with its budget and revision, matching the plan's `goal/changed`. */
+  "goal/changed": { goal: NonNullable<TaskState["goal"]> & { revision: number } };
 
   "phase/changed": { phase: TaskPhase; clearPause: boolean };
   "plan/submitted": Record<string, never>;
@@ -121,12 +122,12 @@ export interface TaskEventPayloads {
   "workers/reconciled": { reason: string; endedAt: string };
   "worker-outcome/recorded": { outcome: NonNullable<TaskState["workerOutcome"]> };
 
-  /** Every status change carries enough to rebuild the pause reason; P2 replaces `service` with the §4.4 codes. */
+  /** Every status change carries its reason: a pause code when waiting for a person, a stop code when the run ended. */
   "status/changed":
     | { status: "complete" }
-    | { status: "stopped" }
+    | { status: "stopped"; reason: StopReasonCode; detail?: string }
     | { status: "active"; reopenReason: string; guidance?: GuidanceRecord }
-    | { status: "needs-input"; question: string; service?: string };
+    | { status: "needs-input"; question: string; reason?: PauseReasonCode };
 
   "checkpoint/started": Record<string, never>;
   "checkpoint/committed": { checkpoint: NonNullable<TaskState["checkpoint"]> };

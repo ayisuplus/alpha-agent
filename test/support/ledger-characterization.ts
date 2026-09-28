@@ -198,8 +198,8 @@ export const probeSteps: ProbeStep[] = [
   { name: "needInput:blank", run: ledger => ledger.needInput("   ") },
   { name: "resume", run: ledger => ledger.resume("Approved; continue with the regression test") },
   { name: "resume:active", run: ledger => ledger.resume("Nothing to resume") },
-  { name: "stop", run: ledger => ledger.stop() },
-  { name: "stop:again", run: ledger => ledger.stop() },
+  { name: "stop", run: ledger => ledger.stop("error", "Browser verification stopped at step 3") },
+  { name: "stop:again", run: ledger => ledger.stop("user") },
   { name: "reviseObjective", run: ledger => ledger.reviseObjective("Fix cart rounding and handle empty carts") },
   { name: "reviseObjective:unchanged", run: ledger => ledger.reviseObjective("Fix cart rounding and handle empty carts") },
   { name: "setGoal:disabled", run: ledger => ledger.setGoal(false) },
@@ -287,7 +287,7 @@ export const scenarios: Scenario[] = [
         objective: "Summarize the sales CSV", projectRoot, taskType: "general", criteria: [],
         designatedExpertId: "data-analyst",
       });
-      await ledger.needInput("Should the summary be a file or an answer?", "approval");
+      await ledger.needInput("Should the summary be a file or an answer?", "question");
       return { ledger, context: { root } };
     },
   },

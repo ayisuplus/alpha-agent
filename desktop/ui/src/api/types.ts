@@ -1,6 +1,20 @@
 export type TaskStatus = "active" | "stopped" | "complete" | "needs-input";
 export type ControlHolder = "alpha" | "user";
 export type PermissionMode = "ask" | "auto" | "full";
+
+// Pause/stop codes owned by src/runtime/pause-reasons.ts; the UI never imports from src/, so the unions are mirrored here.
+export type PauseReasonCode = "approval" | "question" | "worker-no-result" | "sandbox" | "model" | "project-state" | "capability" | "budget";
+export type PauseAction =
+  | "approve" | "deny"
+  | "answer"
+  | "redispatch" | "review-directly" | "ignore-worker"
+  | "view-diagnostics" | "change-permission-mode"
+  | "change-model"
+  | "recheck-project"
+  | "install-capability" | "skip-capability"
+  | "add-budget";
+export type StopReasonCode = "user" | "model" | "sandbox" | "budget" | "error" | "no-progress" | "reconciled";
+
 export interface ProjectRecord { id: string; name: string; version: number; mounts: Array<{ id: string; path: string }>; permissionMode?: PermissionMode; createdAt: string; updatedAt: string }
 export type AutomationSchedule = { kind: "once"; at: string } | { kind: "rrule"; rule: string; timeZone: string; startAt: string };
 export interface Automation { id: string; name: string; prompt: string; kind: "cron" | "heartbeat"; status: "ACTIVE" | "PAUSED"; schedule: AutomationSchedule; nextRunAt: string | null; modelSelector: string | null; executor?: "scoped-git-backup"; notificationPolicy: "all" | "failures"; projectId?: string; mountId?: string; targetTaskId?: string; createdAt: string; updatedAt: string }
@@ -21,7 +35,7 @@ export interface TaskSummary {
   contractVersion: number;
   status: TaskStatus;
   phase?: "plan" | "plan-review" | "execute";
-  goal?: { enabled: boolean; budget?: { maxToolCalls: number; wallTimeMs: number; maxTotalToolCalls: number; totalWallTimeMs: number }; noProgressRuns?: number; stopReason?: string };
+  goal?: { enabled: boolean; revision?: number; budget?: { maxToolCalls: number; wallTimeMs: number; maxTotalToolCalls: number; totalWallTimeMs: number }; noProgressRuns?: number; stopReason?: string };
   running: boolean;
   /** What the task's model run is doing: working on the task, or answering a follow-up question about it. */
   runKind?: RunKind | null;
@@ -140,7 +154,11 @@ export interface TaskView extends TaskSummary {
   lastFailure: string | null;
   reopenReason: string | null;
   pendingQuestion?: string | null;
-  blockedService?: string | null;
+  /** Why a needs-input task is waiting, and the resume actions the runtime offers for that code. */
+  pauseReason?: PauseReasonCode | null;
+  pauseActions?: PauseAction[];
+  /** Why a stopped task stopped. */
+  stop?: { reason: StopReasonCode; detail?: string; stoppedAt: string } | null;
   checkpoint?: { runId: string; codeCommits: Array<{ root: string; commit: string }>; memoryCommit: string; recordedAt: string } | null;
   checkpointError?: string | null;
   checkpointStatus?: "pending" | "committed" | "failed" | null;

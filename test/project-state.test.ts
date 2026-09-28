@@ -425,7 +425,7 @@ test("a failed or cancelled task still commits its recorded state", async () => 
     const ledger = await TaskLedger.create(data, { objective: "Attempt work", projectRoot: work, criteria: [], taskType: "general" });
     const turn = await prepareProjectTurn({ dataRoot: data, projectRoot: work, ledger, runId: crypto.randomUUID() });
     await ledger.recordFailure("Verification failed");
-    await ledger.stop();
+    await ledger.stop("error");
     const finished = await finalizeProjectTurn(turn, ledger, false);
     expect(finished.codeCommits).toHaveLength(0);
     expect(await readProjectMemory(data, work, ledger)).toContain("Verification failed");

@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, CircleAlert, Info, MoreHorizontal, PanelRightOpen } from "lucide-react";
-import type { TaskView } from "../api/types";
+import type { PauseAction, TaskView } from "../api/types";
 import { api } from "../api/client";
 import { criterionState, describeStep, parseFailure } from "../state/evidence";
-import { criterionLabel, failureHeadline, formatDateTime, phaseInfo, reopenText, taskStatus, taskTitle } from "../state/labels";
+import { criterionLabel, failureHeadline, formatDateTime, pauseActionLabel, pauseReasonLabel, phaseInfo, reopenText, stopReasonLabel, taskStatus, taskTitle } from "../state/labels";
 import { notify, openDetail, openSettings, setGoalContinuation, setTaskModel, showPreview, store, syncSelected } from "../state/workbench";
 import { TaskAutomationPanel } from "./TaskAutomationPanel";
 import { useStore } from "../state/store";
@@ -32,6 +32,44 @@ function FailureAlert({ reason }: { reason: string }) {
       {verification && <button className="link-button" onClick={() => openDetail({ kind: "evidence", criterionId: "user-path" })}>查看证据</button>}
       {modelProblem && <button className="link-button" onClick={() => openSettings("model")}>模型设置</button>}
     </div>
+  </div>;
+}
+
+/** Pause actions without a button route happen inline (approval area, composer) or have no endpoint; the alert names the place instead. */
+const PAUSE_ACTION_HINTS: Partial<Record<PauseAction, string>> = {
+  approve: "在下方审批区批准或拒绝",
+  deny: "在下方审批区批准或拒绝",
+  answer: "在输入框回答后继续",
+  redispatch: "在输入框回答后继续，由主代理重新派发子代理",
+  "review-directly": "在输入框回答后继续，由主代理直接审阅",
+  "skip-capability": "在任务详情的 Skill 提案处拒绝",
+  "change-permission-mode": "权限模式在新建任务的项目准备页修改",
+};
+
+/** The pause actions that already have a working path in the workbench; the rest render as hints. */
+const PAUSE_ACTION_ROUTES: Partial<Record<PauseAction, () => void>> = {
+  "change-model": () => openSettings("model"),
+  "view-diagnostics": () => openSettings("diagnostics"),
+  "add-budget": () => openSettings("run"),
+  "install-capability": () => openDetail({ kind: "info" }),
+  "ignore-worker": () => openDetail({ kind: "info" }),
+};
+
+function PauseAlert({ task, rechecking, onRecheck }: { task: TaskView; rechecking: boolean; onRecheck: () => void }) {
+  const route = (action: PauseAction): (() => void) | null => action === "recheck-project" ? onRecheck : PAUSE_ACTION_ROUTES[action] ?? null;
+  const buttons = (task.pauseActions ?? []).flatMap(action => { const run = route(action); return run ? [{ action, run }] : []; });
+  const hints = [...new Set((task.pauseActions ?? []).flatMap(action => { const hint = PAUSE_ACTION_HINTS[action]; return hint ? [hint] : []; }))];
+  return <div className="thread-alert tone-warning" role="alert">
+    <CircleAlert size={16} aria-hidden />
+    <div className="thread-alert-body">
+      <strong>{task.pauseReason ? pauseReasonLabel(task.pauseReason) : "需要回答"}</strong>
+      {task.pendingQuestion && <p>{task.pendingQuestion}</p>}
+      {hints.map(hint => <p key={hint}>{hint}</p>)}
+    </div>
+    {!!buttons.length && <div className="thread-alert-actions">{buttons.map(({ action, run }) =>
+      <button key={action} className="link-button" disabled={action === "recheck-project" && rechecking} onClick={run}>
+        {action === "recheck-project" && rechecking ? "检查中…" : pauseActionLabel(action)}
+      </button>)}</div>}
   </div>;
 }
 
@@ -85,6 +123,12 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
     } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
     finally { setSkillDecision(null); }
   };
+  const recheckProject = () => void (async () => {
+    setRechecking(true);
+    try { await api.recheckTaskProject(task.id); await syncSelected(task.id); notify("项目目录已重新检查，可以继续任务", "info"); }
+    catch (error) { notify(error instanceof Error ? error.message : String(error)); }
+    finally { setRechecking(false); }
+  })();
 
   const information = <div className="thread-information">
     <div className="thread-meta">
@@ -106,6 +150,8 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
       {task.goal?.budget && <span>预算 {usedCalls}/{task.goal.budget.maxTotalToolCalls} 次工具调用 · {usedMinutes}/{Math.ceil(task.goal.budget.totalWallTimeMs / 60_000)} 分钟</span>}
       {task.status !== "complete" && <label><input type="checkbox" checked={!!task.goal?.enabled} disabled={busy} onChange={event => void setGoalContinuation(event.target.checked)} /> 持续推进</label>}
       {task.goal?.stopReason && <span>停止原因：{task.goal.stopReason}</span>}
+      {task.stop && <span>已停止：{stopReasonLabel(task.stop.reason)}{task.stop.detail ? ` · ${task.stop.detail}` : ""} · {formatDateTime(task.stop.stoppedAt)}</span>}
+      {task.goal?.revision !== undefined && <span>目标修订 v{task.goal.revision}</span>}
     </div>
     {showObjective && <div className="objective-panel">
       <div className="objective-version current">
@@ -211,12 +257,11 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
       </div>
     </div>
     <WebPanel task={task} compact />
-    {task.blockedService === "project" && <div className="thread-alert tone-warning" role="alert"><CircleAlert size={16} aria-hidden /><div className="thread-alert-body"><strong>项目目录已变化</strong><p>{task.pendingQuestion ?? "重新检查后可继续当前任务"}</p></div><div className="thread-alert-actions"><button className="link-button" disabled={rechecking} onClick={() => void (async () => {
-      setRechecking(true);
-      try { await api.recheckTaskProject(task.id); await syncSelected(task.id); notify("项目目录已重新检查，可以继续任务", "info"); }
-      catch (error) { notify(error instanceof Error ? error.message : String(error)); }
-      finally { setRechecking(false); }
-    })()}>{rechecking ? "检查中…" : "重新检查项目"}</button></div></div>}
+    {task.status === "needs-input" && <PauseAlert task={task} rechecking={rechecking} onRecheck={recheckProject} />}
+    {task.status === "stopped" && task.stop && <div className="thread-alert tone-info" role="status">
+      <Info size={16} aria-hidden />
+      <div className="thread-alert-body"><strong>已停止：{stopReasonLabel(task.stop.reason)}</strong>{task.stop.detail && <p>{task.stop.detail}</p>}</div>
+    </div>}
     {task.phase === "plan-review" && <div className="thread-alert tone-info" role="status"><Info size={16} aria-hidden /><div className="thread-alert-body"><strong>计划待审阅 · v{task.cognition?.revision ?? 0}</strong><p>{task.cognition?.summary ?? "尚无计划摘要"}</p><p>范围：{task.cognition?.scope?.join("；") || "未列出"}；约束：{task.cognition?.constraints?.join("；") || "未列出"}</p><ol aria-label="待审计划步骤">{steps.map(step => <li key={step.id}>{step.id} · {step.objective} · {step.mode}{step.dependsOn.length ? ` · 依赖 ${step.dependsOn.join("、")}` : ""}</li>)}</ol></div></div>}
     {!!proposals.length && <button className="thread-attention" onClick={() => openDetail({ kind: "info" })}>{proposals.length} 个 Skill 提案待决定 · 查看任务详情</button>}
     {task.lastFailure && task.status !== "complete" && !busy && <FailureAlert reason={task.lastFailure} />}

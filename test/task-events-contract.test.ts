@@ -82,12 +82,13 @@ test("criteria only change on a general task and inputs stop at acceptance", () 
 });
 
 test("confirming a project version stops a waiting task and clears its pause", () => {
-  const waiting = baseState({ projectId: "project-1", projectVersion: 1, status: "needs-input", pendingQuestion: "Project folders changed", blockedService: "project" });
+  const waiting = baseState({ projectId: "project-1", projectVersion: 1, status: "needs-input", pendingQuestion: "Project folders changed", pauseReason: "project-state" });
   const confirmed = apply(waiting, { type: "project-version/confirmed", payload: { version: 2 } });
   expect(confirmed.projectVersion).toBe(2);
   expect(confirmed.status).toBe("stopped");
   expect(confirmed.pendingQuestion).toBeUndefined();
-  expect(confirmed.blockedService).toBeUndefined();
+  expect(confirmed.pauseReason).toBeUndefined();
+  expect("pauseReason" in confirmed).toBe(false);
   expect(confirmed.reopenReason).toBe("Project folders rechecked; continue the task when ready");
   expect(confirmed.updatedAt).toBe(at);
 
@@ -121,11 +122,17 @@ test("guidance is recorded, delivered and processed once", () => {
 test("the goal snapshot replaces the previous continuation state", () => {
   const state = apply(baseState({ goal: { enabled: false, stopReason: "user-disabled" } }), {
     type: "goal/changed",
-    payload: { goal: { enabled: true, budget: { maxToolCalls: 40, wallTimeMs: 600_000, maxTotalToolCalls: 120, totalWallTimeMs: 1_800_000 }, noProgressRuns: 0, stopReason: undefined } },
+    payload: { goal: { enabled: true, budget: { maxToolCalls: 40, wallTimeMs: 600_000, maxTotalToolCalls: 120, totalWallTimeMs: 1_800_000 }, noProgressRuns: 0, stopReason: undefined, revision: 1 } },
   });
   expect(state.goal?.enabled).toBe(true);
   expect(state.goal?.budget?.maxToolCalls).toBe(40);
   expect(state.goal?.stopReason).toBeUndefined();
+  expect(state.goal?.revision).toBe(1);
   // setGoalProgress never checked the status, so a completed task may still record why it stopped.
-  expect(apply(baseState({ status: "complete" }), { type: "goal/changed", payload: { goal: { enabled: false, noProgressRuns: 3, stopReason: "no-progress" } } }).goal?.stopReason).toBe("no-progress");
+  expect(apply(baseState({ status: "complete" }), { type: "goal/changed", payload: { goal: { enabled: false, noProgressRuns: 3, stopReason: "no-progress", revision: 1 } } }).goal?.stopReason).toBe("no-progress");
+
+  // The reducer only accepts the revision that follows the stored one, so a replayed snapshot cannot overwrite it.
+  const replayed = baseState({ goal: { enabled: true, noProgressRuns: 1, revision: 2 } });
+  expect(codeOf(replayed, { type: "goal/changed", payload: { goal: { enabled: true, noProgressRuns: 9, stopReason: undefined, revision: 2 } } })).toBe("apply/goal-revision-not-next");
+  expect(replayed.goal).toEqual({ enabled: true, noProgressRuns: 1, revision: 2 });
 });

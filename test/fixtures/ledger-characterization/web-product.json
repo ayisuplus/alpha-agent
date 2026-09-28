@@ -103,6 +103,11 @@
           "after": 0
         },
         {
+          "path": "goal.revision",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
           "path": "updatedAt",
           "before": "<at:7>",
           "after": "<at:8>"
@@ -117,6 +122,11 @@
           "path": "goal.noProgressRuns",
           "before": 0,
           "after": 1
+        },
+        {
+          "path": "goal.revision",
+          "before": 1,
+          "after": 2
         },
         {
           "path": "updatedAt",
@@ -1845,7 +1855,7 @@
       "outcome": "ok",
       "changed": [
         {
-          "path": "blockedService",
+          "path": "pauseReason",
           "before": "<absent>",
           "after": "approval"
         },
@@ -1877,11 +1887,6 @@
       "outcome": "ok",
       "changed": [
         {
-          "path": "blockedService",
-          "before": "approval",
-          "after": "<absent>"
-        },
-        {
           "path": "guidanceHistory[1].instruction",
           "before": "<absent>",
           "after": "Approved; continue with the regression test"
@@ -1890,6 +1895,11 @@
           "path": "guidanceHistory[1].recordedAt",
           "before": "<absent>",
           "after": "<at:69>"
+        },
+        {
+          "path": "pauseReason",
+          "before": "approval",
+          "after": "<absent>"
         },
         {
           "path": "pendingQuestion",
@@ -1927,6 +1937,21 @@
           "path": "status",
           "before": "active",
           "after": "stopped"
+        },
+        {
+          "path": "stop.detail",
+          "before": "<absent>",
+          "after": "Browser verification stopped at step 3"
+        },
+        {
+          "path": "stop.reason",
+          "before": "<absent>",
+          "after": "error"
+        },
+        {
+          "path": "stop.stoppedAt",
+          "before": "<absent>",
+          "after": "<at:71>"
         },
         {
           "path": "updatedAt",
@@ -2036,6 +2061,21 @@
           "after": "active"
         },
         {
+          "path": "stop.detail",
+          "before": "Browser verification stopped at step 3",
+          "after": "<absent>"
+        },
+        {
+          "path": "stop.reason",
+          "before": "error",
+          "after": "<absent>"
+        },
+        {
+          "path": "stop.stoppedAt",
+          "before": "<at:71>",
+          "after": "<absent>"
+        },
+        {
           "path": "updatedAt",
           "before": "<at:71>",
           "after": "<at:73>"
@@ -2058,6 +2098,11 @@
           "after": false
         },
         {
+          "path": "goal.revision",
+          "before": 2,
+          "after": 3
+        },
+        {
           "path": "goal.stopReason",
           "before": "<absent>",
           "after": "user-disabled"
@@ -2077,6 +2122,11 @@
           "path": "goal.noProgressRuns",
           "before": 0,
           "after": 3
+        },
+        {
+          "path": "goal.revision",
+          "before": 3,
+          "after": 4
         },
         {
           "path": "goal.stopReason",
@@ -2305,7 +2355,8 @@
         "totalWallTimeMs": 1800000
       },
       "noProgressRuns": 3,
-      "stopReason": "no-progress"
+      "stopReason": "no-progress",
+      "revision": 4
     },
     "revision": "<rev:1>",
     "evidence": [

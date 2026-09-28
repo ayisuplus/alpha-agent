@@ -462,11 +462,18 @@ describe("worker-run/prepared", () => {
   });
 
   test("reactivates and clears the blocking context", () => {
-    const state = baseState({ status: "needs-input", pendingQuestion: "?", blockedService: "svc", workerOutcome: { status: "blocked", findings: ["f"] } });
+    const state = baseState({
+      status: "needs-input",
+      pendingQuestion: "?",
+      pauseReason: "worker-no-result",
+      stop: { reason: "no-progress", stoppedAt: "2026-09-28T00:30:00.000Z" },
+      workerOutcome: { status: "blocked", findings: ["f"] },
+    });
     apply(state, "worker-run/prepared", {});
     expect(state.status).toBe("active");
     expect("pendingQuestion" in state).toBe(false);
-    expect("blockedService" in state).toBe(false);
+    expect("pauseReason" in state).toBe(false);
+    expect("stop" in state).toBe(false);
     expect("workerOutcome" in state).toBe(false);
   });
 });

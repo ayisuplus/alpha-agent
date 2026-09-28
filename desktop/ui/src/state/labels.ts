@@ -1,4 +1,4 @@
-import type { Criterion, ExpertLine, GuidanceStatus, TaskSummary } from "../api/types";
+import type { Criterion, ExpertLine, GuidanceStatus, PauseAction, PauseReasonCode, StopReasonCode, TaskSummary } from "../api/types";
 
 export type Tone = "neutral" | "accent" | "success" | "warning" | "danger";
 
@@ -40,6 +40,56 @@ export function taskStatus(task: Pick<TaskSummary, "running" | "queued" | "statu
   if (task.phase === "plan-review") return { label: "计划待审", tone: "warning" };
   if (task.phase === "plan") return { label: "规划中", tone: "accent" };
   return { label: "待验收", tone: "warning" };
+}
+
+// The pause reason, resume action and stop codes of plan §4.4; the runtime module owns the codes, the workbench owns these names.
+const PAUSE_REASON_LABELS: Record<string, string> = {
+  approval: "等待批准",
+  question: "等待回答",
+  "worker-no-result": "子代理未交结果",
+  sandbox: "沙箱不可用",
+  model: "模型不可用",
+  "project-state": "项目状态异常",
+  capability: "能力缺失",
+  budget: "预算用尽",
+};
+
+export function pauseReasonLabel(code: PauseReasonCode): string {
+  return PAUSE_REASON_LABELS[code] ?? code;
+}
+
+const PAUSE_ACTION_LABELS: Record<string, string> = {
+  approve: "批准",
+  deny: "拒绝",
+  answer: "回答并继续",
+  redispatch: "重派子代理",
+  "review-directly": "主代理直接审阅",
+  "ignore-worker": "忽略该子代理",
+  "view-diagnostics": "查看诊断",
+  "change-permission-mode": "修改权限模式",
+  "change-model": "更换模型",
+  "recheck-project": "重新检查项目",
+  "install-capability": "安装能力",
+  "skip-capability": "跳过该能力",
+  "add-budget": "追加预算",
+};
+
+export function pauseActionLabel(action: PauseAction): string {
+  return PAUSE_ACTION_LABELS[action] ?? action;
+}
+
+const STOP_REASON_LABELS: Record<string, string> = {
+  user: "用户停止",
+  model: "模型无响应",
+  sandbox: "沙箱不可用",
+  budget: "预算用尽",
+  error: "运行出错",
+  "no-progress": "无实际进展",
+  reconciled: "重启后对账停止",
+};
+
+export function stopReasonLabel(code: StopReasonCode): string {
+  return STOP_REASON_LABELS[code] ?? code;
 }
 
 // The runtime writes criterion descriptions in English for the model; the workbench always shows these names.

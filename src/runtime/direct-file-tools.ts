@@ -6,6 +6,7 @@ import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
 import { resolveEditToolDescription } from "@oh-my-pi/pi-coding-agent/edit";
 import { applyPatchSchema, hashlineEditParamsSchema, patchEditSchema, replaceEditSchema, sloppyEditSchema } from "@oh-my-pi/pi-coding-agent/edit/schemas";
 import { editInspect } from "@oh-my-pi/pi-natives";
+import type { PauseReasonCode } from "./pause-reasons";
 import type { EditMode } from "./omp-settings";
 import { commandApprovalStore } from "./command-approval";
 import { ProjectStore } from "./projects";
@@ -27,7 +28,8 @@ export interface DirectFileContext {
   mode: PermissionMode;
   /** The session's edit format; the proxy exposes OMP's schema and description for it. Defaults to Hashline. */
   editMode?: EditMode;
-  onNeedsInput: (reason: string) => Promise<void>;
+  /** Reports why the task must wait for a person; the code decides the resume action the workbench offers. */
+  onNeedsInput: (reason: string, code?: PauseReasonCode) => Promise<void>;
 }
 
 function editSchema(mode: EditMode) {
@@ -117,7 +119,7 @@ export async function createDirectFileTools(context: DirectFileContext): Promise
       try { return await invoke(name, args as Record<string, unknown>, signal); }
       catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        if (error instanceof SandboxUnavailableError || reason.includes("Project mounts changed")) await context.onNeedsInput(reason);
+        if (error instanceof SandboxUnavailableError || reason.includes("Project mounts changed")) await context.onNeedsInput(reason, error instanceof SandboxUnavailableError ? "sandbox" : "project-state");
         return { content: [{ type: "text", text: reason }], isError: true };
       }
     },

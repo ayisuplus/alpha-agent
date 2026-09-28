@@ -53,6 +53,7 @@ import { projectContextFiles } from "./context-files";
 import { ompAgentId, ompSessionSettings, sessionEditMode } from "./omp-settings";
 import { alphaContract, cognitionSnapshot, isCodeWork, sessionToolNames, taskPrompt, type SessionFacts, type SessionRole } from "./session-profile";
 import type { BrowserSession } from "./visible-browser";
+import type { PauseReasonCode } from "./pause-reasons";
 
 export interface RunOptions {
   projectRoot: string;
@@ -177,9 +178,9 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   const profile = taskProfile(ledger.state.taskType);
   let needsInputReason: string | null = null;
   let abortSessionForInput: (() => void) | null = null;
-  const pauseForInput = async (question: string, service: string) => {
+  const pauseForInput = async (question: string, reason: PauseReasonCode) => {
     // A follow-up answer never changes the task; an approval it would need just ends the answer.
-    if (ledger.state.status === "active" && !answering) await ledger.needInput(question, service);
+    if (ledger.state.status === "active" && !answering) await ledger.needInput(question, reason);
     needsInputReason = question;
     options.onNeedsInput?.(question);
     abortSessionForInput?.();
@@ -199,7 +200,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   const remainingTime = (options.totalWallTimeMs ?? 7_200_000) - used.elapsedMs;
   if (!options.workOrder && !answering && (remainingCalls <= 0 || remainingTime < 1_000)) {
     await ledger.recordFailure("Task-wide model budget exhausted; increase the task budget before resuming");
-    await ledger.stop();
+    await ledger.stop("budget", "Task-wide model budget exhausted");
     throw new Error("Task-wide model budget exhausted");
   }
   const maxToolCalls = answering ? options.maxToolCalls ?? 120 : Math.min(options.maxToolCalls ?? 120, remainingCalls);
@@ -253,21 +254,21 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   const bridge = process.env.ALPHA_BROWSER_BRIDGE_PORT && process.env.ALPHA_BROWSER_BRIDGE_TOKEN ? new BrowserBridge() : null;
   const webKernel = options.webKernel ?? new BrowserKernel(Number(process.env.ALPHA_CDP_PORT) || null, bridge);
   const retrieval = new WebRetrieval(authorizationRoot, async (provider: WebProvider) => process.env[provider === "tavily" ? "TAVILY_API_KEY" : "FIRECRAWL_API_KEY"] ?? await bridge?.key(provider) ?? null);
-  const webContext: WebToolContext = { taskId: authorizationTaskId || ledger.state.id, projectRoot, retrieval, permissions: new WebPermissionStore(authorizationRoot), kernel: webKernel, directMode: permission?.mode, onNeedsInput: reason => pauseForInput(reason, "web-approval") };
+  const webContext: WebToolContext = { taskId: authorizationTaskId || ledger.state.id, projectRoot, retrieval, permissions: new WebPermissionStore(authorizationRoot), kernel: webKernel, directMode: permission?.mode, onNeedsInput: reason => pauseForInput(reason, "approval") };
   if (!options.workOrder?.fullAccess && !answering) await webContext.permissions.reconcile(ledger.state.id);
   if (permission) {
     try { await verifySandbox({ cwd: projectRoot, roots: permission.roots, dataRoot: authorizationRoot, network: permission.mode === "full", signal: options.signal }); }
     catch (error) {
       if (options.signal?.aborted) throw error;
       const reason = `Windows sandbox is unavailable: ${error instanceof Error ? error.message : String(error)}`;
-      await ledger.needInput(reason, "windows-sandbox");
+      await ledger.needInput(reason, "sandbox");
       throw new NeedsInputError(reason);
     }
   }
   const role: SessionRole = options.workOrder ? "worker" : reviewing ? "reviewer" : answering ? "answer" : planning ? "planner" : "coordinator";
   const settings = await ompSessionSettings(projectRoot, join(dataRoot, "omp"), { pinHashline: isCodeWork(ledger.state.taskType) });
   const directFileTools = !reviewing && permission && ledger.state.projectId
-    ? await createDirectFileTools({ taskId: ledger.state.id, projectId: ledger.state.projectId, projectVersion: ledger.state.projectVersion ?? 0, projectRoot, dataRoot, mode: permission.mode, editMode: sessionEditMode(settings, selector), onNeedsInput: reason => pauseForInput(reason, "approval") })
+    ? await createDirectFileTools({ taskId: ledger.state.id, projectId: ledger.state.projectId, projectVersion: ledger.state.projectVersion ?? 0, projectRoot, dataRoot, mode: permission.mode, editMode: sessionEditMode(settings, selector), onNeedsInput: (reason, code) => pauseForInput(reason, code ?? "approval") })
     : [];
 
   const allPlugins = (options.workOrder && !options.workOrder.fullAccess) || reviewing || planning || answering
@@ -280,22 +281,22 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   try { if (!options.workOrder && !direct && !reviewing && !planning && !answering && profile.thirdParty) mcp = await pluginStore.loadMCP(projectRoot, ledger.state.capabilities?.plugins.map(item => item.id)); }
   catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    await ledger.needInput(`已指定的 MCP 工具无法加载：${reason}。请修复服务或说明如何继续。`, "MCP");
+    await ledger.needInput(`已指定的 MCP 工具无法加载：${reason}。请修复服务或说明如何继续。`, "approval");
     throw new NeedsInputError(reason);
   }
   if (mcp?.errors.length) {
     const reason = mcp.errors.join("; ");
     await mcp.manager.disconnectAll();
-    await ledger.needInput(`已指定的 MCP 服务不可用：${reason}。请修复服务或说明如何继续。`, "MCP");
+    await ledger.needInput(`已指定的 MCP 服务不可用：${reason}。请修复服务或说明如何继续。`, "approval");
     throw new NeedsInputError(reason);
   }
-  const mcpTools = [...guardMCPTools(mcp?.tools ?? [], new MCPPermissionStore(authorizationRoot), authorizationTaskId || ledger.state.id, question => pauseForInput(question, "MCP")), ...(options.mcpProxyTools ?? [])];
+  const mcpTools = [...guardMCPTools(mcp?.tools ?? [], new MCPPermissionStore(authorizationRoot), authorizationTaskId || ledger.state.id, question => pauseForInput(question, "approval")), ...(options.mcpProxyTools ?? [])];
   const reservedToolNames = ["read", "grep", "edit", "write", "alpha_build", "alpha_check", "alpha_command", "alpha_source", "alpha_search", "alpha_crawl", "alpha_site", "alpha_document", "alpha_spawn", "alpha_browser", ...plugins.tools.map(tool => tool.name)];
   if (mcpTools.some(tool => reservedToolNames.includes(tool.name))) {
     await mcp?.manager.disconnectAll();
     const error = new Error("MCP 工具与 Alpha 内置工具重名");
     await ledger.recordFailure(error.message);
-    await ledger.stop();
+    await ledger.stop("error", error.message);
     throw error;
   }
 
@@ -309,15 +310,15 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   const toolNames = sessionToolNames(facts);
   function sessionCustomTools(): CustomTool[] {
     const checks = ledger.state.workspaceOrigin?.checks ?? [];
-    const webTools = () => [createSearchTool(webContext), createCrawlTool(webContext), createSiteTool(webContext), createResearchSourceTool(authorizationRoot, authorizationTaskId || ledger.state.id, reason => pauseForInput(reason, "web-source"), { retrieval, kernel: webKernel, authorizeRead: scope => webRead(webContext, scope) })];
+    const webTools = () => [createSearchTool(webContext), createCrawlTool(webContext), createSiteTool(webContext), createResearchSourceTool(authorizationRoot, authorizationTaskId || ledger.state.id, reason => pauseForInput(reason, "approval"), { retrieval, kernel: webKernel, authorizeRead: scope => webRead(webContext, scope) })];
     const commandTool = () => createCommandTool(commandApprovalStore(authorizationRoot), authorizationTaskId || ledger.state.id, projectRoot, permission,
       permission?.mode === "auto" ? independentCommandReviewer(authorizationRoot, selector) : undefined,
-      reason => pauseForInput(reason, "approval"));
+      (reason, code) => pauseForInput(reason, code ?? "approval"));
     const coordinatorBrowser = (readOnly: boolean) => createBrowserTool(() => options.browserAccess?.() === false || options.getWorkerSupervisor && !options.getWorkerSupervisor().claimBrowser("coordinator") ? null : options.browser ?? null, dataRoot, options.browserUrl, webContext, readOnly);
     const skillReader = () => createSkillResourceTool(skills, async id => (await resolvePoolSkill(dataRoot, id)).skill);
     const attachments = () => profile.attachments ? [createTaskInputTool(ledger)] : [];
     const delivery: Record<DeliveryTool, () => CustomTool> = {
-      alpha_check: () => createCodeCheckTool(projectRoot, dataRoot, ledger.state.id, checks, permission, reason => pauseForInput(reason, "windows-sandbox")),
+      alpha_check: () => createCodeCheckTool(projectRoot, dataRoot, ledger.state.id, checks, permission, reason => pauseForInput(reason, "sandbox")),
       alpha_document: () => createDocumentTool(projectRoot, dataRoot, ledger.state.id),
       alpha_build: () => createBuildTool(projectRoot),
     };
@@ -356,7 +357,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
           ...common, ...attachments(), ...profile.deliveryTools(!!direct).map(name => delivery[name]()), ...webTools(),
           ...(profile.commands ? [commandTool()] : []),
           ...(profile.dispatch && options.getWorkerSupervisor ? createAsyncWorkTools(options.getWorkerSupervisor, ledger, dataRoot, agentPresets, skills) : []),
-          createCapabilitySearchTool(dataRoot), createCapabilityMCPTool(dataRoot, projectRoot, ledger.state.id, reason => pauseForInput(reason, "MCP")), ...createCognitionTools(ledger, dataRoot), ...createExpertTools(expertStore, pluginStore),
+          createCapabilitySearchTool(dataRoot), createCapabilityMCPTool(dataRoot, projectRoot, ledger.state.id, reason => pauseForInput(reason, "approval")), ...createCognitionTools(ledger, dataRoot), ...createExpertTools(expertStore, pluginStore),
           skillReader(),
           ...plugins.tools,
           ...mcpTools,
@@ -403,7 +404,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     await mcp?.manager.disconnectAll();
     if (!answering) {
       await ledger.recordFailure(error instanceof Error ? error.message : String(error));
-      await ledger.stop();
+      await ledger.stop("error");
     }
     throw error;
   }
@@ -419,7 +420,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     await mcp?.manager.disconnectAll();
     if (!answering) {
       await ledger.recordFailure(error instanceof Error ? error.message : String(error));
-      await ledger.stop();
+      await ledger.stop("error");
     }
     throw error;
   }
@@ -542,7 +543,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     if (options.signal?.aborted) {
       outcome = "cancelled";
       failureReason = options.signal.reason instanceof Error ? options.signal.reason.message : "Task cancelled";
-      await ledger.stop();
+      await ledger.stop("user", failureReason);
     } else await ledger.clearFailure();
     return ledger;
   } catch (error) {
@@ -570,7 +571,8 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     if (ledger.state.status === "active") {
       await ledger.refreshRevision();
       await ledger.recordFailure(failureReason);
-      await ledger.stop();
+      // `recordFailure` already stored the text; the code says what kind of failure ended the run.
+      await ledger.stop(budgetReason ? "budget" : stalledReason ? "model" : "error");
     }
     throw stalledReason ? new Error(stalledReason) : budgetReason ? new Error(budgetReason) : error;
   } finally {

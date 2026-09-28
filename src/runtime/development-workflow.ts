@@ -18,6 +18,9 @@ function currentReviewPassed(ledger: TaskLedger): boolean {
   return review?.verdict === "pass" && review.revision === ledger.state.revision && review.contractVersion === (ledger.state.contractVersion ?? 1);
 }
 
+/** A review that returns nothing is usually a budget or model failure; retry the independent review this many times. */
+const REVIEW_RETRIES = 1;
+
 /** Persist only a final review that the coordinator already inspected and integrated. */
 export async function recordIntegratedFinalReview(ledger: TaskLedger, dataRoot: string, projectRoot: string, instanceId?: string): Promise<boolean> {
   if (ledger.state.status !== "active") return false;
@@ -85,7 +88,7 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
       const outstanding = (ledger.state.cognition?.instances ?? []).filter(item => item.order && ["queued", "running", "returned"].includes(item.status)).map(item => item.id);
       if (supervisor.running && !supervisor.needsIntegration && !supervisor.hasMessages) { await supervisor.wait(outstanding, 60_000); continue; }
       if (followups++ >= 3) {
-        await ledger.needInput("子实例结果或消息仍待主代理处理，请检查实例记录和消息箱后继续。", "worker-integration");
+        await ledger.needInput("子实例结果或消息仍待主代理处理，请检查实例记录和消息箱后继续。", "worker-no-result");
         break;
       }
       currentToolCalls = 0;
@@ -106,6 +109,7 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
   if (ledger.state.status !== "active" || options.signal?.aborted) return ledger;
   await recordIntegratedFinalReview(ledger, options.dataRoot, options.projectRoot);
   let comparison = before;
+  let reviewRetries = 0;
   while (!currentReviewPassed(ledger)) {
     const after = await snapshotSource(options.projectRoot);
     const changes = sourceChanges(comparison, after);
@@ -130,15 +134,25 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
     try { await supervisor.spawn([reviewOrder]); }
     catch (error) {
       if (error instanceof Error && error.message.startsWith("Parallel workers require")) {
-        await ledger.needInput("当前项目需要 Git 仓库根目录和至少一次提交，才能启动独立 worktree 审查。", "git-worktree");
+        await ledger.needInput("当前项目需要 Git 仓库根目录和至少一次提交，才能启动独立 worktree 审查。", "capability");
         return ledger;
       }
       throw error;
     }
     while (["queued", "running"].includes(ledger.state.cognition?.instances?.find(item => item.id === instanceId)?.status ?? "") && ledger.state.status === "active" && !options.signal?.aborted) await supervisor.wait([instanceId], 60_000, false);
     if (ledger.state.status !== "active" || options.signal?.aborted) return ledger;
-    if (ledger.state.cognition?.instances?.find(item => item.id === instanceId)?.status !== "returned") {
-      await ledger.needInput("独立审查子实例未返回可检查结果，请检查实例记录。", "worker-review");
+    const reviewStatus = ledger.state.cognition?.instances?.find(item => item.id === instanceId)?.status;
+    if (reviewStatus !== "returned") {
+      // No result is the worker's failure, not a reason to stop the task (plan §4.4): retry the independent review
+      // first, and only pause when a retry cannot help. The primary agent must not review its own work, so it cannot
+      // simply take over the verdict.
+      if (reviewStatus === "queued" || reviewStatus === "running") await ledger.updateWorker(instanceId, "failed", { findings: ["Independent review returned no result"] });
+      if (reviewRetries++ < REVIEW_RETRIES) {
+        options.onEvent?.({ type: "status", value: `审查子实例未返回结果，重试独立审查 · 第 ${reviewRetries} 次` });
+        comparison = after;
+        continue;
+      }
+      await ledger.needInput("独立审查连续未返回可检查结果，请检查实例记录后决定重派、直接审阅或忽略该子代理。", "worker-no-result");
       return ledger;
     }
     currentToolCalls = 0;
@@ -150,7 +164,7 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
     if (ledger.state.revision !== reviewedRevision || (ledger.state.contractVersion ?? 1) !== reviewedContract) { comparison = after; continue; }
     try {
       if (!await recordIntegratedFinalReview(ledger, options.dataRoot, options.projectRoot, instanceId)) {
-        if (ledger.state.status === "active") await ledger.needInput("独立审查结果仍待主代理检查和处理。", "worker-review");
+        if (ledger.state.status === "active") await ledger.needInput("独立审查结果仍待主代理检查和处理。", "worker-no-result");
         return ledger;
       }
     } catch (error) {
@@ -165,21 +179,8 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
     options.onEvent?.({ type: "status", value: `按审查意见修复 · 第 ${ledger.state.development?.repairAttempts} 轮` });
     comparison = after;
     const implementer = ledger.state.cognition?.agents?.findLast(agent => agent.mode === "implement" && agent.status === "completed");
-    if (implementer) {
-      const repairRunId = await supervisor.continue(implementer.id, `Fix independent review findings: ${review.findings.join(" | ")}`, "implement");
-      while (["queued", "running"].includes(ledger.state.cognition?.instances?.find(item => item.id === repairRunId)?.status ?? "") && ledger.state.status === "active" && !options.signal?.aborted) await supervisor.wait([repairRunId], 60_000, false);
-      if (ledger.state.cognition?.instances?.find(item => item.id === repairRunId)?.status !== "returned") {
-        await ledger.needInput("原实施子代理未返回可检查的修复结果，请检查消息和实例记录。", "review-repair");
-        return ledger;
-      }
-      currentToolCalls = 0;
-      currentRunStartedAt = Date.now();
-      ledger = await runCoordinator({ ...workerOptions, existingLedger: ledger, objective: `Inspect repair run ${repairRunId} with alpha_inspect and integrate its changes with alpha_integrate only if they address these findings: ${review.findings.join(" | ")}. Handle alpha_inbox first.`, onLedger: undefined });
-      if (ledger.state.cognition?.instances?.find(item => item.id === repairRunId)?.status !== "completed") {
-        await ledger.needInput("审查修复尚未由主代理集成。", "review-repair");
-        return ledger;
-      }
-    } else {
+    // The primary agent repairs directly when there is no implementer to continue, or when one returned nothing.
+    const repairDirectly = async (): Promise<void> => {
       const repairId = randomUUID();
       await ledger.recordDispatch({ id: repairId, orderId: "review-repair", mode: "implement", skills: [] });
       try {
@@ -188,6 +189,29 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
       } catch (error) {
         await ledger.finishDispatch(repairId, options.signal?.aborted ? "cancelled" : "failed", [error instanceof Error ? error.message : String(error)]);
         throw error;
+      }
+    };
+    if (!implementer) {
+      await repairDirectly();
+    } else {
+      const repairRunId = await supervisor.continue(implementer.id, `Fix independent review findings: ${review.findings.join(" | ")}`, "implement");
+      while (["queued", "running"].includes(ledger.state.cognition?.instances?.find(item => item.id === repairRunId)?.status ?? "") && ledger.state.status === "active" && !options.signal?.aborted) await supervisor.wait([repairRunId], 60_000, false);
+      const repairStatus = ledger.state.cognition?.instances?.find(item => item.id === repairRunId)?.status;
+      if (repairStatus !== "returned") {
+        // A repair that returned nothing does not stop the task: cancel the attempt and repair in the primary agent.
+        if (repairStatus === "queued" || repairStatus === "running") await ledger.updateWorker(repairRunId, "cancelled", { findings: ["Repair attempt returned no result"] });
+        options.onEvent?.({ type: "status", value: "修复子实例未返回结果，主代理直接修复" });
+        currentToolCalls = 0;
+        currentRunStartedAt = Date.now();
+        await repairDirectly();
+      } else {
+        currentToolCalls = 0;
+        currentRunStartedAt = Date.now();
+        ledger = await runCoordinator({ ...workerOptions, existingLedger: ledger, objective: `Inspect repair run ${repairRunId} with alpha_inspect and integrate its changes with alpha_integrate only if they address these findings: ${review.findings.join(" | ")}. Handle alpha_inbox first.`, onLedger: undefined });
+        if (ledger.state.cognition?.instances?.find(item => item.id === repairRunId)?.status !== "completed") {
+          await ledger.needInput("审查修复尚未由主代理集成。", "worker-no-result");
+          return ledger;
+        }
       }
     }
     if (ledger.state.status !== "active" || ledger.state.phase === "plan-review" || options.signal?.aborted || ledger.state.revision === oldRevision) return ledger;

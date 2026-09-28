@@ -1,3 +1,5 @@
+import { reasonFromLegacyService } from "../../pause-reasons";
+import type { TaskState } from "../../task-ledger";
 import { InvariantError } from "../errors";
 import { replaceState } from "../state";
 import type { FamilyReducers } from "../types";
@@ -6,7 +8,16 @@ import type { FamilyReducers } from "../types";
 
 export const contractReducers: FamilyReducers = {
   "task/created": (state, event) => replaceState(state, event.payload.state),
-  "task/imported": (state, event) => replaceState(state, event.payload.state),
+  "task/imported": (state, event) => {
+    replaceState(state, event.payload.state);
+    // Ledgers from before reason codes carried a free-text service name; the event payload keeps the original value.
+    const legacy = state as { blockedService?: string };
+    if (legacy.blockedService !== undefined) {
+      const reason = reasonFromLegacyService(legacy.blockedService);
+      delete legacy.blockedService;
+      if (reason) state.pauseReason = reason;
+    }
+  },
 
   "contract/revised": (state, event) => {
     const { objective, contractVersion, historyEntry, reopenReason } = event.payload;
@@ -21,6 +32,10 @@ export const contractReducers: FamilyReducers = {
     state.status = "active";
     state.reopenReason = reopenReason;
     state.lastFailure = undefined;
+    // Revising the objective resumes the task, so the pause it was waiting on no longer applies.
+    delete state.pendingQuestion;
+    delete state.pauseReason;
+    delete state.stop;
     if (state.goal) { state.goal.stopReason = undefined; state.goal.noProgressRuns = 0; }
   },
 
@@ -48,7 +63,8 @@ export const contractReducers: FamilyReducers = {
     state.projectVersion = version;
     state.status = "stopped";
     delete state.pendingQuestion;
-    delete state.blockedService;
+    delete state.pauseReason;
+    delete state.stop;
     state.reopenReason = "Project folders rechecked; continue the task when ready";
   },
 
@@ -72,5 +88,9 @@ export const contractReducers: FamilyReducers = {
   },
 
   // No status guard here: `setGoal` rejects a completed task in the ledger method, `setGoalProgress` never did.
-  "goal/changed": (state, event) => { state.goal = event.payload.goal; },
+  "goal/changed": (state, event) => {
+    const expected = (state.goal?.revision ?? 0) + 1;
+    if (event.payload.goal.revision !== expected) throw new InvariantError("apply/goal-revision-not-next", `Goal revision ${event.payload.goal.revision} does not follow ${state.goal?.revision ?? 0}`);
+    state.goal = event.payload.goal;
+  },
 };

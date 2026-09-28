@@ -1,6 +1,8 @@
+import { readFile } from "node:fs/promises";
 import type { TaskState } from "../task-ledger";
 import { applyEvent } from "./apply";
 import { InvariantError } from "./errors";
+import { latestSnapshot, readEvents, taskLogDir } from "./log";
 import { assertPhaseTransition, assertStatusTransition } from "./transitions";
 import type { TaskEvent } from "./types";
 
@@ -46,4 +48,26 @@ export function foldTask(events: readonly TaskEvent[], options: FoldOptions = {}
   }
   if (!options.base && expectedSeq === 0) throw new InvariantError("fold/empty-log", "A task event log needs an origin event");
   return state;
+}
+
+export interface TaskLogView { state: TaskState; seq: number }
+
+/** Folds a task's log without writing anything; `null` when the task has no log yet. */
+export async function readTaskLog(dir: string): Promise<TaskLogView | null> {
+  const snapshot = await latestSnapshot(dir);
+  const events = await readEvents(dir, snapshot?.offset ?? 0);
+  if (!snapshot && !events.length) return null;
+  const state = foldTask(events, snapshot ? { base: { seq: snapshot.seq, state: snapshot.state } } : {});
+  return { state, seq: events.length ? events[events.length - 1].seq : snapshot?.seq ?? 0 };
+}
+
+/**
+ * Read-only view of a task state: the folded log when it exists, otherwise the legacy JSON normalized exactly the way
+ * an import would normalize it. Diagnostics use this so they report the state a writer would see, without writing.
+ */
+export async function readTaskState(file: string): Promise<TaskState> {
+  const logged = await readTaskLog(taskLogDir(file));
+  if (logged) return logged.state;
+  const state = JSON.parse(await readFile(file, "utf8")) as TaskState;
+  return foldTask([{ seq: 1, at: state.updatedAt, actor: "runtime", type: "task/imported", payload: { state, source: "legacy-json" } }]);
 }

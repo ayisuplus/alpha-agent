@@ -41,7 +41,10 @@ test("every mutation appends an event and the fold reproduces the projection byt
     await ledger.recordFailure("Browser verification stopped at step 3");
     await ledger.recordRun({ model: "test/model", toolCalls: 3, maxToolCalls: 40, wallTimeMs: 1000, elapsedMs: 500, outcome: "returned" });
     await ledger.needInput("Approve `bun test`?", "approval");
+    expect(ledger.state.status).toBe("needs-input");
+    expect(ledger.state.pauseReason).toBe("approval");
     await ledger.resume("Approved");
+    expect("pauseReason" in ledger.state).toBe(false);
 
     const events = await readEvents(taskLogDir(ledger.file));
     expect(events.map(event => event.type)).toEqual([
@@ -49,7 +52,7 @@ test("every mutation appends an event and the fold reproduces the projection byt
     ]);
     expect(events.map(event => event.seq)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(events.every(event => event.actor === "runtime")).toBe(true);
-    expect(events[4].payload).toMatchObject({ status: "needs-input", question: "Approve `bun test`?", service: "approval" });
+    expect(events[4].payload).toMatchObject({ status: "needs-input", question: "Approve `bun test`?", reason: "approval" });
 
     const folded = JSON.stringify(foldTask(events), null, 2);
     expect(folded).toBe(await readFile(ledger.file, "utf8"));
@@ -202,10 +205,12 @@ test("the transition table rejects changes no event may cause", async () => {
     // Only an approved plan may start execution, so a hand-written phase event is refused by the table.
     expect(codeOf(() => foldTask([...events, toPlan, { ...toPlan, seq: 3, payload: { phase: "execute" as const, clearPause: false } }]))).toBe("transition/phase-not-allowed");
 
-    const stopped = { seq: 2, at, actor: "runtime" as const, type: "status/changed" as const, payload: { status: "stopped" as const } };
-    expect(foldTask([...events, stopped]).status).toBe("stopped");
+    const stopped = { seq: 2, at, actor: "runtime" as const, type: "status/changed" as const, payload: { status: "stopped" as const, reason: "no-progress" as const, detail: "three runs added no evidence" } };
+    const stoppedState = foldTask([...events, stopped]);
+    expect(stoppedState.status).toBe("stopped");
+    expect(stoppedState.stop).toEqual({ reason: "no-progress", detail: "three runs added no evidence", stoppedAt: at });
     // A stopped task cannot pause: the reducer's own guard fires before the table is consulted.
-    expect(codeOf(() => foldTask([...events, stopped, { ...stopped, seq: 3, payload: { status: "needs-input" as const, question: "Approve?", service: "approval" } }]))).toBe("apply/task-not-active");
+    expect(codeOf(() => foldTask([...events, stopped, { ...stopped, seq: 3, payload: { status: "needs-input" as const, question: "Approve?", reason: "approval" as const } }]))).toBe("apply/task-not-active");
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }

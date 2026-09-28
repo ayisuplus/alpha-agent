@@ -4,4 +4,4 @@ export * from "./state";
 export * from "./log";
 export * from "./transitions";
 export { applyEvent, registeredEventTypes } from "./apply";
-export { foldTask, type FoldBase, type FoldOptions } from "./fold";
+export { foldTask, readTaskLog, readTaskState, type FoldBase, type FoldOptions, type TaskLogView } from "./fold";

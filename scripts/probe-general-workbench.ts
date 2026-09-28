@@ -30,7 +30,7 @@ const sent = await send.execute("probe-message", { kind: "information", body: "�
 if (sent.isError) throw new Error("Cannot create neutral-agent message fixture");
 await new AgentMailbox(dataRoot, waiting).collect();
 await waiting.recordCheckpointFailure("项目状态恢复待审阅：保留现有改动");
-await waiting.needInput("请补充目标", "context");
+await waiting.needInput("请补充目标", "question");
 
 const planRoot = join(productsRoot, "plan");
 await mkdir(planRoot);

@@ -7,10 +7,11 @@ import { excludedSourceDirectory } from "./source-review";
 import { computeCompletionGaps } from "./task-completion";
 import { checkTaskInvariants } from "./task-invariants";
 import {
-  SNAPSHOT_INTERVAL, appendEvent, applyEvent, eventLogPath, foldTask, latestSnapshot, readEvents, replaceState,
-  taskLogDir, writeSnapshot, EventConflictError,
+  SNAPSHOT_INTERVAL, appendEvent, applyEvent, eventLogPath, foldTask, latestSnapshot, readEvents, readTaskLog,
+  replaceState, taskLogDir, writeSnapshot, EventConflictError,
 } from "./task-events";
 import type { TaskActor, TaskEvent, TaskEventPlan } from "./task-events";
+import type { PauseReasonCode, StopReasonCode } from "./pause-reasons";
 
 export type EvidenceKind = "build" | "test" | "browser" | "asset" | "preview" | "source" | "artifact";
 export type TaskType = "web-product" | "code-change" | "research" | "file-work" | "general";
@@ -19,6 +20,12 @@ export type TaskType = "web-product" | "code-change" | "research" | "file-work" 
 export type PermissionMode = "ask" | "auto" | "full";
 export type TaskPhase = "plan" | "plan-review" | "execute";
 export interface GoalBudget { maxToolCalls: number; wallTimeMs: number; maxTotalToolCalls: number; totalWallTimeMs: number }
+
+/** Why a continuation goal gave up; `needs-input:<code>` names the pause reason it stopped on. */
+export type GoalStopReason =
+  | "accepted" | "user-disabled" | "no-progress" | "cancelled" | "user-control" | "plan-review"
+  | "planning-incomplete" | "budget-exhausted" | "stopped" | "hard-error" | "needs-input"
+  | `needs-input:${PauseReasonCode}`;
 
 export interface WorkspaceOrigin {
   kind: "generated" | "git" | "copy" | "direct";
@@ -185,9 +192,12 @@ export interface TaskState {
   status: "active" | "stopped" | "complete" | "needs-input";
   phase?: TaskPhase;
   planApproval?: { contractVersion: number; cognitionRevision: number; sourceRevision: string; approvedAt: string };
-  goal?: { enabled: boolean; budget?: GoalBudget; noProgressRuns?: number; stopReason?: string };
+  goal?: { enabled: boolean; budget?: GoalBudget; noProgressRuns?: number; stopReason?: GoalStopReason; revision?: number };
   pendingQuestion?: string;
-  blockedService?: string;
+  /** Why a `needs-input` task waits; the workbench derives its resume buttons from this code (plan §4.4). */
+  pauseReason?: PauseReasonCode;
+  /** Why a `stopped` task stopped, instead of reading the cause back out of `lastFailure`. */
+  stop?: { reason: StopReasonCode; detail?: string; stoppedAt: string };
   revision: string | null;
   evidence: Evidence[];
   runs?: RunRecord[];
@@ -341,27 +351,22 @@ export class TaskLedger {
   /** Folds the task's event log. A ledger that predates the log is imported once, without rewriting the JSON file. */
   static async load(file: string): Promise<TaskLedger> {
     const path = resolve(file);
-    const logDir = taskLogDir(path);
-    const snapshot = await latestSnapshot(logDir);
-    const events = await readEvents(logDir, snapshot?.offset ?? 0);
-    if (!snapshot && !events.length) return TaskLedger.importLegacy(path);
-    const state = foldTask(events, snapshot ? { base: { seq: snapshot.seq, state: snapshot.state } } : {});
-    return new TaskLedger(path, state, events.length ? events[events.length - 1].seq : snapshot?.seq ?? 0);
+    const logged = await readTaskLog(taskLogDir(path));
+    if (!logged) return TaskLedger.importLegacy(path);
+    return new TaskLedger(path, logged.state, logged.seq);
   }
 
   private static async importLegacy(path: string): Promise<TaskLedger> {
     const contents = await readFile(path, "utf8");
-    const state = JSON.parse(contents) as TaskState;
-    const ledger = new TaskLedger(path, state, 0);
     await copyFile(path, `${path}.pre-events.bak`, constants.COPYFILE_EXCL).catch(error => {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     });
-    const event = await appendEvent(ledger.logDir, {
+    const event = await appendEvent(taskLogDir(path), {
       at: new Date().toISOString(), actor: "runtime", type: "task/imported",
       payload: { state: JSON.parse(contents) as TaskState, source: "legacy-json" },
     }, 0);
-    ledger.seq = event.seq;
-    return ledger;
+    // Folding the origin event normalizes pre-code fields, so the in-memory state always equals the log.
+    return new TaskLedger(path, foldTask([event]), event.seq);
   }
 
   /** Last sequence number the log holds; appends are compare-and-swap against it. */
@@ -413,13 +418,19 @@ export class TaskLedger {
   async setGoal(enabled: boolean, budget?: GoalBudget): Promise<void> {
     await this.commit(() => {
       if (this.state.status === "complete") throw new Error("Completed task cannot change continuation");
-      const goal = { ...this.state.goal, enabled, ...(enabled && !this.state.goal?.budget && budget ? { budget } : {}), noProgressRuns: 0, stopReason: enabled ? undefined : "user-disabled" };
+      const goal: NonNullable<TaskState["goal"]> & { revision: number } = {
+        ...this.state.goal, enabled, ...(enabled && !this.state.goal?.budget && budget ? { budget } : {}),
+        noProgressRuns: 0, stopReason: enabled ? undefined : "user-disabled", revision: (this.state.goal?.revision ?? 0) + 1,
+      };
       return { type: "goal/changed", payload: { goal } };
     });
   }
 
-  async setGoalProgress(noProgressRuns: number, stopReason?: string): Promise<void> {
-    await this.commit(() => ({ type: "goal/changed", payload: { goal: { ...this.state.goal, enabled: this.state.goal?.enabled ?? false, noProgressRuns, stopReason } } }));
+  async setGoalProgress(noProgressRuns: number, stopReason?: GoalStopReason): Promise<void> {
+    await this.commit(() => ({
+      type: "goal/changed",
+      payload: { goal: { ...this.state.goal, enabled: this.state.goal?.enabled ?? false, noProgressRuns, stopReason, revision: (this.state.goal?.revision ?? 0) + 1 } },
+    }));
   }
 
   async enterPlan(): Promise<void> {
@@ -671,12 +682,12 @@ export class TaskLedger {
     await this.commit(() => ({ type: "run/ended", payload: { run: { ...input, contractVersion: this.state.contractVersion ?? 1, recordedAt: new Date().toISOString() } } }));
   }
 
-  async stop(): Promise<void> {
-    await this.commit(() => ({ type: "status/changed", payload: { status: "stopped" } }));
+  async stop(reason: StopReasonCode, detail?: string): Promise<void> {
+    await this.commit(() => ({ type: "status/changed", payload: { status: "stopped", reason, ...(detail ? { detail } : {}) } }));
   }
 
-  async needInput(question: string, service?: string): Promise<void> {
-    await this.commit(() => ({ type: "status/changed", payload: { status: "needs-input", question, ...(service ? { service } : {}) } }));
+  async needInput(question: string, reason?: PauseReasonCode): Promise<void> {
+    await this.commit(() => ({ type: "status/changed", payload: { status: "needs-input", question, ...(reason ? { reason } : {}) } }));
   }
 
   private assertActive(): void {

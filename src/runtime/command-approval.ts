@@ -7,6 +7,7 @@ import { buildChildEnv } from "./child-env";
 import { fingerprintSource } from "./task-ledger";
 import { runFullAccessCommand, runSandboxCommand, SandboxUnavailableError } from "./sandbox-exec";
 import type { PermissionMode } from "./task-ledger";
+import type { PauseReasonCode } from "./pause-reasons";
 
 export interface CommandRequest {
   id: string;
@@ -227,7 +228,7 @@ export function commandApprovalStore(dataRoot: string): CommandApprovalStore {
   return store;
 }
 
-export function createCommandTool(store: CommandApprovalStore, taskId: string, cwd: string, permission?: { mode: PermissionMode; roots: string[] }, reviewer?: IndependentReview, onNeedsInput?: (reason: string) => Promise<void>): CustomTool<typeof parameters> {
+export function createCommandTool(store: CommandApprovalStore, taskId: string, cwd: string, permission?: { mode: PermissionMode; roots: string[] }, reviewer?: IndependentReview, onNeedsInput?: (reason: string, code?: PauseReasonCode) => Promise<void>): CustomTool<typeof parameters> {
   return {
     name: "alpha_command",
     label: "Request an approved command",
@@ -240,7 +241,7 @@ export function createCommandTool(store: CommandApprovalStore, taskId: string, c
         if (result.status === "pending" && !signal?.aborted) await onNeedsInput?.(`Command approval required (${result.risk ?? "normal"}): ${result.argv.join(" ")}. ${result.reason ?? ""}`);
         return { content: [{ type: "text", text: JSON.stringify(result) }], isError: result.status !== "complete" || result.result?.exitCode !== 0 };
       } catch (error) {
-        if (error instanceof SandboxUnavailableError) await onNeedsInput?.(error.message);
+        if (error instanceof SandboxUnavailableError) await onNeedsInput?.(error.message, "sandbox");
         return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
       }
     },

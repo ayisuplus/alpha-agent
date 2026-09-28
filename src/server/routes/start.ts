@@ -127,7 +127,7 @@ export const startRoutes: Route[] = [
         const files = await ctx.uploadedFiles(form.getAll("files"));
         const ledger = await createGeneralWorkspace({ taskType, objective, productsRoot: ctx.productsRoot, dataRoot: ctx.dataRoot, modelSelector: model, files, ...launchOptions });
         ctx.operations.bind(lease, { taskId: ledger.state.id, roots: [ledger.state.projectRoot] });
-        if (lease.controller.signal.aborted) { await ledger.stop(); return Response.json({ error: "Task was cancelled", taskId: ledger.state.id }, { status: 409 }); }
+        if (lease.controller.signal.aborted) { await ledger.stop("user", "Cancelled before the run started"); return Response.json({ error: "Task was cancelled", taskId: ledger.state.id }, { status: 409 }); }
         launched = true;
         const run = launch(ctx, lease, ledger, objective, ledger.state.projectRoot);
         return Response.json({ taskId: ledger.state.id, runId: run.runId });
@@ -155,7 +155,7 @@ export const startRoutes: Route[] = [
         const ledger = await importCodeWorkspace({ sourcePath, productsRoot: ctx.productsRoot, dataRoot: ctx.dataRoot, objective, modelSelector: model, designatedExpertId: expertId, ...launchOptions });
         ctx.nameTask(ledger);
         ctx.operations.bind(lease, { taskId: ledger.state.id, roots: [ledger.state.projectRoot] });
-        if (lease.controller.signal.aborted) { await ledger.stop(); return Response.json({ error: "Import was cancelled", taskId: ledger.state.id }, { status: 409 }); }
+        if (lease.controller.signal.aborted) { await ledger.stop("user", "Cancelled before the import started"); return Response.json({ error: "Import was cancelled", taskId: ledger.state.id }, { status: 409 }); }
         launched = true;
         const run = launch(ctx, lease, ledger, objective, ledger.state.projectRoot);
         return Response.json({ taskId: ledger.state.id, runId: run.runId });
@@ -190,7 +190,7 @@ export const startRoutes: Route[] = [
         ctx.nameTask(ledger);
         await recordBaseline(ctx, ledger, mount.path);
         ctx.operations.bind(lease, { taskId: ledger.state.id });
-        if (lease.controller.signal.aborted) { await ledger.stop(); return Response.json({ error: "Task was cancelled", taskId: ledger.state.id }, { status: 409 }); }
+        if (lease.controller.signal.aborted) { await ledger.stop("user", "Cancelled before the run started"); return Response.json({ error: "Task was cancelled", taskId: ledger.state.id }, { status: 409 }); }
         launched = true;
         const run = launch(ctx, lease, ledger, objective, mount.path);
         return Response.json({ taskId: ledger.state.id, runId: run.runId });
