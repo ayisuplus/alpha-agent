@@ -1,6 +1,7 @@
 import type { TaskState } from "../task-ledger";
 import { InvariantError } from "./errors";
 import type { TaskEvent, TaskEventType } from "./types";
+import { contextReducers } from "./apply/context";
 import { contractReducers } from "./apply/contract";
 import { evidenceReducers } from "./apply/evidence";
 import { lifecycleReducers } from "./apply/lifecycle";
@@ -15,6 +16,7 @@ import { workerReducers } from "./apply/worker";
 type AnyReducer = (state: TaskState, event: TaskEvent) => void;
 
 const reducers = {
+  ...contextReducers,
   ...contractReducers,
   ...evidenceReducers,
   ...lifecycleReducers,

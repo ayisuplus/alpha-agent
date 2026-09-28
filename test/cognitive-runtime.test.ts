@@ -126,7 +126,7 @@ test("material plan changes pause execution and restored cognition remains in pr
     expect(ledger.state.phase).toBe("plan-review");
     expect(ledger.state.planApproval).toBeUndefined();
     const restored = await TaskLedger.load(ledger.file);
-    const snapshot = cognitionSnapshot(restored);
+    const snapshot = cognitionSnapshot(restored.state);
     expect(snapshot).toContain("Preserve exports");
     expect(snapshot).toContain("Confirm callers");
     expect(snapshot).toContain("review [review/planned]");
@@ -140,7 +140,7 @@ test("bounded cognition snapshots still include steps and acceptance gaps", asyn
   try {
     ledger.state.objective = "A".repeat(8_000);
     await ledger.reviseCognition({ summary: "B".repeat(8_000), reason: "Analysis", candidates: [], steps: [step("required")] });
-    const snapshot = cognitionSnapshot(ledger);
+    const snapshot = cognitionSnapshot(ledger.state);
     expect(snapshot.length).toBeLessThan(6_000);
     expect(snapshot).toContain("required [implement/planned]");
     expect(snapshot).toContain("acceptance gaps: check");
@@ -237,7 +237,7 @@ test("legacy ledgers use execute and single-run defaults", async () => {
     await rm(taskLogDir(ledger.file), { recursive: true, force: true });
     await writeFile(ledger.file, JSON.stringify(saved));
     const restored = await TaskLedger.load(ledger.file);
-    expect(cognitionSnapshot(restored)).toContain("Phase: execute");
+    expect(cognitionSnapshot(restored.state)).toContain("Phase: execute");
     expect(nextGoalCycle(restored, null, false, false).continue).toBe(false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

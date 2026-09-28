@@ -77,6 +77,24 @@ export interface TaskEventPayloads {
   "evidence/recorded": { evidence: Evidence };
   "preview/published": { preview: LocalPreview };
   "run/ended": { run: RunRecord };
+  /**
+   * What the model saw in one step: hashes of the composed prompt and of the task context block (whose text lives in
+   * the content-addressed prompt-blob store), plus the fixed prompt's size. `bun run replay` rebuilds it from the fold.
+   */
+  "step/context": {
+    stage: "coordinator" | "implementation" | "review" | "worker" | "answer";
+    model: string;
+    /** sha256 of everything Alpha composes for the request: the contract, the task context and the tool list. */
+    promptHash: string;
+    /** sha256 of the task context block alone; its text is stored at prompt-blobs/<hash>.txt. */
+    taskContextHash: string;
+    taskContextBytes: number;
+    systemTokens: number;
+    toolTokens: number;
+    contextShare: number | null;
+    toolNames: string[];
+    recordedAt: string;
+  };
   "source/revision-refreshed": { revision: string };
   "failure/recorded": { reason: string };
   "failure/cleared": Record<string, never>;

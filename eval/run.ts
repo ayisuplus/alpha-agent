@@ -26,7 +26,8 @@ interface TaskSpec {
   };
 }
 
-interface RunRecord { model: string; stage?: string; toolCalls: number; elapsedMs: number; usage?: { totalTokens: number }; prompt?: { systemTokens: number; toolTokens: number; tools: number; contextShare: number | null }; outcome: string; failureReason?: string }
+interface RunRecord { model: string; stage?: string; toolCalls: number; elapsedMs: number; firstResponseMs?: number; usage?: { totalTokens: number }; prompt?: { systemTokens: number; toolTokens: number; tools: number; contextShare: number | null }; outcome: string; failureReason?: string }
+interface StepContextRecord { stage: string; model: string; taskContextBytes: number; systemTokens: number; toolTokens: number; contextShare: number | null; tools: number; recordedAt: string }
 
 export interface TaskResult {
   id: string;
@@ -43,6 +44,9 @@ export interface TaskResult {
   toolCalls: number;
   tokens: number;
   prompt: RunRecord["prompt"] | null;
+  /** Slowest first model response across the task's runs, and the largest task context block a step was given. */
+  firstResponseMs: number | null;
+  contextBytes: number;
   models: string[];
   lastFailure: string | null;
   timedOut: boolean;
@@ -220,8 +224,9 @@ async function runTask(base: string, workspace: string, task: TaskSpec, timeoutM
   const taskId = await createTask(base, workspace, task);
   console.log(`start ${task.id} → ${taskId}`);
   const timedOut = await waitForTask(base, taskId, timeoutMs);
-  const ledger = JSON.parse(await readFile(join(workspace, ".alpha", "tasks", `${taskId}.json`), "utf8")) as { status: string; projectRoot: string; lastFailure?: string | null; runs?: RunRecord[] };
+  const ledger = JSON.parse(await readFile(join(workspace, ".alpha", "tasks", `${taskId}.json`), "utf8")) as { status: string; projectRoot: string; lastFailure?: string | null; runs?: RunRecord[]; stepContexts?: StepContextRecord[] };
   const runs = ledger.runs ?? [];
+  const stepContexts = ledger.stepContexts ?? [];
   const problems: string[] = [];
   if (task.kind === "code") {
     const hidden = await hiddenTests(task, ledger.projectRoot);
@@ -242,6 +247,8 @@ async function runTask(base: string, workspace: string, task: TaskSpec, timeoutM
     toolCalls: runs.reduce((sum, item) => sum + item.toolCalls, 0),
     tokens: runs.reduce((sum, item) => sum + (item.usage?.totalTokens ?? 0), 0),
     prompt: coordinator?.prompt ?? null,
+    firstResponseMs: runs.some(run => run.firstResponseMs !== undefined) ? Math.max(...runs.map(run => run.firstResponseMs ?? 0)) : null,
+    contextBytes: stepContexts.length ? Math.max(...stepContexts.map(item => item.taskContextBytes)) : 0,
     models: [...new Set(runs.map(item => item.model))],
     lastFailure: ledger.lastFailure ?? null, timedOut,
   };
@@ -264,14 +271,14 @@ function summary(results: TaskResult[]) {
 
 function report(label: string, app: string, results: TaskResult[]): string {
   const total = summary(results);
-  const rows = results.map(item => `| ${item.id} | ${item.passed ? "✅" : "❌"} | ${item.alphaStatus}${item.falseAcceptance ? " ⚠️" : ""} | ${Math.round(item.wallMs / 1000)}s | ${item.runs} | ${item.toolCalls} | ${item.tokens.toLocaleString()} | ${item.prompt ? `${item.prompt.systemTokens} + ${item.prompt.toolTokens}` : "—"} | ${item.detail.split("\n")[0].replace(/\|/g, "\\|").slice(0, 120)} |`);
+  const rows = results.map(item => `| ${item.id} | ${item.passed ? "✅" : "❌"} | ${item.alphaStatus}${item.falseAcceptance ? " ⚠️" : ""} | ${Math.round(item.wallMs / 1000)}s | ${item.runs} | ${item.toolCalls} | ${item.tokens.toLocaleString()} | ${item.prompt ? `${item.prompt.systemTokens} + ${item.prompt.toolTokens}` : "—"} | ${item.contextBytes ? `${Math.round(item.contextBytes / 102.4) / 10}k` : "—"} | ${item.firstResponseMs === null ? "—" : `${Math.round(item.firstResponseMs / 100) / 10}s`} | ${item.detail.split("\n")[0].replace(/\|/g, "\\|").slice(0, 120)} |`);
   return [
     `# Alpha 评测：${label}`, "",
     `- 被测代码：\`${app}\``, `- 时间：${new Date().toISOString()}`,
     `- 通过：${total.passed}/${total.tasks}；Alpha 自评已验收 ${total.alphaAccepted}；自评通过但独立检查失败 ${total.falseAcceptances}；独立检查通过但自评未验收 ${total.missedAcceptances}`,
     `- 合计：${total.toolCalls} 次工具调用，${total.tokens.toLocaleString()} tokens，${total.wallMinutes} 分钟（各任务耗时之和）`, "",
-    "| 任务 | 独立检查 | Alpha 状态 | 耗时 | 轮次 | 工具调用 | tokens | 固定提示词（系统 + 工具） | 说明 |",
-    "|---|---|---|---|---|---|---|---|---|",
+    "| 任务 | 独立检查 | Alpha 状态 | 耗时 | 轮次 | 工具调用 | tokens | 固定提示词（系统 + 工具） | 每步上下文 | 首响应 | 说明 |",
+    "|---|---|---|---|---|---|---|---|---|---|---|",
     ...rows, "",
   ].join("\n");
 }
@@ -319,7 +326,7 @@ try {
       catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         console.log(`ERROR ${task.id}: ${detail}`);
-        results.push({ id: task.id, kind: task.kind, alphaStatus: "error", passed: false, falseAcceptance: false, detail, wallMs: 0, runs: 0, toolCalls: 0, tokens: 0, prompt: null, models: [], lastFailure: null, timedOut: false });
+        results.push({ id: task.id, kind: task.kind, alphaStatus: "error", passed: false, falseAcceptance: false, detail, wallMs: 0, runs: 0, toolCalls: 0, tokens: 0, prompt: null, firstResponseMs: null, contextBytes: 0, models: [], lastFailure: null, timedOut: false });
       }
       await writeFile(join(out, "results.json"), JSON.stringify({ label, app, workspace, results }, null, 2));
     }

@@ -3,7 +3,8 @@ import { verifyPresetSnapshot, type AgentPresetSnapshot } from "./agent-presets"
 import { initialExpertCandidates } from "./expert-selection";
 import { PLANNING_TOOL_NAMES } from "./planning-policy";
 import { roleThinkingInstructions } from "./role-thinking";
-import type { PermissionMode, TaskLedger, TaskType } from "./task-ledger";
+import type { PermissionMode, TaskLedger, TaskState, TaskType } from "./task-ledger";
+import { computeCompletionGaps } from "./task-completion";
 import { taskProfile } from "./task-profile";
 import type { WorkOrder } from "./work-orders";
 
@@ -91,33 +92,33 @@ export function sessionToolNames(facts: SessionFacts): string[] {
   }
 }
 
-export function cognitionSnapshot(ledger: TaskLedger): string {
-  const cognition = ledger.state.cognition;
+export function cognitionSnapshot(state: TaskState): string {
+  const cognition = state.cognition;
   const bounded = (value: string, limit: number) => value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
   return [
-    `Task objective v${ledger.state.contractVersion ?? 1}: ${bounded(ledger.state.objective, 800)}`,
-    `Phase: ${ledger.state.phase ?? "execute"}; approved plan: ${ledger.state.planApproval?.cognitionRevision ?? "none"}; acceptance gaps: ${bounded(ledger.completionGaps().join(", ") || "none", 500)}`,
+    `Task objective v${state.contractVersion ?? 1}: ${bounded(state.objective, 800)}`,
+    `Phase: ${state.phase ?? "execute"}; approved plan: ${state.planApproval?.cognitionRevision ?? "none"}; acceptance gaps: ${bounded(computeCompletionGaps(state).join(", ") || "none", 500)}`,
     cognition?.summary ? `Current understanding: ${bounded(cognition.summary, 650)}` : "",
     cognition?.scope?.length ? `Scope: ${bounded(cognition.scope.join("; "), 650)}` : "",
     cognition?.constraints?.length ? `Constraints: ${bounded(cognition.constraints.join("; "), 650)}` : "",
     cognition?.openQuestions?.length ? `Open questions: ${bounded(cognition.openQuestions.join("; "), 600)}` : "",
     cognition?.steps.length ? `Steps: ${bounded(cognition.steps.map(step => `${step.id} [${step.mode}/${step.status}] ${step.objective}; needs ${step.dependsOn.join(",") || "none"}${step.statusReason ? `; result ${step.statusReason}` : ""}`).join(" | "), 1_500)}` : "",
     cognition?.gaps.some(gap => !gap.resolvedAt) ? `Unresolved capability gaps: ${bounded(cognition.gaps.filter(gap => !gap.resolvedAt).map(gap => `${gap.kind}: ${gap.description}`).join(" | "), 650)}` : "",
-    ledger.state.workerRequests?.some(item => ["open", "awaiting-approval", "uncertain"].includes(item.status)) ? `Worker requests: ${bounded(ledger.state.workerRequests.filter(item => ["open", "awaiting-approval", "uncertain"].includes(item.status)).map(item => `${item.id} [${item.status}/${item.kind}] agent ${item.agentId}; ${item.blockedStep}; approval ${item.approvalId ?? "none"}`).join(" | "), 1000)}` : "",
+    state.workerRequests?.some(item => ["open", "awaiting-approval", "uncertain"].includes(item.status)) ? `Worker requests: ${bounded(state.workerRequests.filter(item => ["open", "awaiting-approval", "uncertain"].includes(item.status)).map(item => `${item.id} [${item.status}/${item.kind}] agent ${item.agentId}; ${item.blockedStep}; approval ${item.approvalId ?? "none"}`).join(" | "), 1000)}` : "",
   ].filter(Boolean).join("\n");
 }
 
-export function taskPrompt(ledger: TaskLedger, correction: string): string {
-  const history = (ledger.state.contractHistory ?? []).map(item => `v${item.version}: ${item.objective}`).join("\n");
-  const guidance = (ledger.state.guidanceHistory ?? []).map(item => item.instruction).join("\n");
+export function taskPrompt(state: TaskState, correction: string): string {
+  const history = (state.contractHistory ?? []).map(item => `v${item.version}: ${item.objective}`).join("\n");
+  const guidance = (state.guidanceHistory ?? []).map(item => item.instruction).join("\n");
   return [
     "Preserve earlier task requirements unless the user explicitly superseded them.",
     history ? `Earlier objectives:\n${history}` : "",
     guidance ? `Saved user guidance:\n${guidance}` : "",
-    `Current objective v${ledger.state.contractVersion ?? 1}: ${ledger.state.objective}`,
-    `Current incomplete criteria: ${ledger.completionGaps().join(", ")}`,
-    cognitionSnapshot(ledger),
-    `Latest review failure: ${ledger.state.lastFailure ?? ledger.state.reopenReason ?? "none"}`,
+    `Current objective v${state.contractVersion ?? 1}: ${state.objective}`,
+    `Current incomplete criteria: ${computeCompletionGaps(state).join(", ")}`,
+    cognitionSnapshot(state),
+    `Latest review failure: ${state.lastFailure ?? state.reopenReason ?? "none"}`,
     `Current instruction: ${correction}`,
   ].filter(Boolean).join("\n");
 }
@@ -197,7 +198,7 @@ function coordinatorContract(facts: SessionFacts): string[] {
   return [
     ...roleThinkingInstructions("coordinator"),
     "You are Alpha's coordinator for this task. Complete it in the assigned project directory.",
-    cognitionSnapshot(ledger),
+    cognitionSnapshot(ledger.state),
     `Current task objective v${ledger.state.contractVersion ?? 1}: ${ledger.state.objective}`,
     `Saved user guidance: ${(ledger.state.guidanceHistory ?? []).map(item => item.instruction).join(" | ") || "none"}`,
     `Required acceptance criteria: ${ledger.state.criteria.map(item => `${item.id}: ${item.description}`).join(" | ")}`,
@@ -241,7 +242,7 @@ function roleContract(facts: SessionFacts): string[] {
       return [
         ...roleThinkingInstructions("coordinator"),
         "You are planning the current Alpha task. Inspect the assigned project and available read-only web sources, ask for missing context when needed, and record a concrete plan with alpha_plan. Plan step mode must be investigate, implement, or review. Do not implement, run commands, alter project files, install capabilities, or interact with web page controls. Once alpha_plan succeeds, stop: the user has not approved the plan yet.",
-        cognitionSnapshot(ledger),
+        cognitionSnapshot(ledger.state),
         `${facts.direct ? DIRECT_FILE_NOTE : MANAGED_FILE_NOTE}`,
         ...codeIntelligenceLine(facts),
         ...skillLines(facts, facts.direct),
@@ -249,7 +250,7 @@ function roleContract(facts: SessionFacts): string[] {
     case "answer":
       return [
         "You are answering the user's follow-up question about this task. The question does not change the task: do not modify files, run commands, dispatch work or change the objective. Inspect the project, the recorded task state and earlier conversation as needed, then answer directly and concisely in the user's language. Say which parts you verified in files and which come from the earlier conversation. If the user actually wants a change, say so and suggest revising the task instead.",
-        cognitionSnapshot(ledger),
+        cognitionSnapshot(ledger.state),
         `Acceptance criteria: ${ledger.state.criteria.map(item => `${item.id}: ${item.description}`).join(" | ") || "none"}`,
         `${facts.direct ? DIRECT_FILE_NOTE : MANAGED_FILE_NOTE}`,
         ...codeIntelligenceLine(facts),

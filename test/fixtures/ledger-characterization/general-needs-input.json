@@ -1758,6 +1758,67 @@
       "changed": []
     },
     {
+      "name": "recordStepContext",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "stepContexts[0].contextShare",
+          "before": "<absent>",
+          "after": 0.1
+        },
+        {
+          "path": "stepContexts[0].model",
+          "before": "<absent>",
+          "after": "test/model"
+        },
+        {
+          "path": "stepContexts[0].promptHash",
+          "before": "<absent>",
+          "after": "<rev:7>"
+        },
+        {
+          "path": "stepContexts[0].recordedAt",
+          "before": "<absent>",
+          "after": "<at:65>"
+        },
+        {
+          "path": "stepContexts[0].stage",
+          "before": "<absent>",
+          "after": "coordinator"
+        },
+        {
+          "path": "stepContexts[0].systemTokens",
+          "before": "<absent>",
+          "after": 4900
+        },
+        {
+          "path": "stepContexts[0].taskContextBytes",
+          "before": "<absent>",
+          "after": 512
+        },
+        {
+          "path": "stepContexts[0].taskContextHash",
+          "before": "<absent>",
+          "after": "<rev:4>"
+        },
+        {
+          "path": "stepContexts[0].toolTokens",
+          "before": "<absent>",
+          "after": 4700
+        },
+        {
+          "path": "stepContexts[0].tools",
+          "before": "<absent>",
+          "after": 3
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:63>",
+          "after": "<at:64>"
+        }
+      ]
+    },
+    {
       "name": "recordRun",
       "outcome": "ok",
       "changed": [
@@ -1770,6 +1831,11 @@
           "path": "runs[0].elapsedMs",
           "before": "<absent>",
           "after": 5000
+        },
+        {
+          "path": "runs[0].firstResponseMs",
+          "before": "<absent>",
+          "after": 3200
         },
         {
           "path": "runs[0].maxToolCalls",
@@ -1789,7 +1855,7 @@
         {
           "path": "runs[0].recordedAt",
           "before": "<absent>",
-          "after": "<at:64>"
+          "after": "<at:66>"
         },
         {
           "path": "runs[0].stage",
@@ -1808,8 +1874,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:63>",
-          "after": "<at:65>"
+          "before": "<at:64>",
+          "after": "<at:67>"
         }
       ]
     },
@@ -1824,8 +1890,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:65>",
-          "after": "<at:66>"
+          "before": "<at:67>",
+          "after": "<at:68>"
         }
       ]
     },
@@ -1846,8 +1912,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:66>",
-          "after": "<at:67>"
+          "before": "<at:68>",
+          "after": "<at:69>"
         }
       ]
     },
@@ -1862,8 +1928,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:67>",
-          "after": "<at:68>"
+          "before": "<at:69>",
+          "after": "<at:70>"
         }
       ]
     },
@@ -1903,8 +1969,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:68>",
-          "after": "<at:69>"
+          "before": "<at:70>",
+          "after": "<at:71>"
         }
       ]
     },
@@ -1924,8 +1990,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:69>",
-          "after": "<at:70>"
+          "before": "<at:71>",
+          "after": "<at:72>"
         }
       ]
     },
@@ -1940,8 +2006,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:70>",
-          "after": "<at:71>"
+          "before": "<at:72>",
+          "after": "<at:73>"
         },
         {
           "path": "workerOutcome.findings[0]",
@@ -1971,8 +2037,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:71>",
-          "after": "<at:72>"
+          "before": "<at:73>",
+          "after": "<at:74>"
         }
       ]
     },
@@ -1998,8 +2064,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:72>",
-          "after": "<at:73>"
+          "before": "<at:74>",
+          "after": "<at:75>"
         }
       ]
     },
@@ -2030,8 +2096,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:73>",
-          "after": "<at:74>"
+          "before": "<at:75>",
+          "after": "<at:76>"
         }
       ]
     },
@@ -2053,7 +2119,7 @@
         {
           "path": "guidanceHistory[1].recordedAt",
           "before": "<absent>",
-          "after": "<at:75>"
+          "after": "<at:77>"
         },
         {
           "path": "pauseReason",
@@ -2077,8 +2143,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:74>",
-          "after": "<at:76>"
+          "before": "<at:76>",
+          "after": "<at:78>"
         }
       ]
     },
@@ -2110,12 +2176,12 @@
         {
           "path": "stop.stoppedAt",
           "before": "<absent>",
-          "after": "<at:77>"
+          "after": "<at:79>"
         },
         {
           "path": "updatedAt",
-          "before": "<at:76>",
-          "after": "<at:77>"
+          "before": "<at:78>",
+          "after": "<at:79>"
         }
       ]
     },
@@ -2137,7 +2203,7 @@
         {
           "path": "contractHistory[0].revisedAt",
           "before": "<absent>",
-          "after": "<at:78>"
+          "after": "<at:80>"
         },
         {
           "path": "contractHistory[0].version",
@@ -2231,13 +2297,13 @@
         },
         {
           "path": "stop.stoppedAt",
-          "before": "<at:77>",
+          "before": "<at:79>",
           "after": "<absent>"
         },
         {
           "path": "updatedAt",
-          "before": "<at:77>",
-          "after": "<at:79>"
+          "before": "<at:79>",
+          "after": "<at:81>"
         }
       ]
     },
@@ -2268,8 +2334,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:79>",
-          "after": "<at:80>"
+          "before": "<at:81>",
+          "after": "<at:82>"
         }
       ]
     },
@@ -2294,8 +2360,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:80>",
-          "after": "<at:81>"
+          "before": "<at:82>",
+          "after": "<at:83>"
         }
       ]
     }
@@ -2313,7 +2379,7 @@
       {
         "version": 1,
         "objective": "Summarize the sales CSV",
-        "revisedAt": "<at:78>"
+        "revisedAt": "<at:80>"
       }
     ],
     "guidanceHistory": [
@@ -2325,7 +2391,7 @@
       },
       {
         "instruction": "Approved; continue with the regression test",
-        "recordedAt": "<at:75>"
+        "recordedAt": "<at:77>"
       }
     ],
     "cognition": {
@@ -2541,14 +2607,15 @@
         "maxToolCalls": 40,
         "wallTimeMs": 60000,
         "elapsedMs": 5000,
+        "firstResponseMs": 3200,
         "outcome": "returned",
         "contractVersion": 1,
-        "recordedAt": "<at:64>"
+        "recordedAt": "<at:66>"
       }
     ],
     "preview": null,
     "createdAt": "<at:1>",
-    "updatedAt": "<at:81>",
+    "updatedAt": "<at:83>",
     "development": {
       "enabled": true,
       "repairAttempts": 1,
@@ -2658,6 +2725,20 @@
         }
       ]
     },
+    "stepContexts": [
+      {
+        "stage": "coordinator",
+        "model": "test/model",
+        "promptHash": "<rev:7>",
+        "taskContextHash": "<rev:4>",
+        "taskContextBytes": 512,
+        "systemTokens": 4900,
+        "toolTokens": 4700,
+        "contextShare": 0.1,
+        "tools": 3,
+        "recordedAt": "<at:65>"
+      }
+    ],
     "checkpointStatus": "failed",
     "checkpoint": {
       "runId": "run-checkpoint",

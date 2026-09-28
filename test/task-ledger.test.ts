@@ -88,7 +88,7 @@ test("a stopped task retains its run budget record and can resume", async () => 
     expect(restored.state.stop).toBeUndefined();
     expect(restored.state.runs?.[0]?.outcome).toBe("cancelled");
     expect(restored.state.runs?.[0]?.failureReason).toBe("User cancelled");
-    expect(taskPrompt(restored, "Keep working")).toContain("Continue after cancellation");
+    expect(taskPrompt(restored.state, "Keep working")).toContain("Continue after cancellation");
     await restored.recordFailure("Transient model outage");
     await restored.clearFailure();
     expect((await TaskLedger.load(ledger.file)).state.lastFailure).toBeUndefined();
@@ -124,12 +124,12 @@ test("a revised objective invalidates old acceptance evidence without changing s
     const restored = await TaskLedger.load(ledger.file);
     expect(restored.state.contractHistory?.[0]?.objective).toBe("Make a list");
     expect(restored.completionGaps()).toEqual(["build", "local-preview"]);
-    const resumedPrompt = taskPrompt(restored, "Keep the original list and add filtering");
+    const resumedPrompt = taskPrompt(restored.state, "Keep the original list and add filtering");
     expect(resumedPrompt).toContain("v1: Make a list");
     expect(resumedPrompt).toContain("v2: Make a list with filtering");
     await restored.recordGuidance("Do not delete existing items");
     const restarted = await TaskLedger.load(restored.file);
-    expect(taskPrompt(restarted, "Repair the filter")).toContain("Do not delete existing items");
+    expect(taskPrompt(restarted.state, "Repair the filter")).toContain("Do not delete existing items");
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
@@ -155,7 +155,7 @@ test("CLI guidance survives a failed model start and a ledger reload", async () 
     expect(persisted).toBe(true);
     const restored = await TaskLedger.load(ledger.file);
     expect(restored.state.status).toBe("active");
-    expect(taskPrompt(restored, "Continue")).toContain("Do not delete the original data");
+    expect(taskPrompt(restored.state, "Continue")).toContain("Do not delete the original data");
     await restored.needInput("Optional command needs approval", "approval");
     const briefFile = join(root, "guidance.txt");
     const multiline = "Skip the optional command.\nContinue with configured checks.";

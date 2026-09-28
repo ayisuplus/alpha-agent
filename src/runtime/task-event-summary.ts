@@ -96,7 +96,18 @@ export function summarizeTaskEvent(event: TaskEvent): TaskTimelineEvent | null {
     case "skill-proposal/decided": return { ...row, label: event.payload.decision === "installed" ? `Skill 已安装：${event.payload.installedSkillId ?? ""}` : "Skill 提案已拒绝", tone: event.payload.decision === "installed" ? "success" : "info" };
     case "evidence/recorded": return { ...row, label: `证据 ${event.payload.evidence.criterionId} ${event.payload.evidence.passed ? "通过" : "未通过"}`, detail: detail(event.payload.evidence.source), tone: event.payload.evidence.passed ? "success" : "warning", refs: { criterionId: event.payload.evidence.criterionId, evidenceId: event.payload.evidence.id, passed: event.payload.evidence.passed } };
     case "preview/published": return { ...row, label: "本机预览已发布", detail: detail(event.payload.preview.url) };
-    case "run/ended": return { ...row, label: `运行结束 · ${event.payload.run.stage ?? "coordinator"} · ${event.payload.run.outcome}`, detail: detail(event.payload.run.failureReason), tone: event.payload.run.outcome === "returned" ? "info" : "warning" };
+    case "run/ended": return {
+      ...row,
+      label: `运行结束 · ${event.payload.run.stage ?? "coordinator"} · ${event.payload.run.outcome}`,
+      detail: detail([event.payload.run.failureReason, event.payload.run.firstResponseMs === undefined ? "" : `${event.payload.run.firstResponseMs}ms 到首响应`].filter(Boolean).join("；")),
+      tone: event.payload.run.outcome === "returned" ? "info" : "warning",
+    };
+    case "step/context": return {
+      ...row,
+      label: `模型上下文 · ${event.payload.stage} · ${Math.round((event.payload.systemTokens + event.payload.toolTokens) / 100) / 10}k tokens`,
+      detail: detail(`任务块 ${event.payload.taskContextBytes} 字节 · ${event.payload.toolNames.length} 个工具 · ${event.payload.model}`),
+      tone: "info",
+    };
     case "source/revision-refreshed": return { ...row, label: "源码已更新，旧证据失效", tone: "info" };
     case "failure/recorded": return { ...row, label: "运行失败", detail: detail(event.payload.reason), tone: "danger" };
     case "development/enabled": return { ...row, label: "独立审查已启用" };

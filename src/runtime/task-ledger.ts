@@ -75,6 +75,8 @@ export interface RunRecord {
   thinkingPolicyVersion?: number;
   contractVersion?: number;
   toolCalls: number;
+  /** Latency to the model's first visible response in this run, for the eval report. */
+  firstResponseMs?: number;
   compactions?: number;
   compactionFailures?: number;
   maxToolCalls: number;
@@ -210,6 +212,8 @@ export interface TaskState {
   evidence: Evidence[];
   runs?: RunRecord[];
   preview: LocalPreview | null;
+  /** Summaries of what the model saw per step; the texts live in the prompt-blob store, referenced by hash. */
+  stepContexts?: Array<{ stage: "coordinator" | "implementation" | "review" | "worker" | "answer"; model: string; promptHash: string; taskContextHash: string; taskContextBytes: number; systemTokens: number; toolTokens: number; contextShare: number | null; tools: number; recordedAt: string }>;
   createdAt: string;
   updatedAt: string;
   reopenReason?: string;
@@ -713,6 +717,11 @@ export class TaskLedger {
 
   async clearFailure(): Promise<void> {
     await this.commit(() => (this.state.lastFailure ? { type: "failure/cleared", payload: {} } : null));
+  }
+
+  /** Records what the model saw in one step; the task context text itself is stored by the caller in the blob store. */
+  async recordStepContext(input: Omit<TaskEventPayloads["step/context"], "recordedAt">): Promise<void> {
+    await this.commit(() => ({ type: "step/context", payload: { ...input, recordedAt: new Date().toISOString() } }));
   }
 
   async recordRun(input: Omit<RunRecord, "recordedAt">): Promise<void> {
