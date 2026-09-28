@@ -24,6 +24,11 @@ interface TaskSpec {
     answer?: { patterns?: string[]; forbidden?: string[]; hanChars?: [number, number] };
     file?: { path: string; rows: string[][] };
   };
+  /**
+   * Keep a paused task moving without a person: when it reaches `needs-input`, wait `afterSeconds` and resume with
+   * `brief`, at most `times` times. This is what makes a multi-round pause/resume task testable unattended.
+   */
+  autoResume?: { times?: number; brief?: string; afterSeconds?: number };
 }
 
 interface RunRecord { model: string; stage?: string; toolCalls: number; elapsedMs: number; firstResponseMs?: number; usage?: { totalTokens: number }; prompt?: { systemTokens: number; toolTokens: number; tools: number; contextShare: number | null }; outcome: string; failureReason?: string }
@@ -47,6 +52,8 @@ export interface TaskResult {
   /** Slowest first model response across the task's runs, and the largest task context block a step was given. */
   firstResponseMs: number | null;
   contextBytes: number;
+  /** How many times the runner had to resume a paused task (only tasks with `autoResume`). */
+  pauses: number;
   models: string[];
   lastFailure: string | null;
   timedOut: boolean;
@@ -196,15 +203,23 @@ async function createTask(base: string, workspace: string, task: TaskSpec): Prom
   }
 }
 
-async function waitForTask(base: string, taskId: string, timeoutMs: number): Promise<boolean> {
+async function waitForTask(base: string, taskId: string, timeoutMs: number, autoResume?: TaskSpec["autoResume"]): Promise<{ timedOut: boolean; pauses: number }> {
   const started = Date.now();
   let seenWork = false;
+  let pauses = 0;
   while (true) {
     const { body } = await api<{ task?: { running: boolean; queued?: boolean; status: string } }>(base, `/api/tasks/${taskId}`);
     const task = body.task;
     if (task) {
       if (task.running || task.queued) seenWork = true;
-      else if (seenWork || task.status !== "active" || Date.now() - started > 90_000) return false;
+      else if (task.status === "needs-input" && autoResume && pauses < (autoResume.times ?? 1)) {
+        // A paused task with nobody at the keyboard would sit here until the timeout: resume it and count the pause.
+        await sleep((autoResume.afterSeconds ?? 5) * 1_000);
+        await api(base, `/api/tasks/${taskId}/resume`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ brief: autoResume.brief ?? "继续" }) });
+        pauses++;
+        seenWork = true;
+        continue;
+      } else if (seenWork || task.status !== "active" || Date.now() - started > 90_000) return { timedOut: false, pauses };
     }
     if (Date.now() - started > timeoutMs) {
       await api(base, `/api/tasks/${taskId}/cancel`, { method: "POST" });
@@ -213,7 +228,7 @@ async function waitForTask(base: string, taskId: string, timeoutMs: number): Pro
         const current = await api<{ task?: { running: boolean } }>(base, `/api/tasks/${taskId}`);
         if (!current.body.task?.running) break;
       }
-      return true;
+      return { timedOut: true, pauses };
     }
     await sleep(5_000);
   }
@@ -223,7 +238,7 @@ async function runTask(base: string, workspace: string, task: TaskSpec, timeoutM
   const started = Date.now();
   const taskId = await createTask(base, workspace, task);
   console.log(`start ${task.id} → ${taskId}`);
-  const timedOut = await waitForTask(base, taskId, timeoutMs);
+  const { timedOut, pauses } = await waitForTask(base, taskId, timeoutMs, task.autoResume);
   const ledger = JSON.parse(await readFile(join(workspace, ".alpha", "tasks", `${taskId}.json`), "utf8")) as { status: string; projectRoot: string; lastFailure?: string | null; runs?: RunRecord[]; stepContexts?: StepContextRecord[] };
   const runs = ledger.runs ?? [];
   const stepContexts = ledger.stepContexts ?? [];
@@ -249,6 +264,7 @@ async function runTask(base: string, workspace: string, task: TaskSpec, timeoutM
     prompt: coordinator?.prompt ?? null,
     firstResponseMs: runs.some(run => run.firstResponseMs !== undefined) ? Math.max(...runs.map(run => run.firstResponseMs ?? 0)) : null,
     contextBytes: stepContexts.length ? Math.max(...stepContexts.map(item => item.taskContextBytes)) : 0,
+    pauses,
     models: [...new Set(runs.map(item => item.model))],
     lastFailure: ledger.lastFailure ?? null, timedOut,
   };
@@ -271,14 +287,14 @@ function summary(results: TaskResult[]) {
 
 function report(label: string, app: string, results: TaskResult[]): string {
   const total = summary(results);
-  const rows = results.map(item => `| ${item.id} | ${item.passed ? "✅" : "❌"} | ${item.alphaStatus}${item.falseAcceptance ? " ⚠️" : ""} | ${Math.round(item.wallMs / 1000)}s | ${item.runs} | ${item.toolCalls} | ${item.tokens.toLocaleString()} | ${item.prompt ? `${item.prompt.systemTokens} + ${item.prompt.toolTokens}` : "—"} | ${item.contextBytes ? `${Math.round(item.contextBytes / 102.4) / 10}k` : "—"} | ${item.firstResponseMs === null ? "—" : `${Math.round(item.firstResponseMs / 100) / 10}s`} | ${item.detail.split("\n")[0].replace(/\|/g, "\\|").slice(0, 120)} |`);
+  const rows = results.map(item => `| ${item.id} | ${item.passed ? "✅" : "❌"} | ${item.alphaStatus}${item.falseAcceptance ? " ⚠️" : ""} | ${Math.round(item.wallMs / 1000)}s | ${item.runs} | ${item.toolCalls} | ${item.tokens.toLocaleString()} | ${item.prompt ? `${item.prompt.systemTokens} + ${item.prompt.toolTokens}` : "—"} | ${item.contextBytes ? `${Math.round(item.contextBytes / 102.4) / 10}k` : "—"} | ${item.firstResponseMs === null ? "—" : `${Math.round(item.firstResponseMs / 100) / 10}s`} | ${item.pauses ? `${item.pauses} 次` : "—"} | ${item.detail.split("\n")[0].replace(/\|/g, "\\|").slice(0, 120)} |`);
   return [
     `# Alpha 评测：${label}`, "",
     `- 被测代码：\`${app}\``, `- 时间：${new Date().toISOString()}`,
     `- 通过：${total.passed}/${total.tasks}；Alpha 自评已验收 ${total.alphaAccepted}；自评通过但独立检查失败 ${total.falseAcceptances}；独立检查通过但自评未验收 ${total.missedAcceptances}`,
     `- 合计：${total.toolCalls} 次工具调用，${total.tokens.toLocaleString()} tokens，${total.wallMinutes} 分钟（各任务耗时之和）`, "",
-    "| 任务 | 独立检查 | Alpha 状态 | 耗时 | 轮次 | 工具调用 | tokens | 固定提示词（系统 + 工具） | 每步上下文 | 首响应 | 说明 |",
-    "|---|---|---|---|---|---|---|---|---|---|---|",
+    "| 任务 | 独立检查 | Alpha 状态 | 耗时 | 轮次 | 工具调用 | tokens | 固定提示词（系统 + 工具） | 每步上下文 | 首响应 | 恢复 | 说明 |",
+    "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ...rows, "",
   ].join("\n");
 }
@@ -326,7 +342,7 @@ try {
       catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         console.log(`ERROR ${task.id}: ${detail}`);
-        results.push({ id: task.id, kind: task.kind, alphaStatus: "error", passed: false, falseAcceptance: false, detail, wallMs: 0, runs: 0, toolCalls: 0, tokens: 0, prompt: null, firstResponseMs: null, contextBytes: 0, models: [], lastFailure: null, timedOut: false });
+        results.push({ id: task.id, kind: task.kind, alphaStatus: "error", passed: false, falseAcceptance: false, detail, wallMs: 0, runs: 0, toolCalls: 0, tokens: 0, prompt: null, firstResponseMs: null, contextBytes: 0, pauses: 0, models: [], lastFailure: null, timedOut: false });
       }
       await writeFile(join(out, "results.json"), JSON.stringify({ label, app, workspace, results }, null, 2));
     }
