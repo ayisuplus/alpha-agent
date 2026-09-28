@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lstat, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { warnUnknownStoreVersion } from "./store-tag";
 
 export interface ProjectMount { id: string; path: string }
 export interface ProjectRecord {
@@ -47,14 +48,18 @@ export class ProjectStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return "[]";
       throw error;
     });
-    const projects = JSON.parse(raw) as unknown;
-    if (!Array.isArray(projects)) throw new Error("Project store is invalid");
-    return projects as ProjectRecord[];
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) return parsed as ProjectRecord[]; // Legacy untagged documents are the bare record array.
+    const document = parsed as { projects?: unknown } | null;
+    if (!document || typeof document !== "object" || !Array.isArray(document.projects)) throw new Error("Project store is invalid");
+    warnUnknownStoreVersion("projects", document);
+    return document.projects as ProjectRecord[];
   }
 
+  // .alpha/projects.json (projects store): v1 wraps the records in {projects, format, version}; a version bump must migrate the envelope in read().
   private async save(projects: ProjectRecord[]): Promise<void> {
     const temporary = `${this.file}.${randomUUID()}.tmp`;
-    await writeFile(temporary, JSON.stringify(projects, null, 2));
+    await writeFile(temporary, JSON.stringify({ projects, format: "projects", version: 1 }, null, 2));
     await rename(temporary, this.file);
   }
 

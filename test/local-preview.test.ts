@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { publishLocalPreview } from "../src/runtime/local-preview";
+import { stalePreviews } from "../src/runtime/storage";
 import { fingerprintSource } from "../src/runtime/task-ledger";
 
 test("local preview serves the frozen build with a version identity", async () => {
@@ -18,6 +19,14 @@ test("local preview serves the frozen build with a version identity", async () =
     const revision = await fingerprintSource(project);
     const instance = await publishLocalPreview({ projectRoot: project, buildDir: build, dataRoot: join(root, "alpha-data"), revision });
     stop = instance.stop;
+    const manifest = JSON.parse(await readFile(join(root, "alpha-data", "previews", instance.record.id, "preview.json"), "utf8")) as { format?: string; version?: number };
+    expect(manifest.format).toBe("preview");
+    expect(manifest.version).toBe(1);
+    // A legacy manifest without the tag must still identify its preview snapshot for cleanup.
+    const legacyId = "11111111-1111-4111-8111-111111111111";
+    await mkdir(join(root, "alpha-data", "previews", legacyId), { recursive: true });
+    await writeFile(join(root, "alpha-data", "previews", legacyId, "preview.json"), JSON.stringify({ id: legacyId }));
+    expect((await stalePreviews(join(root, "alpha-data"), new Set())).map(item => item.id)).toContain(legacyId);
     const response = await fetch(instance.record.url);
     expect(response.status).toBe(200);
     expect(response.headers.get("x-alpha-revision")).toBe(revision);

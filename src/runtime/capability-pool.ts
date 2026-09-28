@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readToolCatalog } from "./mcp-tool-catalog";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Skill } from "@oh-my-pi/pi-coding-agent";
@@ -44,7 +45,7 @@ export async function capabilityPool(dataRoot: string): Promise<CapabilityEntry[
       entries.push({ id: server, kind: "mcp-server", name: server, description: `MCP service from ${plugin.name}`, source: plugin.id, revision: plugin.revision, enabled: plugin.enabled && plugin.mcpEnabled });
     }
   }
-  const discovered = await readFile(join(dataRoot, "mcp-tool-catalog.json"), "utf8").then(value => JSON.parse(value) as Array<{ name: string; server: string; description: string; revision: string }>).catch(() => []);
+  const discovered = await readToolCatalog(dataRoot);
   for (const tool of discovered) {
     const plugin = installed.find(item => tool.server.startsWith(`alpha_${item.id}_`) && item.revision === tool.revision);
     if (plugin) entries.push({ id: tool.name, kind: "mcp-tool", name: tool.name, description: tool.description, source: plugin.id, revision: plugin.revision, enabled: plugin.enabled && plugin.mcpEnabled });

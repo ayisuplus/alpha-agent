@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { TaskLedger, fingerprintSource } from "./task-ledger";
+import { warnUnknownStoreVersion } from "./store-tag";
 import { VisibleBrowser, type BrowserObservation, type BrowserSession } from "./visible-browser";
 import type { BrowserKernel } from "./browser-kernel";
 
@@ -30,7 +31,8 @@ interface Progress {
 
 async function saveProgress(file: string, progress: Progress): Promise<void> {
   const temporary = `${file}.${randomUUID()}.tmp`;
-  await writeFile(temporary, JSON.stringify(progress));
+  // .alpha/browser-progress/<taskId>.json (browser-progress store): v1 = Progress plus its format tag; a version bump must migrate at the progress read in verifyBrowserPlan.
+  await writeFile(temporary, JSON.stringify({ ...progress, format: "browser-progress", version: 1 }));
   await rename(temporary, file);
 }
 
@@ -125,7 +127,11 @@ export async function verifyBrowserPlan(ledger: TaskLedger, cdpPort: number, dat
   const progressDir = join(dataRoot, "browser-progress");
   await mkdir(progressDir, { recursive: true });
   const progressFile = join(progressDir, `${ledger.state.id}.json`);
-  const saved = await readFile(progressFile, "utf8").then(text => JSON.parse(text) as Progress).catch(() => null);
+  const saved = await readFile(progressFile, "utf8").then(text => {
+    const prior = JSON.parse(text) as Progress;
+    warnUnknownStoreVersion("browser-progress", prior);
+    return prior;
+  }).catch(() => null);
   const progress: Progress = saved?.previewId === preview.id && saved.revision === preview.revision && saved.planHash === planHash
     ? saved
     : { previewId: preview.id, revision: preview.revision, planHash, nonce: randomUUID().slice(0, 8), nextStep: 0, inFlight: null, results: [] };

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { copyFile, mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SkillPluginStore, scanSkillPack, skillCatalog } from "../src/plugins/third-party";
@@ -13,14 +13,17 @@ test("a Skills pack is namespaced, readable, and absent after disabling", async 
   await writeFile(join(pack, "skills", "proof", "reference.txt"), "reference");
   const store = new SkillPluginStore(root);
   await writeFile(join(root, "plugin-packs", "installed.json"), JSON.stringify({ plugins: [{ id: "sample", name: "sample", source: "https://github.com/a/sample.git", revision: "a".repeat(40), enabled: true, skillCount: 1 }] }));
+  // A legacy document without the store tag must still load.
+  expect((await store.list()).map(item => item.id)).toEqual(["sample"]);
 
   const skills = await store.loadSkills();
   expect(skills.map(skill => skill.name)).toEqual(["sample:proof"]);
-  expect(skills[0].containRoot).toBe(await import("node:fs/promises").then(fs => fs.realpath(pack)));
+  expect(skills[0].containRoot).toBe(await realpath(pack));
   expect((await readFile(skills[0].filePath, "utf8"))).toContain("Check the result.");
   expect(skillCatalog(skills).join("\n")).toContain("skill://<name>");
 
   await store.setEnabled("sample", false);
+  expect(JSON.parse(await readFile(join(root, "plugin-packs", "installed.json"), "utf8"))).toMatchObject({ format: "plugin-packs", version: 1 });
   expect(await store.loadSkills()).toEqual([]);
   expect(await scanSkillPack(pack, "sample")).toHaveLength(1);
 });

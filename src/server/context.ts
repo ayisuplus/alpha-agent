@@ -149,7 +149,11 @@ export async function createServerContext() {
 
   async function loadLedger(id: string): Promise<TaskLedger | null> {
     if (!/^[0-9a-f-]{36}$/.test(id)) return null;
-    return TaskLedger.load(join(dataRoot, "tasks", `${id}.json`)).catch(() => null);
+    const ledger = await TaskLedger.load(join(dataRoot, "tasks", `${id}.json`)).catch(() => null);
+    // The approval stores are per-dataRoot singletons; each task's ledger registers under its own id so events land
+    // in the right task log.
+    if (ledger) { commandApprovals.attach(ledger); webPermissions.attach(ledger); }
+    return ledger;
   }
 
   async function taskRootAllowed(ledger: TaskLedger): Promise<boolean> {
@@ -441,11 +445,12 @@ export async function createServerContext() {
   }
 
   const webPermissions = new WebPermissionStore(dataRoot);
+  const commandApprovals = commandApprovalStore(dataRoot);
   return {
     appRoot, workspaceRoot, dataRoot, productsRoot, directBaselineRoot,
     settingsStore, skillPluginStore, workbenchMeta, projectStore, webPermissions,
     agentPresetStore: new AgentPresetStore(dataRoot),
-    commandApprovals: commandApprovalStore(dataRoot),
+    commandApprovals,
     mcpPermissions: new MCPPermissionStore(dataRoot),
     operationJournal: new OperationJournal(dataRoot),
     taskQueue: new TaskQueueStore(dataRoot),

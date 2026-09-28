@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { warnUnknownStoreVersion } from "./store-tag";
 
 interface MediaJob {
   projectRoot?: string;
@@ -42,6 +43,7 @@ export async function assertGeneratedAssetsIntact(projectRoot: string, dataRoot:
   });
   for (const name of entries.filter(name => name.endsWith(".json") && !name.endsWith(".workflow.json"))) {
     const job = JSON.parse(await readFile(join(jobsDir, name), "utf8")) as MediaJob;
+    warnUnknownStoreVersion("comfy-jobs", job);
     if (job.projectRoot !== resolve(projectRoot) || job.state !== "completed") continue;
     const asset = job.asset ?? job.candidateAsset;
     const expected = job.imageSha256 ?? job.audioSha256 ?? job.videoSha256;

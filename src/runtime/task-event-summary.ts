@@ -140,7 +140,19 @@ export function summarizeTaskEvent(event: TaskEvent): TaskTimelineEvent | null {
     case "checkpoint/started": return { ...row, label: "自动提交进行中" };
     case "checkpoint/committed": return { ...row, label: "检查点已提交", tone: "success" };
     case "checkpoint/failed": return { ...row, label: "自动提交失败", detail: detail(event.payload.reason), tone: "danger" };
+    case "operation/started": return { ...row, label: "运行已登记", tone: "info" };
+    case "approval/requested": return { ...row, label: `待批准：${event.payload.purpose}`, detail: detail([...(event.payload.argv ?? []), ...(event.payload.exactAction ? [event.payload.exactAction] : [])].join(" ") || event.payload.reason), tone: "warning" };
+    case "approval/reviewed": return { ...row, label: `审批：${event.payload.decision === "approved" ? "已批准" : event.payload.decision === "denied" ? "已拒绝" : "待人工决定"}`, detail: detail(event.payload.reason), tone: event.payload.decision === "approved" ? "success" : "warning" };
+    case "approval/finished": return { ...row, label: `审批动作完成 · 退出码 ${event.payload.exitCode}`, detail: detail(event.payload.logPath), tone: event.payload.exitCode === 0 ? "success" : "warning" };
+    case "web-approval/requested": return { ...row, label: `网页授权待批：${event.payload.scope}`, detail: detail(event.payload.kind), tone: "warning" };
+    case "web-approval/decided": return { ...row, label: `网页授权：${event.payload.approved ? "已批准" : "已拒绝"}`, tone: event.payload.approved ? "success" : "warning" };
+    case "web-approval/read-granted": return { ...row, label: `网页只读授权：${event.payload.scope}`, tone: "success" };
+    case "web-approval/write-finished": return { ...row, label: event.payload.uncertain ? "网页写入结果不确定" : "网页写入完成", tone: event.payload.uncertain ? "warning" : "success" };
     // Pure bookkeeping: no value on the timeline.
+    case "operation/finished":
+    case "approval/claimed":
+    case "web-approval/write-begun":
+    case "web-approval/reconciled":
     case "guidance/status-changed":
     case "candidates/set":
     case "failure/cleared":

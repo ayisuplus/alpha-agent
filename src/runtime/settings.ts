@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { DEFAULT_MODEL_PROVIDERS, isAllowedModelSelector, isProviderId } from "./model-policy";
+import { warnUnknownStoreVersion } from "./store-tag";
 
 export type FontSize = "sm" | "md" | "lg";
 
 export interface AlphaSettings {
   version: 1;
+  format: "settings";
   revision?: number;
   /** `providers` lists the model services Alpha may use; model choices outside it are dropped. */
   model: { default: string | null; translation: string | null; providers: string[] };
@@ -29,6 +31,7 @@ export const DEFAULT_SETTINGS: AlphaSettings = {
   plugins: { comfyui: true },
   notifications: { enabled: true },
   ui: { scale: 1, fontSize: "md", sidebarCollapsed: false, previewCollapsed: false, previewRatio: 0.46 },
+  format: "settings",
 };
 
 export const LIMITS = {
@@ -147,6 +150,7 @@ export function mergeSettings(current: AlphaSettings, input: unknown, strict = t
       previewCollapsed: pick(ui, "previewCollapsed", current.ui.previewCollapsed, bool, strict, "预览栏"),
       previewRatio: pick(ui, "previewRatio", current.ui.previewRatio, number(...LIMITS.previewRatio, false), strict, "预览宽度"),
     },
+    format: "settings",
   };
 }
 
@@ -189,6 +193,7 @@ export class SettingsStore {
   async get(): Promise<AlphaSettings> {
     if (!this.cached) {
       const stored = await this.json.read() ?? {};
+      warnUnknownStoreVersion("settings", stored);
       this.cached = mergeSettings(DEFAULT_SETTINGS, stored, false);
       const revision = (stored as { revision?: unknown }).revision;
       this.cached.revision = typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0 ? revision : 0;
@@ -196,6 +201,7 @@ export class SettingsStore {
     return this.cached;
   }
 
+  // .alpha/settings.json (settings store): v1 = AlphaSettings plus its format tag; a version bump must migrate inside mergeSettings, the only document loader.
   async update(patch: unknown): Promise<AlphaSettings> {
     const run = this.updates.then(async () => {
       const next = mergeSettings(await this.get(), patch, true);
@@ -218,8 +224,11 @@ export interface TaskMeta {
 }
 
 /** Workbench-only annotations for tasks (display title, pinning, archiving); the task ledger is never touched. */
+// .alpha/workbench.json (workbench store): v1 = {tasks, format, version}; a version bump must migrate in all() before caching.
+type WorkbenchFile = { tasks: Record<string, TaskMeta>; format: "workbench"; version: 1 };
+
 export class WorkbenchMeta {
-  private readonly json: JsonFile<{ tasks: Record<string, TaskMeta> }>;
+  private readonly json: JsonFile<WorkbenchFile>;
   private cached: Record<string, TaskMeta> | null = null;
   private updates: Promise<void> = Promise.resolve();
 
@@ -229,7 +238,8 @@ export class WorkbenchMeta {
 
   async all(): Promise<Record<string, TaskMeta>> {
     if (!this.cached) {
-      const stored = await this.json.read() as { tasks?: unknown } | undefined;
+      const stored = await this.json.read() as { tasks?: unknown; version?: number } | undefined;
+      if (stored) warnUnknownStoreVersion("workbench", stored);
       this.cached = stored?.tasks && typeof stored.tasks === "object" ? stored.tasks as Record<string, TaskMeta> : {};
     }
     return this.cached;
@@ -250,7 +260,7 @@ export class WorkbenchMeta {
     const run = this.updates.then(async () => {
       const next: TaskMeta = { ...await this.get(taskId), autoTitle: autoTitle.trim().replace(/\s+/g, " ").slice(0, 80) };
       const tasks = { ...await this.all(), [taskId]: next };
-      await this.json.write({ tasks });
+      await this.json.write({ tasks, format: "workbench", version: 1 });
       this.cached = tasks;
       return next;
     });
@@ -276,7 +286,7 @@ export class WorkbenchMeta {
     const tasks = { ...await this.all() };
     if (Object.keys(next).length) tasks[taskId] = next;
     else delete tasks[taskId];
-    await this.json.write({ tasks });
+    await this.json.write({ tasks, format: "workbench", version: 1 });
     this.cached = tasks;
     return next;
   }

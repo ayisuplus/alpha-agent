@@ -2,7 +2,12 @@ import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, truncate,
 import { basename, dirname, join } from "node:path";
 import type { TaskState } from "../task-ledger";
 import { EventConflictError } from "./errors";
-import type { TaskEvent, TaskEventDraft } from "./types";
+import type { TaskActor, TaskEvent, TaskEventDraft } from "./types";
+
+/** The minimum an event must carry: task events and the global store logs (queue, automations) both satisfy it. */
+export interface LogDraft { at: string; actor: TaskActor; runId?: string; type: string; payload: unknown }
+/** A draft with the sequence number the log assigned it; distributes over unions so event types stay discriminated. */
+export type LoggedEvent<E extends LogDraft = TaskEvent> = E extends LogDraft ? E & { seq: number } : never;
 
 /**
  * Append-only task event log: `<dataRoot>/tasks/<id>/events.v1.jsonl`, one JSON object per line
@@ -40,14 +45,14 @@ async function orDefault<T>(promise: Promise<T>, fallback: T): Promise<T> {
 }
 
 /** Splits log contents into durable events plus the byte length they occupy; a torn trailing line is left out. */
-function durablePrefix(contents: string): { events: TaskEvent[]; validBytes: number } {
-  const events: TaskEvent[] = [];
+function durablePrefix<E extends { seq: number } = TaskEvent>(contents: string): { events: E[]; validBytes: number } {
+  const events: E[] = [];
   let validBytes = 0;
   let offset = 0;
   for (const line of contents.split("\n")) {
     const length = Buffer.byteLength(line) + 1;
     if (!line.trim()) { offset += length; continue; }
-    try { events.push(JSON.parse(line) as TaskEvent); } catch (error) {
+    try { events.push(JSON.parse(line) as E); } catch (error) {
       if (offset + length === contents.length + 1) break;   // last line, cut short by a crash
       throw error;
     }
@@ -91,16 +96,16 @@ export async function inspectLogTail(dir: string): Promise<LogTail> {
 }
 
 /** Every durable event in order, optionally starting at the byte offset a snapshot recorded. */
-export async function readEvents(dir: string, fromOffset = 0): Promise<TaskEvent[]> {
+export async function readEvents<E extends { seq: number } = TaskEvent>(dir: string, fromOffset = 0): Promise<E[]> {
   const file = eventLogPath(dir);
   const size = await orDefault(stat(file).then(item => item.size), 0);
   if (size <= fromOffset) return [];
-  if (!fromOffset) return durablePrefix(await orDefault(readFile(file, "utf8"), "")).events;
+  if (!fromOffset) return durablePrefix<E>(await orDefault(readFile(file, "utf8"), "")).events;
   const handle = await open(file, "r");
   try {
     const buffer = Buffer.alloc(size - fromOffset);
     await handle.read(buffer, 0, buffer.length, fromOffset);
-    return durablePrefix(buffer.toString("utf8")).events;
+    return durablePrefix<E>(buffer.toString("utf8")).events;
   } finally {
     await handle.close();
   }
@@ -146,12 +151,12 @@ async function withLogLock<T>(dir: string, run: () => Promise<T>): Promise<T> {
  * before the lock is released, so a writer that projects the state cannot be interleaved with another append and leave
  * readers a projection older than the log.
  */
-export async function appendEvent(dir: string, draft: TaskEventDraft, expectedSeq: number, afterAppend?: (event: TaskEvent) => Promise<void>): Promise<TaskEvent> {
+export async function appendEvent<E extends LogDraft>(dir: string, draft: E, expectedSeq: number, afterAppend?: (event: LoggedEvent<E>) => Promise<void>): Promise<LoggedEvent<E>> {
   return withLogLock(dir, async () => {
     const tail = await inspectLogTail(dir);
     if (tail.torn && tail.validBytes < tail.size) await truncate(eventLogPath(dir), tail.validBytes);
     if (tail.seq !== expectedSeq) throw new EventConflictError(expectedSeq, tail.seq);
-    const event = { seq: expectedSeq + 1, at: draft.at, actor: draft.actor, ...(draft.runId ? { runId: draft.runId } : {}), type: draft.type, payload: draft.payload } as TaskEvent;
+    const event = { seq: expectedSeq + 1, at: draft.at, actor: draft.actor, ...(draft.runId ? { runId: draft.runId } : {}), type: draft.type, payload: draft.payload } as LoggedEvent<E>;
     await appendFile(eventLogPath(dir), `${JSON.stringify(event)}\n`);
     if (afterAppend) await afterAppend(event);
     return event;
@@ -162,13 +167,13 @@ export async function appendEvent(dir: string, draft: TaskEventDraft, expectedSe
  * Appends the event a plan produces, planning *inside* the lock. When another writer got there first the plan is
  * re-made after `onStale` re-folds, so sustained contention resolves instead of exhausting a retry budget.
  */
-export async function appendPlannedEvent(
+export async function appendPlannedEvent<E extends LogDraft>(
   dir: string,
   expectedSeq: number,
-  plan: () => Promise<TaskEventDraft | null>,
+  plan: () => Promise<E | null>,
   onStale: () => Promise<number>,
-  afterAppend?: (event: TaskEvent) => Promise<void>,
-): Promise<TaskEvent | null> {
+  afterAppend?: (event: LoggedEvent<E>) => Promise<void>,
+): Promise<LoggedEvent<E> | null> {
   return withLogLock(dir, async () => {
     let tail = await inspectLogTail(dir);
     if (tail.torn && tail.validBytes < tail.size) await truncate(eventLogPath(dir), tail.validBytes);
@@ -180,7 +185,7 @@ export async function appendPlannedEvent(
     }
     const draft = await plan();
     if (!draft) return null;
-    const event = { seq: expectedSeq + 1, at: draft.at, actor: draft.actor, ...(draft.runId ? { runId: draft.runId } : {}), type: draft.type, payload: draft.payload } as TaskEvent;
+    const event = { seq: expectedSeq + 1, at: draft.at, actor: draft.actor, ...(draft.runId ? { runId: draft.runId } : {}), type: draft.type, payload: draft.payload } as LoggedEvent<E>;
     await appendFile(eventLogPath(dir), `${JSON.stringify(event)}\n`);
     if (afterAppend) await afterAppend(event);
     return event;

@@ -74,3 +74,14 @@ test("a damaged MCP policy is preserved and cannot be replaced by a new grant", 
   await expect(new MCPPermissionStore(root).set("mcp__alpha_sample_echo__send", "write")).rejects.toThrow();
   expect(await readFile(path, "utf8")).toBe("{damaged");
 });
+
+test("mcp-permissions.json carries its store tag and an untagged document still loads", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-mcp-tag-"));
+  const store = new MCPPermissionStore(root);
+  const name = "mcp__alpha_sample_echo__send";
+  await store.set(name, "write");
+  expect(JSON.parse(await readFile(join(root, "mcp-permissions.json"), "utf8"))).toMatchObject({ format: "mcp-permissions", version: 1 });
+  // A legacy document without the tag must still load.
+  await writeFile(join(root, "mcp-permissions.json"), JSON.stringify({ permissions: { [name]: "deny" }, receipts: {} }));
+  expect(await store.list()).toEqual({ [name]: "deny" });
+});

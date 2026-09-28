@@ -3,6 +3,7 @@ import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, unlink } f
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { TaskLedger, fingerprintSource } from "./task-ledger";
 import type { ImportSnapshot } from "./workspace-import";
+import { warnUnknownStoreVersion } from "./store-tag";
 
 export interface ApplyChange {
   path: string;
@@ -53,6 +54,7 @@ async function snapshotFor(ledger: TaskLedger, dataRoot: string): Promise<Import
   const file = ledger.state.workspaceOrigin?.snapshotFile;
   if (ledger.state.taskType !== "code-change" || !file || !inside(join(resolve(dataRoot), "imports"), resolve(file))) throw new Error("Task has no managed import snapshot");
   const snapshot = JSON.parse(await readFile(file, "utf8")) as ImportSnapshot;
+  warnUnknownStoreVersion("imports", snapshot);
   if (resolve(snapshot.managedPath) !== resolve(ledger.state.projectRoot) || resolve(snapshot.sourcePath) !== resolve(ledger.state.workspaceOrigin?.sourcePath ?? "")) throw new Error("Import snapshot does not match task workspace");
   return snapshot;
 }

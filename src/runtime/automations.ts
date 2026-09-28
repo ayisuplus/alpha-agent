@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isAllowedModelSelector } from "./model-policy";
+import {
+  applyAutomationEvent, commitGlobal, foldAutomations, globalLogDir, loadGlobalLog,
+  type GlobalEventPlan, type GlobalLog,
+} from "./global-events";
 
 export type AutomationSchedule = { kind: "once"; at: string } | { kind: "rrule"; rule: string; timeZone: string; startAt: string };
 export interface Automation {
@@ -127,8 +131,12 @@ function checked(input: AutomationInput): AutomationInput {
 
 export class AutomationStore {
   private readonly file: string;
+  private readonly log: GlobalLog<AutomationState>;
   private pending: Promise<unknown> = Promise.resolve();
-  constructor(dataRoot: string) { this.file = join(dataRoot, "automations.json"); }
+  constructor(dataRoot: string) {
+    this.file = join(dataRoot, "automations.json");
+    this.log = { dir: globalLogDir(dataRoot, "automations"), origin: "automation/imported", fold: foldAutomations, apply: applyAutomationEvent };
+  }
   private async read(): Promise<AutomationState> {
     const raw = await readFile(this.file, "utf8").catch(error => { if ((error as NodeJS.ErrnoException).code === "ENOENT") return '{"automations":[],"runs":[]}'; throw error; });
     const data = JSON.parse(raw) as AutomationState;
@@ -142,69 +150,134 @@ export class AutomationStore {
     await rename(temp, this.file);
   }
   private serial<T>(work: () => Promise<T>): Promise<T> { const result = this.pending.then(work); this.pending = result.then(() => undefined, () => undefined); return result; }
+  /** The folded event log; the first mutation imports a pre-event projection as the log's origin event. */
+  private load(): Promise<{ state: AutomationState; seq: number }> { return loadGlobalLog(this.log, () => this.read()); }
+  private commit(view: { state: AutomationState; seq: number }, plans: readonly GlobalEventPlan[]): Promise<void> {
+    return commitGlobal(this.log, view, plans, state => this.write(state));
+  }
   list(): Promise<AutomationState> { return this.serial(async () => { const data = await this.read(); return { automations: data.automations.filter(item => !item.deletedAt), runs: data.runs }; }); }
   async create(input: AutomationInput, status: Automation["status"] = "ACTIVE"): Promise<Automation> {
     if (status !== "ACTIVE" && status !== "PAUSED") throw new Error("Invalid automation status");
     const value = checked(input);
     return this.serial(async () => {
-      const data = await this.read();
+      const view = await this.load();
       const now = new Date().toISOString();
       const nextRunAt = nextAutomationTime(value.schedule, new Date(Date.now() - 1));
       if (!nextRunAt) throw new Error("Schedule has no future occurrence");
       const automation: Automation = { ...value, id: randomUUID(), status, nextRunAt, createdAt: now, updatedAt: now };
-      data.automations.push(automation); await this.write(data); return automation;
+      await this.commit(view, [{ type: "automation/created", payload: { automation } }]);
+      return automation;
     });
   }
   async update(id: string, patch: Partial<AutomationInput> & { status?: Automation["status"] }): Promise<Automation> {
     return this.serial(async () => {
-      const data = await this.read();
-      const item = data.automations.find(value => value.id === id && !value.deletedAt);
-      if (!item) throw new Error("Automation not found");
+      const view = await this.load();
+      const current = view.state.automations.find(value => value.id === id && !value.deletedAt);
+      if (!current) throw new Error("Automation not found");
       if (patch.status && patch.status !== "ACTIVE" && patch.status !== "PAUSED") throw new Error("Invalid automation status");
       const fields = ["name", "prompt", "kind", "schedule", "modelSelector", "notificationPolicy", "projectId", "mountId", "targetTaskId", "executor"] as const;
       const supplied = Object.fromEntries(fields.filter(key => Object.prototype.hasOwnProperty.call(patch, key)).map(key => [key, patch[key]]));
-      const candidate = { ...item, ...supplied };
+      const candidate = { ...current, ...supplied };
       if (candidate.kind === "cron") delete candidate.targetTaskId;
       else { delete candidate.projectId; delete candidate.mountId; }
       const next = checked(candidate);
-      const wasPaused = item.status === "PAUSED";
-      Object.assign(item, next, { status: patch.status ?? item.status, updatedAt: new Date().toISOString() });
+      const wasPaused = current.status === "PAUSED";
+      const item: Automation = { ...current };
+      Object.assign(item, next, { status: patch.status ?? current.status, updatedAt: new Date().toISOString() });
       if (item.kind === "cron") delete item.targetTaskId;
       else { delete item.projectId; delete item.mountId; }
       if (patch.schedule || patch.status === "ACTIVE" && wasPaused) item.nextRunAt = nextAutomationTime(item.schedule, new Date(Date.now() - 1));
       if (item.status === "ACTIVE" && !item.nextRunAt) item.nextRunAt = nextAutomationTime(item.schedule, new Date(Date.now() - 1));
-      await this.write(data); return item;
+      // `updated` records the rewritten record; `status-changed` marks the transition itself. A patch that touches
+      // neither still bumps `updatedAt`, so it gets an `updated` event exactly where the store used to write.
+      const statusChanged = item.status !== current.status;
+      const plans: GlobalEventPlan[] = [];
+      if (fields.some(key => Object.prototype.hasOwnProperty.call(patch, key)) || !statusChanged) plans.push({ type: "automation/updated", payload: { automation: item } });
+      if (statusChanged) plans.push({ type: "automation/status-changed", payload: { id, status: item.status, updatedAt: item.updatedAt, nextRunAt: item.nextRunAt } });
+      await this.commit(view, plans);
+      return item;
     });
   }
-  async delete(id: string): Promise<void> { await this.serial(async () => { const data = await this.read(); const item = data.automations.find(value => value.id === id && !value.deletedAt); if (!item) throw new Error("Automation not found"); item.status = "PAUSED"; item.deletedAt = new Date().toISOString(); await this.write(data); }); }
-  async runNow(id: string): Promise<AutomationRun> { return this.serial(async () => { const data = await this.read(); const item = data.automations.find(value => value.id === id && !value.deletedAt); if (!item || item.status !== "ACTIVE") throw new Error("Automation is not active"); if (data.runs.some(run => run.automationId === id && ["pending", "running"].includes(run.status))) throw new Error("Automation already has a pending run"); const run: AutomationRun = { id: randomUUID(), automationId: id, dueAt: new Date().toISOString(), status: "pending", missedCount: 0 }; data.runs.push(run); await this.write(data); return run; }); }
+  async delete(id: string): Promise<void> {
+    await this.serial(async () => {
+      const view = await this.load();
+      const item = view.state.automations.find(value => value.id === id && !value.deletedAt);
+      if (!item) throw new Error("Automation not found");
+      await this.commit(view, [{ type: "automation/deleted", payload: { id, deletedAt: new Date().toISOString() } }]);
+    });
+  }
+  async runNow(id: string): Promise<AutomationRun> {
+    return this.serial(async () => {
+      const view = await this.load();
+      const item = view.state.automations.find(value => value.id === id && !value.deletedAt);
+      if (!item || item.status !== "ACTIVE") throw new Error("Automation is not active");
+      if (view.state.runs.some(run => run.automationId === id && ["pending", "running"].includes(run.status))) throw new Error("Automation already has a pending run");
+      const run: AutomationRun = { id: randomUUID(), automationId: id, dueAt: new Date().toISOString(), status: "pending", missedCount: 0 };
+      await this.commit(view, [{ type: "automation-run/queued", payload: { run } }]);
+      return run;
+    });
+  }
   async advanceDue(now = new Date()): Promise<AutomationRun[]> {
     return this.serial(async () => {
-      const data = await this.read(); const due: AutomationRun[] = []; let changed = false;
-      for (const item of data.automations) {
+      const view = await this.load();
+      const plans: GlobalEventPlan[] = [];
+      const due: AutomationRun[] = [];
+      for (const item of view.state.automations) {
         if (item.deletedAt || item.status !== "ACTIVE" || !item.nextRunAt || new Date(item.nextRunAt).getTime() > now.getTime()) continue;
         const at = item.nextRunAt;
-        let next = item.schedule.kind === "once" ? null : nextAutomationTime(item.schedule, now);
+        const next = item.schedule.kind === "once" ? null : nextAutomationTime(item.schedule, now);
         let missedCount = 0;
         if (item.schedule.kind === "rrule") {
           let cursor = at;
           while (missedCount < 1440) { const following = nextAutomationTime(item.schedule, new Date(cursor)); if (!following || new Date(following).getTime() > now.getTime()) break; missedCount++; cursor = following; }
         }
-        item.nextRunAt = next;
-        changed = true;
-        if (data.runs.some(run => run.automationId === item.id && ["pending", "running"].includes(run.status))) continue;
+        // The due advance rewrites `nextRunAt`, which is what `automation/updated` carries; the run it schedules is
+        // the queued event that follows it.
+        plans.push({ type: "automation/updated", payload: { automation: { ...item, nextRunAt: next } } });
+        if (view.state.runs.some(run => run.automationId === item.id && ["pending", "running"].includes(run.status))) continue;
         const expired = now.getTime() - new Date(at).getTime() > catchUpWindow;
         const run: AutomationRun = { id: randomUUID(), automationId: item.id, dueAt: at, status: expired ? "skipped" : "pending", missedCount, ...(expired ? { result: "Missed the 24-hour catch-up window", finishedAt: now.toISOString() } : {}) };
-        data.runs.push(run); if (!expired) due.push(run);
+        plans.push({ type: "automation-run/queued", payload: { run } });
+        if (!expired) due.push(run);
       }
-      if (changed) await this.write(data);
+      if (plans.length) await this.commit(view, plans);
       return due;
     });
   }
   /** The oldest pending run, passing over runs `skip` rejects (they would follow a busy task). */
   next(skip: (run: AutomationRun, automation: Automation | undefined) => boolean = () => false): Promise<AutomationRun | null> { return this.serial(async () => { const data = await this.read(); return data.runs.find(run => run.status === "pending" && !skip(run, data.automations.find(item => item.id === run.automationId))) ?? null; }); }
-  async start(id: string, taskId: string, operationId: string): Promise<void> { await this.serial(async () => { const data = await this.read(); const run = data.runs.find(item => item.id === id); if (!run || run.status !== "pending") throw new Error("Automation run is not pending"); Object.assign(run, { status: "running", taskId, operationId, startedAt: new Date().toISOString() }); await this.write(data); }); }
-  async finish(id: string, status: "complete" | "failed" | "needs-input", result: string): Promise<void> { await this.serial(async () => { const data = await this.read(); const run = data.runs.find(item => item.id === id); if (!run || !["pending", "running"].includes(run.status)) return; Object.assign(run, { status, result, finishedAt: new Date().toISOString() }); await this.write(data); }); }
-  async markRead(id: string): Promise<void> { await this.serial(async () => { const data = await this.read(); const run = data.runs.find(item => item.id === id); if (!run) throw new Error("Automation run not found"); run.readAt = new Date().toISOString(); await this.write(data); }); }
-  async reconcile(): Promise<void> { await this.serial(async () => { const data = await this.read(); let changed = false; for (const run of data.runs) if (run.status === "running") { Object.assign(run, { status: "failed", result: "Interrupted by app shutdown; inspect the task before retry", finishedAt: new Date().toISOString() }); changed = true; } if (changed) await this.write(data); }); }
+  async start(id: string, taskId: string, operationId: string): Promise<void> {
+    await this.serial(async () => {
+      const view = await this.load();
+      const run = view.state.runs.find(item => item.id === id);
+      if (!run || run.status !== "pending") throw new Error("Automation run is not pending");
+      await this.commit(view, [{ type: "automation-run/started", payload: { id, taskId, operationId, startedAt: new Date().toISOString() } }]);
+    });
+  }
+  async finish(id: string, status: "complete" | "failed" | "needs-input", result: string): Promise<void> {
+    await this.serial(async () => {
+      const view = await this.load();
+      const run = view.state.runs.find(item => item.id === id);
+      if (!run || !["pending", "running"].includes(run.status)) return;
+      await this.commit(view, [{ type: "automation-run/finished", payload: { id, status, result, finishedAt: new Date().toISOString() } }]);
+    });
+  }
+  async markRead(id: string): Promise<void> {
+    await this.serial(async () => {
+      const view = await this.load();
+      const run = view.state.runs.find(item => item.id === id);
+      if (!run) throw new Error("Automation run not found");
+      await this.commit(view, [{ type: "automation-run/read", payload: { id, readAt: new Date().toISOString() } }]);
+    });
+  }
+  async reconcile(): Promise<void> {
+    await this.serial(async () => {
+      const view = await this.load();
+      const plans = view.state.runs.filter(run => run.status === "running").map(run => ({
+        type: "automation-run/finished" as const,
+        payload: { id: run.id, status: "failed" as const, result: "Interrupted by app shutdown; inspect the task before retry", finishedAt: new Date().toISOString() },
+      }));
+      if (plans.length) await this.commit(view, plans);
+    });
+  }
 }

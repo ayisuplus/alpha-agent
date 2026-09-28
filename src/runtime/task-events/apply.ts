@@ -1,12 +1,14 @@
 import type { TaskState } from "../task-ledger";
 import { InvariantError } from "./errors";
 import type { TaskEvent, TaskEventType } from "./types";
+import { approvalReducers } from "./apply/approval";
 import { contextReducers } from "./apply/context";
 import { contractReducers } from "./apply/contract";
 import { evidenceReducers } from "./apply/evidence";
 import { lifecycleReducers } from "./apply/lifecycle";
 import { planReducers } from "./apply/plan";
 import { mailboxReducers } from "./apply/mailbox";
+import { operationReducers } from "./apply/operation";
 import { workerReducers } from "./apply/worker";
 
 /**
@@ -16,11 +18,13 @@ import { workerReducers } from "./apply/worker";
 type AnyReducer = (state: TaskState, event: TaskEvent) => void;
 
 const reducers = {
+  ...approvalReducers,
   ...contextReducers,
   ...contractReducers,
   ...evidenceReducers,
   ...lifecycleReducers,
   ...mailboxReducers,
+  ...operationReducers,
   ...planReducers,
   ...workerReducers,
 } as unknown as Partial<Record<TaskEventType, AnyReducer>>;

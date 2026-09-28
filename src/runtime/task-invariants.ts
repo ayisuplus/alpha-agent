@@ -47,6 +47,9 @@ export function checkTaskInvariants(state: TaskState, operations: TaskOperationR
   const instances = cognition?.instances ?? [];
 
   // I2 — one in-progress run per task, matching the operation manager's lock.
+  if (state.operation?.status === "running" && state.status !== "active") {
+    add("I2/stale-operation-latch", "I2", `账本仍标记运行中（run ${state.operation.runId}），但任务状态是 ${state.status}`);
+  }
   for (const operation of operations.filter(item => item.taskId === state.id && item.status === "running")) {
     if (state.status !== "active") add("I2/stale-operation-lock", "I2", `操作日志仍标记运行中（run ${operation.runId}），但任务状态是 ${state.status}`);
   }

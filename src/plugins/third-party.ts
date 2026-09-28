@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadSkillsFromDir, type PreparedExtension, type Skill } from "@oh-my-pi/pi-coding-agent";
 import { connectPluginMCP, readPluginMCP } from "./mcp";
+import { warnUnknownStoreVersion } from "../runtime/store-tag";
 
 export interface SkillPlugin {
   id: string;
@@ -106,6 +107,7 @@ export class SkillPluginStore {
   async list(): Promise<SkillPlugin[]> {
     try {
       const parsed = JSON.parse(await readFile(this.file, "utf8")) as { plugins?: SkillPlugin[] };
+      warnUnknownStoreVersion("plugin-packs", parsed);
       if (!Array.isArray(parsed.plugins)) return [];
       return Promise.all(parsed.plugins.map(async plugin => ({
         ...plugin,
@@ -124,7 +126,8 @@ export class SkillPluginStore {
   private async save(plugins: SkillPlugin[]): Promise<void> {
     await mkdir(this.root, { recursive: true });
     const temporary = join(this.root, `installed-${randomUUID()}.tmp`);
-    await writeFile(temporary, JSON.stringify({ plugins }, null, 2));
+    // .alpha/plugin-packs/installed.json (plugin-packs store): v1 = {plugins, format, version}; a version bump must migrate in list().
+    await writeFile(temporary, JSON.stringify({ plugins, format: "plugin-packs", version: 1 }, null, 2));
     await rename(temporary, this.file);
   }
 

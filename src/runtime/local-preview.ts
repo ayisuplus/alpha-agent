@@ -78,6 +78,7 @@ export async function publishLocalPreview(input: {
     port: server.port,
     recordedAt: new Date().toISOString(),
   };
-  await writeFile(join(destination, "preview.json"), JSON.stringify(record, null, 2));
+  // previews/<id>/preview.json (preview store): v1 = LocalPreview plus its format tag; a version bump must migrate in storage.ts's manifest read.
+  await writeFile(join(destination, "preview.json"), JSON.stringify({ ...record, format: "preview", version: 1 }, null, 2));
   return { record, stop: () => server.stop(true) };
 }

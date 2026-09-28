@@ -1,4 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -76,9 +77,17 @@ test("each verification attempt keeps its own evidence and source changes cannot
     expect(first.attemptId).toBeTruthy();
     expect(ledger.state.status).toBe("complete");
     await ledger.reopen("repeat verification");
+    // A legacy progress document without the store tag must load and be resumed, not discarded.
+    await mkdir(join(dataRoot, "browser-progress"), { recursive: true });
+    await writeFile(join(dataRoot, "browser-progress", `${ledger.state.id}.json`), JSON.stringify({
+      previewId: "preview-one", revision,
+      planHash: createHash("sha256").update(await readFile(join(product, "alpha-verification.json"), "utf8")).digest("hex"),
+      nonce: "resume12", nextStep: 40, inFlight: null, results: [],
+    }));
     await verifyBrowserPlan(ledger, 1234, dataRoot, undefined, undefined, false);
     const second = ledger.state.evidence.findLast(item => item.kind === "browser")!;
     expect(ledger.state.status).toBe("active");
+    expect(JSON.parse(await readFile(second.source, "utf8")).results).toEqual([]);
     await ledger.complete();
     expect(second.source).not.toBe(first.source);
     expect(second.attemptId).not.toBe(first.attemptId);
@@ -94,6 +103,7 @@ test("each verification attempt keeps its own evidence and source changes cannot
     await ledger.reopen("check changed source");
     changeSource = true;
     await expect(verifyBrowserPlan(ledger, 1234, dataRoot)).rejects.toThrow("Source changed");
+    expect(JSON.parse(await readFile(join(dataRoot, "browser-progress", `${ledger.state.id}.json`), "utf8"))).toMatchObject({ format: "browser-progress", version: 1 });
     expect(ledger.state.status).toBe("active");
     expect(ledger.state.preview).toBeNull();
     expect(ledger.state.evidence.findLast(item => item.kind === "browser")?.passed).toBe(false);

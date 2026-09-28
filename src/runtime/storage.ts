@@ -1,5 +1,6 @@
 import { lstat, readFile, readdir, realpath, rm } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { warnUnknownStoreVersion } from "./store-tag";
 
 const PREVIEW_ID = /^[0-9a-f-]{36}$/;
 
@@ -37,7 +38,11 @@ export async function stalePreviews(dataRoot: string, protectedIds: Set<string>)
     const real = await realpath(path).catch(() => null);
     const inside = real ? relative(realRoot, real) : "";
     if (!real || inside !== entry.name || inside.startsWith("..") || isAbsolute(inside)) continue;
-    const manifest = await readFile(join(path, "preview.json"), "utf8").then(text => JSON.parse(text) as { id?: unknown }).catch(() => null);
+    const manifest = await readFile(join(path, "preview.json"), "utf8").then(text => {
+      const parsed = JSON.parse(text) as { id?: unknown };
+      warnUnknownStoreVersion("preview", parsed);
+      return parsed;
+    }).catch(() => null);
     if (manifest?.id !== entry.name) continue;
     const size = await sizeOf(path);
     if (size.safe) candidates.push({ id: entry.name, path, bytes: size.bytes });

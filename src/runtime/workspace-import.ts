@@ -107,7 +107,8 @@ export async function importCodeWorkspace(input: { sourcePath: string; productsR
   }
   const snapshot: ImportSnapshot = { sourcePath, managedPath, kind: source.kind, importedAt: new Date().toISOString(), files, excluded };
   await mkdir(dirname(manifestFile), { recursive: true });
-  await writeFile(`${manifestFile}.tmp`, JSON.stringify(snapshot, null, 2));
+  // .alpha/imports/<id>.json (imports store): v1 = ImportSnapshot plus its format tag; a version bump must migrate in the snapshot reader (workspace-apply).
+  await writeFile(`${manifestFile}.tmp`, JSON.stringify({ ...snapshot, format: "imports", version: 1 }, null, 2));
   await rename(`${manifestFile}.tmp`, manifestFile);
   const origin: WorkspaceOrigin = { kind: source.kind, sourcePath, snapshotFile: manifestFile, initialRevision: await fingerprintSource(managedPath), checks: await configuredChecks(managedPath) };
   const ledger = await TaskLedger.create(dataRoot, { objective: input.objective, projectRoot: managedPath, taskType: "code-change", workspaceOrigin: origin,

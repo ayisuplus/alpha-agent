@@ -5,6 +5,7 @@ import { type } from "@oh-my-pi/omptype";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
 import { ComfyClient, type VideoOutput } from "./comfy-client";
 import { ensureGeneratedAsset } from "./media-integrity";
+import { warnUnknownStoreVersion } from "./store-tag";
 
 const parameters = type({ referenceAsset: "string", prompt: "string" });
 type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>;
@@ -52,12 +53,14 @@ export async function generateVideoCandidate(projectRoot: string, dataRoot: stri
   try {
     const handle = await open(recordPath, "wx");
     job = { promptId: randomUUID(), projectRoot: resolve(projectRoot), referenceAsset, referenceSha256: sha(reference), prompt: prompt.trim(), seed: Math.floor(Math.random() * 2 ** 48), presetSha256: sha(presetBytes), workflow: join(jobsDir, `video-${key}.workflow.json`), state: "prepared" };
-    try { await handle.writeFile(JSON.stringify(job, null, 2)); } finally { await handle.close(); }
+    // .alpha/comfy-jobs/video-<key>.json (comfy-jobs store): v1 = Job plus its format tag; a version bump must migrate at the record read below.
+    try { await handle.writeFile(JSON.stringify({ ...job, format: "comfy-jobs", version: 1 }, null, 2)); } finally { await handle.close(); }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     job = JSON.parse(await readFile(recordPath, "utf8")) as Job;
+    warnUnknownStoreVersion("comfy-jobs", job);
   }
-  const save = async () => writeFile(recordPath, JSON.stringify(job, null, 2));
+  const save = async () => writeFile(recordPath, JSON.stringify({ ...job, format: "comfy-jobs", version: 1 }, null, 2));
   if (!job.projectRoot) { job.projectRoot = resolve(projectRoot); await save(); }
   if (job.projectRoot !== resolve(projectRoot)) throw new Error("Video job belongs to another project");
   const assetPath = join(projectRoot, "public", "alpha-assets", `${key}.mp4`);
@@ -84,7 +87,8 @@ export async function generateVideoCandidate(projectRoot: string, dataRoot: stri
       graph["16"].inputs.prompt = job.prompt;
       graph["8"].inputs.seed = job.seed;
       for (const nodeId of ["33", "44", "54", "57"]) graph[nodeId].inputs.filename_prefix = `Alpha/${key.slice(0, 12)}-${nodeId}`;
-      await writeFile(job.workflow, JSON.stringify(graph, null, 2));
+      // .alpha/comfy-jobs/video-<key>.workflow.json (comfy-jobs store): v1 archives the submitted graph with its tag; a bump must strip the tag before any replay, and the POST body stays untagged.
+      await writeFile(job.workflow, JSON.stringify({ ...graph, format: "comfy-jobs-workflow", version: 1 }, null, 2));
       job.state = "unknown";
       await save();
       let submitted;

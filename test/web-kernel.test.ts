@@ -1,12 +1,13 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BrowserKernel } from "../src/runtime/browser-kernel";
 import { createBrowserTool } from "../src/runtime/browser-tool";
 import { WebApprovalRequired, WebPermissionStore } from "../src/runtime/web-permissions";
 import { WebRetrieval } from "../src/runtime/web-retrieval";
+import { listResearchSources } from "../src/runtime/research-source";
 import type { WebToolContext } from "../src/runtime/web-tools";
 import { parseWorkerBrowserRequest } from "../src/runtime/worker-browser-tool";
 import type { VisibleBrowser } from "../src/runtime/visible-browser";
@@ -140,4 +141,22 @@ test("worker browser requests reject stale or malformed envelopes", () => {
   expect(() => parseWorkerBrowserRequest({ id, args: { action: "click", selector: "#x" }, deadlineAt: Date.now() - 1 }, id)).toThrow("expired");
   expect(() => parseWorkerBrowserRequest({ id, args: { action: "eval", code: "alert(1)" }, deadlineAt: Date.now() + 1000 }, id)).toThrow("Invalid");
   expect(parseWorkerBrowserRequest({ id, args: { action: "observe" }, deadlineAt: Date.now() + 1000 }, id).id).toBe(id);
+});
+
+test("web state and archived sources carry their store tags and untagged documents still load", async () => {
+  const root = await temporary();
+  const transport = (async (url: string | URL | Request) => {
+    if (String(url).endsWith("/search")) return Response.json({ request_id: "request-1", usage: { credits: 1 }, results: [] });
+    return Response.json({ success: true, data: { markdown: "Full article body", metadata: { title: "Article" } } });
+  }) as typeof fetch;
+  const web = new WebRetrieval(root, async () => "secret-key", transport);
+  await web.search(taskId, "article");
+  expect(JSON.parse(await readFile(join(root, "web", `${taskId}.json`), "utf8"))).toMatchObject({ format: "web", version: 1 });
+  const source = await web.extract(taskId, "https://8.8.8.8/article");
+  expect(JSON.parse(await readFile(join(root, "sources", taskId, `${source.id}.json`), "utf8"))).toMatchObject({ format: "sources", version: 1 });
+  // Legacy documents without the tags must still load.
+  await writeFile(join(root, "web", `${taskId}.json`), JSON.stringify({ searchCount: 1, providerCalls: 1, jobs: {} }));
+  expect(await web.jobs(taskId)).toEqual([]);
+  await writeFile(join(root, "sources", taskId, `${source.id}.json`), JSON.stringify({ ...source }));
+  expect((await listResearchSources(root, taskId)).map(item => item.id)).toEqual([source.id]);
 });

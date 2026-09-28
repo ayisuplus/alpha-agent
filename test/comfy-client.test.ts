@@ -5,7 +5,7 @@ import { generateVoiceAsset } from "../src/runtime/voice-tool";
 import { generateVideoCandidate } from "../src/runtime/video-tool";
 import { assertGeneratedAssetsIntact } from "../src/runtime/media-integrity";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -111,6 +111,10 @@ test("an uncertain image submission is recorded and never posted twice", async (
     await expect(generateImageAsset(...args)).rejects.toThrow("will not resubmit");
     await expect(generateImageAsset(...args)).rejects.toThrow("will not resubmit");
     expect(posts).toBe(1);
+    // The persisted job record carries its store tag; the untagged case is covered by the build preflight test below.
+    const records = (await readdir(join(root, "data", "comfy-jobs"))).filter(name => name.endsWith(".json") && !name.endsWith(".workflow.json"));
+    expect(records).toHaveLength(1);
+    expect(JSON.parse(await readFile(join(root, "data", "comfy-jobs", records[0]!), "utf8"))).toMatchObject({ format: "comfy-jobs", version: 1 });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

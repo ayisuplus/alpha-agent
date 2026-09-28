@@ -256,7 +256,9 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   const bridge = process.env.ALPHA_BROWSER_BRIDGE_PORT && process.env.ALPHA_BROWSER_BRIDGE_TOKEN ? new BrowserBridge() : null;
   const webKernel = options.webKernel ?? new BrowserKernel(Number(process.env.ALPHA_CDP_PORT) || null, bridge);
   const retrieval = new WebRetrieval(authorizationRoot, async (provider: WebProvider) => process.env[provider === "tavily" ? "TAVILY_API_KEY" : "FIRECRAWL_API_KEY"] ?? await bridge?.key(provider) ?? null);
-  const webContext: WebToolContext = { taskId: authorizationTaskId || ledger.state.id, projectRoot, retrieval, permissions: new WebPermissionStore(authorizationRoot), kernel: webKernel, directMode: permission?.mode, onNeedsInput: reason => pauseForInput(reason, "approval") };
+  const webPermissions = new WebPermissionStore(authorizationRoot);
+  webPermissions.attach(ledger);
+  const webContext: WebToolContext = { taskId: authorizationTaskId || ledger.state.id, projectRoot, retrieval, permissions: webPermissions, kernel: webKernel, directMode: permission?.mode, onNeedsInput: reason => pauseForInput(reason, "approval") };
   if (!options.workOrder?.fullAccess && !answering) await webContext.permissions.reconcile(ledger.state.id);
   if (permission) {
     try { await verifySandbox({ cwd: projectRoot, roots: permission.roots, dataRoot: authorizationRoot, network: permission.mode === "full", signal: options.signal }); }
@@ -313,7 +315,9 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   function sessionCustomTools(): CustomTool[] {
     const checks = ledger.state.workspaceOrigin?.checks ?? [];
     const webTools = () => [createSearchTool(webContext), createCrawlTool(webContext), createSiteTool(webContext), createResearchSourceTool(authorizationRoot, authorizationTaskId || ledger.state.id, reason => pauseForInput(reason, "approval"), { retrieval, kernel: webKernel, authorizeRead: scope => webRead(webContext, scope) })];
-    const commandTool = () => createCommandTool(commandApprovalStore(authorizationRoot), authorizationTaskId || ledger.state.id, projectRoot, permission,
+    const commandApprovals = commandApprovalStore(authorizationRoot);
+    commandApprovals.attach(ledger);
+    const commandTool = () => createCommandTool(commandApprovals, authorizationTaskId || ledger.state.id, projectRoot, permission,
       permission?.mode === "auto" ? independentCommandReviewer(authorizationRoot, selector) : undefined,
       (reason, code) => pauseForInput(reason, code ?? "approval"));
     const coordinatorBrowser = (readOnly: boolean) => createBrowserTool(() => options.browserAccess?.() === false || options.getWorkerSupervisor && !options.getWorkerSupervisor().claimBrowser("coordinator") ? null : options.browser ?? null, dataRoot, options.browserUrl, webContext, readOnly);

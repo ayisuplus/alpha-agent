@@ -29,15 +29,23 @@ test("new project gets a safe baseline, a code checkpoint, and independently ver
     await writeFile(join(work, "ignored.txt"), "ignored\n");
     const ledger = await TaskLedger.create(data, { objective: "Change app", projectRoot: work, criteria: [], taskType: "general" });
     const turn = await prepareProjectTurn({ dataRoot: data, projectRoot: work, ledger, runId: crypto.randomUUID() });
+    const journalFile = join(data, "project-turns", `${turn.runId}.json`);
+    expect(JSON.parse(await readFile(journalFile, "utf8"))).toMatchObject({ format: "project-turns", version: 1 });
     expect(ledger.state.checkpointStatus).toBe("pending");
     expect(await git(work, "show", "HEAD:app.ts")).toContain("value = 1");
     expect(await git(work, "ls-files", ".env")).toBe("");
     expect(await git(work, "ls-files", "node_modules", "dist", "ignored.txt")).toBe("");
     await writeFile(join(work, "app.ts"), "export const value = 2;\n");
     await ledger.refreshRevision();
+    // A legacy journal without the tag must still load, and finalization re-tags it on save.
+    const legacy = JSON.parse(await readFile(journalFile, "utf8")) as Record<string, unknown>;
+    delete legacy.format;
+    delete legacy.version;
+    await writeFile(journalFile, JSON.stringify(legacy, null, 2));
     const finished = await finalizeProjectTurn(turn, ledger);
     expect(finished.codeCommits).toHaveLength(1);
     expect(finished.memoryCommit).toMatch(/^[0-9a-f]{40}$/);
+    expect(JSON.parse(await readFile(journalFile, "utf8"))).toMatchObject({ format: "project-turns", version: 1 });
     expect(ledger.state.checkpointStatus).toBe("committed");
     expect(await git(work, "show", "HEAD:app.ts")).toContain("value = 2");
     expect(await readProjectMemory(data, work, ledger)).toContain(ledger.state.id);

@@ -181,6 +181,34 @@ export interface TaskEventPayloads {
   "checkpoint/started": Record<string, never>;
   "checkpoint/committed": { checkpoint: NonNullable<TaskState["checkpoint"]> };
   "checkpoint/failed": { reason: string };
+
+  /** The per-task operation latch: which run was live when the process died. The projection file keeps its shape. */
+  "operation/started": { runId: string; startedAt: string };
+  "operation/finished": { runId: string; finishedAt: string };
+
+  /** Command and exact-action approvals for one task, with their execution receipts. */
+  "approval/requested": {
+    id: string;
+    argv?: string[];
+    exactAction?: string;
+    purpose: string;
+    risk?: string;
+    reason?: string;
+    cwd?: string;
+    network?: boolean;
+    requestedAt: string;
+  };
+  "approval/reviewed": { id: string; reviewer: string; decision: "approved" | "denied" | "escalated"; reason: string; reviewedAt: string };
+  "approval/claimed": { id: string; claimedAt: string };
+  "approval/finished": { id: string; exitCode: number; logPath?: string; revision?: string; finishedAt: string };
+
+  /** Web read grants and external write approvals for one task. */
+  "web-approval/requested": { id: string; scope: string; kind: "read" | "write"; actionId?: string; requestedAt: string };
+  "web-approval/decided": { id: string; approved: boolean; decidedAt: string };
+  "web-approval/read-granted": { scope: string; grantedAt: string };
+  "web-approval/write-begun": { id: string; begunAt: string };
+  "web-approval/write-finished": { id: string; uncertain: boolean; finishedAt: string };
+  "web-approval/reconciled": { reconciledAt: string };
 }
 
 export type TaskEventType = keyof TaskEventPayloads;
@@ -197,8 +225,8 @@ export type TaskEventOf<Type extends TaskEventType> = {
 
 export type TaskEvent = { [Type in TaskEventType]: TaskEventOf<Type> }[TaskEventType];
 
-/** An event as the ledger builds it, before the log assigns `seq`. */
-export type TaskEventDraft<Type extends TaskEventType = TaskEventType> = Omit<TaskEventOf<Type>, "seq">;
+/** An event as the ledger builds it, before the log assigns `seq`; distributes so the type stays discriminated. */
+export type TaskEventDraft<Type extends TaskEventType = TaskEventType> = Type extends TaskEventType ? Omit<TaskEventOf<Type>, "seq"> : never;
 
 /** What a ledger method hands to `commit`; the log stamps `seq`, `at` and `actor`. */
 export type TaskEventPlan = { [Type in TaskEventType]: { type: Type; payload: TaskEventPayloads[Type] } }[TaskEventType];

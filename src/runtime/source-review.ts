@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { extname, join, relative, resolve, sep } from "node:path";
+import { warnUnknownStoreVersion } from "./store-tag";
 
 const TEXT_EXTENSIONS = new Set([".css", ".html", ".js", ".json", ".md", ".ts", ".tsx"]);
 const SOURCE_EXCLUDED_DIRS = new Set([".alpha", ".git", "dist", "node_modules", ".next", ".cache", ".venv", "venv", "__pycache__"]);
@@ -78,7 +79,8 @@ export async function writeSourceReview(dataRoot: string, input: Omit<SourceRevi
   await mkdir(directory, { recursive: true });
   const file = join(directory, `${input.operationId}.json`);
   const temporary = `${file}.${randomUUID()}.tmp`;
-  await writeFile(temporary, JSON.stringify(review));
+  // .alpha/reviews/<taskId>/<operationId>.json (reviews store): v1 = SourceReview plus its format tag; a version bump must migrate in readSourceReviews().
+  await writeFile(temporary, JSON.stringify({ ...review, format: "reviews", version: 1 }));
   await rename(temporary, file);
   return review;
 }
@@ -86,6 +88,10 @@ export async function writeSourceReview(dataRoot: string, input: Omit<SourceRevi
 export async function readSourceReviews(dataRoot: string, taskId: string): Promise<SourceReview[]> {
   const directory = join(dataRoot, "reviews", taskId);
   const names = (await readdir(directory).catch(() => [] as string[])).filter(name => /^[0-9a-f-]{36}\.json$/.test(name));
-  const reviews = await Promise.all(names.map(async name => JSON.parse(await readFile(join(directory, name), "utf8")) as SourceReview));
+  const reviews = await Promise.all(names.map(async name => {
+    const review = JSON.parse(await readFile(join(directory, name), "utf8")) as SourceReview;
+    warnUnknownStoreVersion("reviews", review);
+    return review;
+  }));
   return reviews.sort((a, b) => b.recordedAt.localeCompare(a.recordedAt));
 }

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { ProjectStore } from "./projects";
 import { TaskLedger } from "./task-ledger";
+import { warnUnknownStoreVersion } from "./store-tag";
 
 const AUTHOR = ["-c", "user.name=Alpha Agent", "-c", "user.email=alpha@local.invalid"];
 const EXCLUDED = new Set([".git", ".alpha", "node_modules", "dist", "build", "release", "target", ".next", ".cache", "coverage", ".venv", "venv", "__pycache__", "inputs"]);
@@ -67,7 +68,8 @@ async function writeJournal(turn: ProjectTurn): Promise<void> {
   const file = journalFile(turn.dataRoot, turn.runId);
   await mkdir(resolve(file, ".."), { recursive: true });
   const temp = `${file}.${randomUUID()}.tmp`;
-  await writeFile(temp, JSON.stringify(turn, null, 2));
+  // .alpha/project-turns/<runId>.json (project-turns store): v1 = ProjectTurn plus its format tag; a version bump must migrate at the two journal reads.
+  await writeFile(temp, JSON.stringify({ ...turn, format: "project-turns", version: 1 }, null, 2));
   await rename(temp, file);
 }
 
@@ -291,7 +293,11 @@ export async function finalizeProjectTurn(turn: ProjectTurn, ledger: TaskLedger,
 }
 
 async function finalizeUnlocked(turn: ProjectTurn, ledger: TaskLedger, allowCodeChanges: boolean): Promise<ProjectTurn> {
-  const saved = await readFile(journalFile(turn.dataRoot, turn.runId), "utf8").then(value => JSON.parse(value) as ProjectTurn).catch(() => turn);
+  const saved = await readFile(journalFile(turn.dataRoot, turn.runId), "utf8").then(value => {
+    const prior = JSON.parse(value) as ProjectTurn;
+    warnUnknownStoreVersion("project-turns", prior);
+    return prior;
+  }).catch(() => turn);
   if (saved.status === "finished") return saved;
   for (const repo of saved.repos) {
     if (saved.codeCommits.some(item => item.root === repo.root)) continue;
@@ -325,7 +331,11 @@ async function finalizeUnlocked(turn: ProjectTurn, ledger: TaskLedger, allowCode
 export async function unfinishedProjectTurns(dataRoot: string): Promise<ProjectTurn[]> {
   const directory = join(dataRoot, "project-turns");
   const files = (await readdir(directory).catch(() => [] as string[])).filter(name => /^[0-9a-f-]{36}\.json$/.test(name));
-  const turns = await Promise.all(files.map(async file => JSON.parse(await readFile(join(directory, file), "utf8")) as ProjectTurn));
+  const turns = await Promise.all(files.map(async file => {
+    const turn = JSON.parse(await readFile(join(directory, file), "utf8")) as ProjectTurn;
+    warnUnknownStoreVersion("project-turns", turn);
+    return turn;
+  }));
   return turns.filter(turn => turn.status !== "finished");
 }
 

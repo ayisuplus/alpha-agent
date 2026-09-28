@@ -5,6 +5,7 @@ import { type } from "@oh-my-pi/omptype";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
 import { ComfyClient } from "./comfy-client";
 import { ensureGeneratedAsset } from "./media-integrity";
+import { warnUnknownStoreVersion } from "./store-tag";
 
 const parameters = type({ prompt: "string", "aspect?": "'square' | 'landscape'" });
 type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>;
@@ -26,12 +27,14 @@ export async function generateImageAsset(projectRoot: string, dataRoot: string, 
   try {
     const handle = await open(recordPath, "wx");
     job = { promptId: randomUUID(), projectRoot: resolve(projectRoot), prompt: prompt.trim(), seed: Math.floor(Math.random() * 2 ** 48), presetSha256: sha(presetBytes), workflow: join(jobsDir, `${key}.workflow.json`), state: "prepared" };
-    try { await handle.writeFile(JSON.stringify(job, null, 2)); } finally { await handle.close(); }
+    // .alpha/comfy-jobs/<key>.json (comfy-jobs store): v1 = Job plus its format tag; a version bump must migrate at the record read below.
+    try { await handle.writeFile(JSON.stringify({ ...job, format: "comfy-jobs", version: 1 }, null, 2)); } finally { await handle.close(); }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     job = JSON.parse(await readFile(recordPath, "utf8")) as Job;
+    warnUnknownStoreVersion("comfy-jobs", job);
   }
-  const save = async () => writeFile(recordPath, JSON.stringify(job, null, 2));
+  const save = async () => writeFile(recordPath, JSON.stringify({ ...job, format: "comfy-jobs", version: 1 }, null, 2));
   if (!job.projectRoot) { job.projectRoot = resolve(projectRoot); await save(); }
   if (job.projectRoot !== resolve(projectRoot)) throw new Error("Image job belongs to another project");
   const assetPath = join(projectRoot, "public", "alpha-assets", `${key}.png`);
@@ -57,7 +60,8 @@ export async function generateImageAsset(projectRoot: string, dataRoot: string, 
       graph["18"].inputs.seed = job.seed;
       graph["28"].inputs.FLUX = aspect === "landscape" ? "1280×720 (16:9)" : "1024×1024 (1:1)";
       graph["31"].inputs.filename_prefix = `Alpha/${key.slice(0, 12)}`;
-      await writeFile(job.workflow, JSON.stringify(graph, null, 2));
+      // .alpha/comfy-jobs/<key>.workflow.json (comfy-jobs store): v1 archives the submitted graph with its tag; a bump must strip the tag before any replay, and the POST body stays untagged.
+      await writeFile(job.workflow, JSON.stringify({ ...graph, format: "comfy-jobs-workflow", version: 1 }, null, 2));
       job.state = "unknown";
       await save();
       let submitted;

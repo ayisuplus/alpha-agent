@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { archiveExtractedSource, assertPublicWebUrl, type ResearchSource } from "./research-source";
+import { warnUnknownStoreVersion } from "./store-tag";
 
 export type WebProvider = "tavily" | "firecrawl";
 export interface WebSearchHit { title: string; url: string; snippet: string; score: number | null; publishedAt: string | null; provider: WebProvider; requestId: string | null }
@@ -22,7 +23,9 @@ export class WebRetrieval {
 
   private path(taskId: string): string { return join(this.dataRoot, "web", `${taskId}.json`); }
   private async state(taskId: string): Promise<TaskWebState> {
-    return JSON.parse(await readFile(this.path(taskId), "utf8").catch(() => '{"searchCount":0,"providerCalls":0,"jobs":{}}')) as TaskWebState;
+    const state = JSON.parse(await readFile(this.path(taskId), "utf8").catch(() => '{"searchCount":0,"providerCalls":0,"jobs":{}}')) as TaskWebState;
+    warnUnknownStoreVersion("web", state);
+    return state;
   }
   private async change<T>(taskId: string, mutate: (state: TaskWebState) => T): Promise<T> {
     const run = this.queue.then(async () => {
@@ -31,7 +34,8 @@ export class WebRetrieval {
       const path = this.path(taskId);
       await mkdir(join(this.dataRoot, "web"), { recursive: true });
       const temp = `${path}.${randomUUID()}.tmp`;
-      await writeFile(temp, JSON.stringify(state, null, 2));
+      // .alpha/web/<taskId>.json (web store): v1 = TaskWebState plus its format tag; a version bump must migrate in state().
+      await writeFile(temp, JSON.stringify({ ...state, format: "web", version: 1 }, null, 2));
       await rename(temp, path);
       return result;
     });

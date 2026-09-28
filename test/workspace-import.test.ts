@@ -71,6 +71,14 @@ test("non-Git import honors ignore rules and leaves the source untouched", async
     await writeFile(join(source, ".env.local"), "credential");
     const ledger = await importCodeWorkspace({ sourcePath: source, productsRoot: join(root, "products"), dataRoot: join(root, "state"), objective: "Fix copy" });
     expect(ledger.state.workspaceOrigin?.kind).toBe("copy");
+    const manifestFile = ledger.state.workspaceOrigin!.snapshotFile!;
+    expect(JSON.parse(await readFile(manifestFile, "utf8"))).toMatchObject({ format: "imports", version: 1 });
+    // A legacy manifest without the tag must still load.
+    const legacy = JSON.parse(await readFile(manifestFile, "utf8")) as Record<string, unknown>;
+    delete legacy.format;
+    delete legacy.version;
+    await writeFile(manifestFile, JSON.stringify(legacy, null, 2));
+    expect((await reviewCodeApply(ledger, join(root, "state"))).changes).toEqual([]);
     expect(await readFile(join(ledger.state.projectRoot, "app.js"), "utf8")).toBe("before");
     expect(await Bun.file(join(ledger.state.projectRoot, "ignored.txt")).exists()).toBe(false);
     expect(await Bun.file(join(ledger.state.projectRoot, ".env.local")).exists()).toBe(false);

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
+import { warnUnknownStoreVersion } from "./store-tag";
 
 export type MCPPermission = "deny" | "read" | "write";
 interface Receipt { taskId: string; tool: string; requestId: string; argsHash: string; status: "running" | "complete" | "uncertain"; result?: unknown; recordedAt: string }
@@ -13,15 +14,18 @@ export class MCPPermissionStore {
   constructor(dataRoot: string) { this.file = join(resolve(dataRoot), "mcp-permissions.json"); }
 
   private async read(): Promise<PolicyFile> {
-    return JSON.parse(await readFile(this.file, "utf8").catch(error => {
+    const data = JSON.parse(await readFile(this.file, "utf8").catch(error => {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return '{"permissions":{},"receipts":{}}';
       throw error;
     })) as PolicyFile;
+    warnUnknownStoreVersion("mcp-permissions", data);
+    return data;
   }
   private async write(data: PolicyFile): Promise<void> {
     await mkdir(resolve(this.file, ".."), { recursive: true });
     const temp = `${this.file}.${randomUUID()}.tmp`;
-    await writeFile(temp, JSON.stringify(data, null, 2));
+    // .alpha/mcp-permissions.json (mcp-permissions store): v1 = {permissions, receipts, format, version}; a version bump must migrate in read().
+    await writeFile(temp, JSON.stringify({ ...data, format: "mcp-permissions", version: 1 }, null, 2));
     await rename(temp, this.file);
   }
   private mutate<T>(action: () => Promise<T>): Promise<T> {

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProjectStore } from "../src/runtime/projects";
@@ -42,5 +42,22 @@ test("mounts reject UNC, drive roots, overlapping folders and directory links", 
     const link = join(root, "link");
     await symlink(source, link, "junction");
     await expect(store.mount(project.id, link)).rejects.toThrow("junction");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("projects.json carries its store tag and an untagged document still loads", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-projects-tag-"));
+  try {
+    const data = join(root, "data");
+    await mkdir(data);
+    const store = new ProjectStore(data);
+    await store.create("Example");
+    const saved = JSON.parse(await readFile(join(data, "projects.json"), "utf8")) as { format?: string; version?: number; projects?: unknown[] };
+    expect(saved.format).toBe("projects");
+    expect(saved.version).toBe(1);
+    expect(saved.projects).toHaveLength(1);
+    // A legacy document is the bare record array; it must still load.
+    await writeFile(join(data, "projects.json"), JSON.stringify([{ id: "legacy", name: "Legacy", version: 1, mounts: [], createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" }]));
+    expect((await store.list()).map(item => item.id)).toEqual(["legacy"]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

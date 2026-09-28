@@ -10,9 +10,11 @@ import {
   SNAPSHOT_INTERVAL, appendEvent, appendPlannedEvent, applyEvent, eventLogPath, foldTask, latestSnapshot, readEvents,
   readTaskLog, replaceState, taskLogDir, writeSnapshot,
 } from "./task-events";
-import type { TaskActor, TaskEvent, TaskEventPayloads, TaskEventPlan, WorkerStopReason } from "./task-events";
+import type { TaskActor, TaskEvent, TaskEventDraft, TaskEventPayloads, TaskEventPlan, WorkerStopReason } from "./task-events";
 import type { PauseReasonCode, StopReasonCode } from "./pause-reasons";
 import type { AgentMessage } from "./agent-mailbox";
+import type { CommandRequest } from "./command-approval";
+import type { WebApproval } from "./web-permissions";
 
 export type EvidenceKind = "build" | "test" | "browser" | "asset" | "preview" | "source" | "artifact";
 export type TaskType = "web-product" | "code-change" | "research" | "file-work" | "general";
@@ -208,6 +210,12 @@ export interface TaskState {
   pauseReason?: PauseReasonCode;
   /** Why a `stopped` task stopped, instead of reading the cause back out of `lastFailure`. */
   stop?: { reason: StopReasonCode; detail?: string; stoppedAt: string };
+  /** The operation latch: which run was live when the process died, so recovery knows what to reconcile. */
+  operation?: { runId: string; startedAt: string; status: "running" | "finished"; finishedAt?: string };
+  /** Command and exact-action approvals for one task; their files stay as the projections readers use. */
+  approvals?: CommandRequest[];
+  /** Web read grants and external write approvals for one task. */
+  webApprovals?: WebApproval[];
   revision: string | null;
   evidence: Evidence[];
   runs?: RunRecord[];
@@ -378,10 +386,11 @@ export class TaskLedger {
     await copyFile(path, `${path}.pre-events.bak`, constants.COPYFILE_EXCL).catch(error => {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     });
-    const event = await appendEvent(taskLogDir(path), {
+    const draft: TaskEventDraft = {
       at: new Date().toISOString(), actor: "runtime", type: "task/imported",
       payload: { state: JSON.parse(contents) as TaskState, source: "legacy-json" },
-    }, 0);
+    };
+    const event = await appendEvent(taskLogDir(path), draft, 0);
     // Folding the origin event normalizes pre-code fields, so the in-memory state always equals the log.
     return new TaskLedger(path, foldTask([event]), event.seq);
   }
@@ -598,6 +607,19 @@ export class TaskLedger {
     // One event stamps the whole batch: a reconciliation is a single moment, not one per attempt.
     await this.commit(() => (this.state.cognition?.instances?.some(item => item.status === "running" || item.status === "queued")
       ? { type: "workers/reconciled", payload: { reason, endedAt: new Date().toISOString() } }
+      : null));
+  }
+
+  /** The operation latch: records which run is live so a restart knows what to reconcile. */
+  async recordOperationStarted(runId: string, startedAt: string): Promise<void> {
+    await this.commit(() => (this.state.operation?.status === "running" && this.state.operation.runId === runId
+      ? null
+      : { type: "operation/started", payload: { runId, startedAt } }));
+  }
+
+  async recordOperationFinished(runId: string, finishedAt: string): Promise<void> {
+    await this.commit(() => (this.state.operation?.runId === runId && this.state.operation.status === "running"
+      ? { type: "operation/finished", payload: { runId, finishedAt } }
       : null));
   }
 

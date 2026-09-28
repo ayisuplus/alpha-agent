@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { Skill } from "@oh-my-pi/pi-coding-agent";
 import { createExpertPackage, loadExpertPackageSkills, personaText, type ExpertPackage } from "./expert-package";
+import { warnUnknownStoreVersion } from "./store-tag";
 
 const builtinRoot = resolve(import.meta.dir, "..", "..", "presets", "agents");
 const sourceUrl = "https://github.com/msitarzewski/agency-agents";
@@ -87,6 +88,7 @@ export class AgentPresetStore {
     if (!raw) return { enabled: {}, custom: [] };
     const parsed = JSON.parse(raw) as Stored;
     if (!parsed || typeof parsed !== "object" || !parsed.enabled || typeof parsed.enabled !== "object" || !Array.isArray(parsed.custom)) throw new Error("角色预设数据格式无效");
+    warnUnknownStoreVersion("agent-presets", parsed);
     return parsed;
   }
 
@@ -221,7 +223,8 @@ export class AgentPresetStore {
       const result = await change(stored, this.from(stored));
       await mkdir(dirname(this.file), { recursive: true });
       const temporary = `${this.file}.${randomUUID()}.tmp`;
-      await writeFile(temporary, JSON.stringify(stored, null, 2));
+      // .alpha/agent-presets.json (agent-presets store): v1 = {enabled, custom, format, version}; a version bump must migrate in stored().
+      await writeFile(temporary, JSON.stringify({ ...stored, format: "agent-presets", version: 1 }, null, 2));
       await rename(temporary, this.file);
       return result;
     });

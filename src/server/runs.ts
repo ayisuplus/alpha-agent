@@ -183,7 +183,7 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
         onWorkerState: changed => emitRun({ type: "task", task: ctx.taskView(changed) }),
         async onLedger(created) {
           if (projectTurn) await bindProjectTurn(projectTurn, created);
-          await ctx.operationJournal.start(created.state.id, runId);
+          await ctx.operationJournal.start(created.state.id, runId, created);
           run.ledger = created.bindRun(runId);
           run.taskId = created.state.id;
           if (!ctx.operations.forTask(created.state.id)) ctx.operations.bind(lease, { taskId: created.state.id, projectId: created.state.projectId ?? null });
@@ -225,7 +225,7 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
             ...await ctx.configuredRun(current.state.modelSelector, current),
             projectRoot, dataRoot, signal: controller.signal, existingLedger: current, objective: instruction,
             onEvent: forwardEvent,
-            async onLedger(created) { await ctx.operationJournal.start(created.state.id, runId); run.ledger = created.bindRun(runId); ctx.setContext(created); },
+            async onLedger(created) { await ctx.operationJournal.start(created.state.id, runId, created); run.ledger = created.bindRun(runId); ctx.setContext(created); },
             ...sessionHooks(ctx, run),
           }),
         });
@@ -297,7 +297,7 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
         emitRun({ type: "error", message: reason, runId });
       }
     }
-    if (ledger) await ctx.operationJournal.finish(ledger.state.id, runId);
+    if (ledger) await ctx.operationJournal.finish(ledger.state.id, runId, ledger);
     const queueItemId = ctx.queuedRuns.get(runId);
     if (queueItemId) {
       ctx.queuedRuns.delete(runId);

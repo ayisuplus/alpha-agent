@@ -60,6 +60,7 @@
 - `bun run characterize:import`：13 个真实账本副本导入后只归一化暂停原因码，投影文件未被改写。
 - `bun run invariants`：4 条存量违反不变（P0 记录的 3 条 `S/complete-with-failure` 与 1 条 `S/step-running-without-instance`）；带 `blockedService: "MCP"` 的旧账本现在读作 `pauseReason: approval`，无违反。
 - 界面用 `react-dom/server` 真实渲染验证：8 个码的标题、6 个按钮、提示文案、无码回退、停止原因；时间线在有事件与无事件两种输入下的渲染。
+- P2 边界评测（`artifacts/eval-2026-09-28-p2`）：8/8 独立检查通过，Alpha 自评验收 **7**（P1 边界那轮是 6）；唯一未自评验收的 slugify-unicode 停止在 `status/changed{stopped, reason:"model"}`——正是 P1 那轮缺失的原因码。cart-rounding（P1 里因"审查子实例未返回"暂停）本轮已验收：审查重试一次后返回并集成。
 
 ## 六、缺口
 
@@ -67,4 +68,4 @@
 - `redispatch`、`review-directly`、`skip-capability`、`change-permission-mode` 四个动作没有端点，界面只给提示；P3 的子代理生命周期是补重派端点的合适位置。
 - 轮次归属依赖事件信封的 `runId`；没有绑定运行的写入（例如工作台直接改设置）落在时间线的任务级。
 - 活动日志仍是工具调用、流式文本、错误文本与用户追问的唯一来源；P4 的 `run/started`/`step/context` 之后可以再收拢一部分。
-- P2 边界的评测在本轮改动之后跑，结果见下一节或 `artifacts/`。
+

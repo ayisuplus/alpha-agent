@@ -1819,6 +1819,53 @@
       ]
     },
     {
+      "name": "recordOperationStarted",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "operation.runId",
+          "before": "<absent>",
+          "after": "run-operation"
+        },
+        {
+          "path": "operation.startedAt",
+          "before": "<absent>",
+          "after": "<at:67>"
+        },
+        {
+          "path": "operation.status",
+          "before": "<absent>",
+          "after": "running"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:64>",
+          "after": "<at:66>"
+        }
+      ]
+    },
+    {
+      "name": "recordOperationFinished",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "operation.finishedAt",
+          "before": "<absent>",
+          "after": "<at:69>"
+        },
+        {
+          "path": "operation.status",
+          "before": "running",
+          "after": "finished"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:66>",
+          "after": "<at:68>"
+        }
+      ]
+    },
+    {
       "name": "recordRun",
       "outcome": "ok",
       "changed": [
@@ -1855,7 +1902,7 @@
         {
           "path": "runs[0].recordedAt",
           "before": "<absent>",
-          "after": "<at:66>"
+          "after": "<at:70>"
         },
         {
           "path": "runs[0].stage",
@@ -1874,8 +1921,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:64>",
-          "after": "<at:67>"
+          "before": "<at:68>",
+          "after": "<at:71>"
         }
       ]
     },
@@ -1890,8 +1937,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:67>",
-          "after": "<at:68>"
+          "before": "<at:71>",
+          "after": "<at:72>"
         }
       ]
     },
@@ -1912,8 +1959,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:68>",
-          "after": "<at:69>"
+          "before": "<at:72>",
+          "after": "<at:73>"
         }
       ]
     },
@@ -1928,8 +1975,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:69>",
-          "after": "<at:70>"
+          "before": "<at:73>",
+          "after": "<at:74>"
         }
       ]
     },
@@ -1969,8 +2016,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:70>",
-          "after": "<at:71>"
+          "before": "<at:74>",
+          "after": "<at:75>"
         }
       ]
     },
@@ -1990,8 +2037,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:71>",
-          "after": "<at:72>"
+          "before": "<at:75>",
+          "after": "<at:76>"
         }
       ]
     },
@@ -2006,8 +2053,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:72>",
-          "after": "<at:73>"
+          "before": "<at:76>",
+          "after": "<at:77>"
         },
         {
           "path": "workerOutcome.findings[0]",
@@ -2037,8 +2084,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:73>",
-          "after": "<at:74>"
+          "before": "<at:77>",
+          "after": "<at:78>"
         }
       ]
     },
@@ -2064,8 +2111,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:74>",
-          "after": "<at:75>"
+          "before": "<at:78>",
+          "after": "<at:79>"
         }
       ]
     },
@@ -2096,8 +2143,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:75>",
-          "after": "<at:76>"
+          "before": "<at:79>",
+          "after": "<at:80>"
         }
       ]
     },
@@ -2119,7 +2166,7 @@
         {
           "path": "guidanceHistory[1].recordedAt",
           "before": "<absent>",
-          "after": "<at:77>"
+          "after": "<at:81>"
         },
         {
           "path": "pauseReason",
@@ -2143,8 +2190,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:76>",
-          "after": "<at:78>"
+          "before": "<at:80>",
+          "after": "<at:82>"
         }
       ]
     },
@@ -2176,12 +2223,12 @@
         {
           "path": "stop.stoppedAt",
           "before": "<absent>",
-          "after": "<at:79>"
+          "after": "<at:83>"
         },
         {
           "path": "updatedAt",
-          "before": "<at:78>",
-          "after": "<at:79>"
+          "before": "<at:82>",
+          "after": "<at:83>"
         }
       ]
     },
@@ -2203,7 +2250,7 @@
         {
           "path": "contractHistory[0].revisedAt",
           "before": "<absent>",
-          "after": "<at:80>"
+          "after": "<at:84>"
         },
         {
           "path": "contractHistory[0].version",
@@ -2297,13 +2344,13 @@
         },
         {
           "path": "stop.stoppedAt",
-          "before": "<at:79>",
+          "before": "<at:83>",
           "after": "<absent>"
         },
         {
           "path": "updatedAt",
-          "before": "<at:79>",
-          "after": "<at:81>"
+          "before": "<at:83>",
+          "after": "<at:85>"
         }
       ]
     },
@@ -2334,8 +2381,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:81>",
-          "after": "<at:82>"
+          "before": "<at:85>",
+          "after": "<at:86>"
         }
       ]
     },
@@ -2360,8 +2407,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:82>",
-          "after": "<at:83>"
+          "before": "<at:86>",
+          "after": "<at:87>"
         }
       ]
     }
@@ -2379,7 +2426,7 @@
       {
         "version": 1,
         "objective": "Summarize the sales CSV",
-        "revisedAt": "<at:80>"
+        "revisedAt": "<at:84>"
       }
     ],
     "guidanceHistory": [
@@ -2391,7 +2438,7 @@
       },
       {
         "instruction": "Approved; continue with the regression test",
-        "recordedAt": "<at:77>"
+        "recordedAt": "<at:81>"
       }
     ],
     "cognition": {
@@ -2610,12 +2657,12 @@
         "firstResponseMs": 3200,
         "outcome": "returned",
         "contractVersion": 1,
-        "recordedAt": "<at:66>"
+        "recordedAt": "<at:70>"
       }
     ],
     "preview": null,
     "createdAt": "<at:1>",
-    "updatedAt": "<at:83>",
+    "updatedAt": "<at:87>",
     "development": {
       "enabled": true,
       "repairAttempts": 1,
@@ -2739,6 +2786,12 @@
         "recordedAt": "<at:65>"
       }
     ],
+    "operation": {
+      "runId": "run-operation",
+      "startedAt": "<at:67>",
+      "status": "finished",
+      "finishedAt": "<at:69>"
+    },
     "checkpointStatus": "failed",
     "checkpoint": {
       "runId": "run-checkpoint",

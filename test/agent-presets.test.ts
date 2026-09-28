@@ -348,3 +348,18 @@ test("the library groups experts by the business line of the core template they 
     expect(presetSnapshot(catalog.find(item => item.id === "core-frontend")!)).not.toHaveProperty("line");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("agent-presets.json carries its store tag and an untagged document still loads", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-presets-tag-"));
+  try {
+    const store = new AgentPresetStore(root);
+    await store.create({ name: "自写专家", description: "只做一件事", instructions: "按用户说明工作。" });
+    const saved = JSON.parse(await readFile(join(root, "agent-presets.json"), "utf8")) as { format?: string; version?: number; custom?: unknown[] };
+    expect(saved.format).toBe("agent-presets");
+    expect(saved.version).toBe(1);
+    expect(saved.custom).toHaveLength(1);
+    // A legacy document without the tag must still load.
+    await writeFile(join(root, "agent-presets.json"), JSON.stringify({ enabled: {}, custom: [] }));
+    expect(await store.list()).toEqual([]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

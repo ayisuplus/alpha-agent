@@ -44,6 +44,14 @@ test("source review records text changes without bundling builds or binary media
     expect(restored).toHaveLength(1);
     expect(restored[0].changes).toEqual([{ path: "src/app.js", before: "document.title = 'before';\n", after: "document.title = 'after';\n" }]);
     expect(restored[0].contractVersion).toBe(2);
+    const reviewFile = join(root, "reviews", "task-one", `${operationId}.json`);
+    expect(JSON.parse(await readFile(reviewFile, "utf8"))).toMatchObject({ format: "reviews", version: 1 });
+    // A legacy review document without the tag must still load.
+    const legacy = JSON.parse(await readFile(reviewFile, "utf8")) as Record<string, unknown>;
+    delete legacy.format;
+    delete legacy.version;
+    await writeFile(reviewFile, JSON.stringify(legacy));
+    expect(await readSourceReviews(root, "task-one")).toHaveLength(1);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

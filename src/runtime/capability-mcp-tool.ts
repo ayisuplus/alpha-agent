@@ -5,6 +5,7 @@ import { type } from "@oh-my-pi/omptype";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
 import { SkillPluginStore } from "../plugins/third-party";
 import { capabilityPool } from "./capability-pool";
+import { readToolCatalog, writeToolCatalog } from "./mcp-tool-catalog";
 import { guardMCPTools, MCPPermissionStore } from "./mcp-permissions";
 
 const parameters = type({ serverId: "string", action: "'list' | 'call'", toolName: "string?", argsJson: "string?", requestId: "string?" });
@@ -22,12 +23,9 @@ export function createCapabilityMCPTool(dataRoot: string, projectRoot: string, t
           if (connected.errors.length) throw new Error(connected.errors.join("; "));
           const tools = connected.tools.filter(tool => tool.mcpServerName === server.id);
           if (args.action === "list") {
-            const file = join(dataRoot, "mcp-tool-catalog.json");
-            const prior = await readFile(file, "utf8").then(value => JSON.parse(value) as Array<{ name: string; server: string; description: string; revision: string }>).catch(() => []);
             const current = tools.map(tool => ({ name: tool.name, server: server.id, description: tool.description, revision: server.revision }));
-            const temporary = `${file}.${randomUUID()}.tmp`;
-            await writeFile(temporary, JSON.stringify([...prior.filter(item => !current.some(next => next.name === item.name)), ...current]));
-            await rename(temporary, file);
+            const prior = await readToolCatalog(dataRoot);
+            await writeToolCatalog(dataRoot, [...prior.filter(item => !current.some(next => next.name === item.name)), ...current]);
             return { content: [{ type: "text", text: JSON.stringify(tools.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters }))) }] };
           }
           if (!args.toolName || !args.requestId || !args.argsJson || args.argsJson.length > 64_000) throw new Error("MCP call requires toolName, argsJson, and a stable requestId");

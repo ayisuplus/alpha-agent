@@ -15,6 +15,9 @@ test("settings updates are validated, clamped and persisted", async () => {
     expect(saved.plugins.comfyui).toBe(false);
     expect(saved.ui).toMatchObject({ scale: 1.2, fontSize: "lg", sidebarCollapsed: false });
     expect(await new SettingsStore(root).get()).toEqual(saved);
+    const file = JSON.parse(await readFile(join(root, "settings.json"), "utf8")) as { format?: string; version?: number };
+    expect(file.format).toBe("settings");
+    expect(file.version).toBe(1);
 
     await expect(store.update({ generation: { comfyUrl: "http://example.com:8188" } })).rejects.toBeInstanceOf(SettingsError);
     await expect(store.update({ plugins: { comfyui: "yes" } })).rejects.toBeInstanceOf(SettingsError);
@@ -57,7 +60,13 @@ test("workbench task metadata stores only meaningful values", async () => {
     expect(await meta.update("task-1", { pinned: false, archived: true })).toEqual({ title: "食谱 收藏", archived: true });
     expect(await new WorkbenchMeta(root).get("task-1")).toEqual({ title: "食谱 收藏", archived: true });
     expect(await meta.update("task-1", { title: "", archived: false })).toEqual({});
-    expect(JSON.parse(await readFile(join(root, "workbench.json"), "utf8"))).toEqual({ tasks: {} });
+    const saved = JSON.parse(await readFile(join(root, "workbench.json"), "utf8")) as { tasks?: unknown; format?: string; version?: number };
+    expect(saved.tasks).toEqual({});
+    expect(saved.format).toBe("workbench");
+    expect(saved.version).toBe(1);
+    // A legacy document without the tag must still load.
+    await writeFile(join(root, "workbench.json"), JSON.stringify({ tasks: { legacy: { pinned: true } } }));
+    expect(await new WorkbenchMeta(root).get("legacy")).toEqual({ pinned: true });
     await expect(meta.update("task-1", { pinned: "yes" })).rejects.toBeInstanceOf(SettingsError);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

@@ -9,6 +9,7 @@ import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
 import type { BrowserKernel } from "./browser-kernel";
 import type { WebRetrieval } from "./web-retrieval";
 import { WebApprovalRequired } from "./web-permissions";
+import { warnUnknownStoreVersion } from "./store-tag";
 
 export interface ResearchSource { id: string; taskId: string; url: string; visitedAt: string; title: string; sha256: string; rawSha256: string; text: string; kind?: "direct_http" | "provider_extraction" | "rendered_page"; provider?: string; requestId?: string; rawPath?: string }
 const parameters = type({ url: "string", "mode?": "'http' | 'extract' | 'rendered'", "tabId?": "string" });
@@ -81,7 +82,8 @@ export async function archiveResearchSource(dataRoot: string, taskId: string, ra
   await mkdir(directory, { recursive: true });
   source.rawPath = join(directory, `${source.id}.raw`);
   await writeFile(source.rawPath, body, { flag: "wx" });
-  await writeFile(join(directory, `${source.id}.json`), JSON.stringify(source, null, 2), { flag: "wx" });
+  // .alpha/sources/<taskId>/<id>.json (sources store): v1 = ResearchSource plus its format tag; a version bump must migrate in listResearchSources().
+  await writeFile(join(directory, `${source.id}.json`), JSON.stringify({ ...source, format: "sources", version: 1 }, null, 2), { flag: "wx" });
   return source;
 }
 
@@ -94,14 +96,19 @@ export async function archiveExtractedSource(dataRoot: string, taskId: string, i
   const source: ResearchSource = { id, taskId, url: input.url, visitedAt: new Date().toISOString(), title: input.title, text, sha256: createHash("sha256").update(text).digest("hex"), rawSha256: createHash("sha256").update(raw).digest("hex"), rawPath: join(directory, `${id}.raw`), provider: input.provider, requestId: input.requestId, kind: input.kind ?? "provider_extraction" };
   await mkdir(directory, { recursive: true });
   await writeFile(source.rawPath!, raw, { flag: "wx" });
-  await writeFile(join(directory, `${id}.json`), JSON.stringify(source, null, 2), { flag: "wx" });
+  // .alpha/sources/<taskId>/<id>.json (sources store): v1 = ResearchSource plus its format tag; a version bump must migrate in listResearchSources().
+  await writeFile(join(directory, `${id}.json`), JSON.stringify({ ...source, format: "sources", version: 1 }, null, 2), { flag: "wx" });
   return source;
 }
 
 export async function listResearchSources(dataRoot: string, taskId: string): Promise<ResearchSource[]> {
   const directory = join(dataRoot, "sources", taskId);
   const names = (await readdir(directory).catch(() => [] as string[])).filter(name => /^[0-9a-f-]{36}\.json$/.test(name));
-  return Promise.all(names.map(async name => JSON.parse(await readFile(join(directory, name), "utf8")) as ResearchSource));
+  return Promise.all(names.map(async name => {
+    const source = JSON.parse(await readFile(join(directory, name), "utf8")) as ResearchSource;
+    warnUnknownStoreVersion("sources", source);
+    return source;
+  }));
 }
 
 export function createResearchSourceTool(dataRoot: string, taskId: string, onUnavailable?: (reason: string) => Promise<void>, web?: { retrieval: WebRetrieval; kernel: BrowserKernel; authorizeRead: (scope: string) => Promise<void> }): CustomTool<typeof parameters> {

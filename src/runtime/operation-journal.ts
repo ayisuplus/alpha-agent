@@ -6,7 +6,8 @@ import { recoverIncompleteMerges } from "./work-orders";
 import { commandApprovalStore } from "./command-approval";
 import { MCPPermissionStore } from "./mcp-permissions";
 
-interface JournalEntry { taskId: string; runId: string; startedAt: string; status: "running" | "finished"; finishedAt?: string }
+/** One operation latch per task; `format`/`version` let a reader tell which layout it is looking at. */
+interface JournalEntry { taskId: string; runId: string; startedAt: string; status: "running" | "finished"; finishedAt?: string; format?: string; version?: number }
 
 /**
  * A hard kill of the server leaves subagent children running: nothing holds their handle any more. The pid is in the
@@ -46,18 +47,22 @@ export class OperationJournal {
     await writeFile(temp, JSON.stringify(entry, null, 2));
     await rename(temp, file);
   }
-  async start(taskId: string, runId: string): Promise<void> {
+  async start(taskId: string, runId: string, ledger?: TaskLedger | null): Promise<void> {
     const file = this.file(taskId);
     const prior = await readFile(file, "utf8").then(value => JSON.parse(value) as JournalEntry).catch(() => null);
     if (prior?.status === "running" && prior.runId === runId) return;
     if (prior?.status === "running") throw new Error("Task has an unreconciled operation");
-    await this.save({ taskId, runId, status: "running", startedAt: new Date().toISOString() });
+    const startedAt = new Date().toISOString();
+    // The event log is the source of truth; this file stays as the projection reconcile() and the scan read.
+    if (ledger) await ledger.recordOperationStarted(runId, startedAt);
+    await this.save({ taskId, runId, status: "running", startedAt, format: "operation-journal", version: 1 });
   }
-  async finish(taskId: string, runId: string): Promise<void> {
+  async finish(taskId: string, runId: string, ledger?: TaskLedger | null): Promise<void> {
     const entry = await readFile(this.file(taskId), "utf8").then(value => JSON.parse(value) as JournalEntry).catch(() => null);
     if (!entry || entry.runId !== runId || entry.status === "finished") return;
     entry.status = "finished";
     entry.finishedAt = new Date().toISOString();
+    if (ledger) await ledger.recordOperationFinished(runId, entry.finishedAt);
     await this.save(entry);
   }
   async reconcile(): Promise<Array<{ taskId: string; result: string }>> {

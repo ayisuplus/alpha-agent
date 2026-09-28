@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent";
 import { OperationJournal } from "../src/runtime/operation-journal";
 import { TaskLedger, fingerprintSource } from "../src/runtime/task-ledger";
-import { taskLogDir } from "../src/runtime/task-events";
+import { foldTask, readEvents, taskLogDir } from "../src/runtime/task-events";
+import { checkTaskInvariants } from "../src/runtime/task-invariants";
 
 test("task session journal is reopened from its task-specific file", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-session-persist-"));
@@ -63,4 +64,37 @@ test("a ledger that predates the event log is backed up and imported unchanged",
   expect(reloaded.state.guidanceHistory?.at(-1)?.instruction).toBe("Keep prior task data");
   expect(reloaded.state.contractVersion).toBeUndefined();
   expect(await readFile(`${created.file}.pre-events.bak`, "utf8")).toBe(original);
+});
+
+test("the operation latch is an event and the projection file keeps its shape", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-operation-latch-"));
+  try {
+    const projectRoot = join(root, "project");
+    await mkdir(projectRoot, { recursive: true });
+    const dataRoot = join(root, "data");
+    const ledger = await TaskLedger.create(dataRoot, { objective: "Latch one run", projectRoot, taskType: "general", criteria: [] });
+    const journal = new OperationJournal(dataRoot);
+
+    await journal.start(ledger.state.id, "run-1", ledger);
+    expect(ledger.state.operation).toMatchObject({ runId: "run-1", status: "running" });
+    await expect(journal.start(ledger.state.id, "run-2", ledger)).rejects.toThrow("Task has an unreconciled operation");
+    await journal.finish(ledger.state.id, "run-1", ledger);
+    expect(ledger.state.operation).toMatchObject({ runId: "run-1", status: "finished" });
+    expect(checkTaskInvariants(ledger.state)).toEqual([]);
+
+    const events = await readEvents(taskLogDir(ledger.file));
+    expect(events.filter(event => event.type.startsWith("operation/")).map(event => event.type)).toEqual(["operation/started", "operation/finished"]);
+    expect(foldTask(events)).toEqual(ledger.state);
+
+    // The projection is what reconcile() and the scan read: same shape, now with a format tag.
+    const projection = JSON.parse(await readFile(join(dataRoot, "operation-journal", `${ledger.state.id}.json`), "utf8")) as { runId: string; status: string; format?: string; version?: number };
+    expect(projection).toMatchObject({ runId: "run-1", status: "finished", format: "operation-journal", version: 1 });
+
+    // A latch left running by a dead process is a violation of the one-run invariant.
+    await journal.start(ledger.state.id, "run-2", ledger);
+    await ledger.stop("user", "Cancelled");
+    expect(checkTaskInvariants(ledger.state).map(item => item.code)).toEqual(["I2/stale-operation-latch"]);
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
 });

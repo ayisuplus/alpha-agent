@@ -13,6 +13,7 @@ import { guardMCPTools, MCPPermissionStore } from "./mcp-permissions";
 import { parseWorkerMCPRequest, writeWorkerMCPResponse, type WorkerMCPDescriptor } from "./worker-mcp-proxy";
 import { commandApprovalStore, type CommandRequest } from "./command-approval";
 import { independentCommandReviewer } from "./auto-reviewer";
+import { readToolCatalog, writeToolCatalog } from "./mcp-tool-catalog";
 import { WorkerStopError, workerStopReason } from "./worker-stop";
 
 const appRoot = resolve(import.meta.dir, "..", "..");
@@ -84,7 +85,8 @@ export async function snapshotSkills(dataRoot: string, stateRoot: string, order:
     selected.find(item => item.id === pluginId)!.skillCount++;
   }
   await mkdir(join(stateRoot, "plugin-packs"), { recursive: true });
-  await writeFile(join(stateRoot, "plugin-packs", "installed.json"), JSON.stringify({ plugins: selected }));
+  // .alpha/plugin-packs/installed.json (plugin-packs store): same v1 document as SkillPluginStore.save; a version bump must migrate in SkillPluginStore.list().
+  await writeFile(join(stateRoot, "plugin-packs", "installed.json"), JSON.stringify({ plugins: selected, format: "plugin-packs", version: 1 }));
   return { ...order, skillIds, skillSnapshots, capabilitySnapshots };
 }
 
@@ -172,13 +174,9 @@ export function runModelWorkOrders(input: {
     const descriptors: WorkerMCPDescriptor[] = selectedMCP.map(tool => ({ name: tool.name, label: tool.label, description: tool.description, parameters: tool.parameters, server: tool.mcpServerName ?? "" }));
     if (descriptors.length) {
       const pluginRevisions = await new SkillPluginStore(input.dataRoot).list();
-      const file = join(input.dataRoot, "mcp-tool-catalog.json");
-      const prior = await readFile(file, "utf8").then(value => JSON.parse(value) as Array<{ name: string; server: string; description: string; revision: string }>).catch(() => []);
+      const prior = await readToolCatalog(input.dataRoot);
       const current = descriptors.map(item => ({ name: item.name, server: item.server, description: item.description, revision: pluginRevisions.find(plugin => item.server.startsWith(`alpha_${plugin.id}_`))?.revision ?? "" }));
-      const merged = [...prior.filter(item => !current.some(next => next.name === item.name)), ...current];
-      const temp = `${file}.${randomUUID()}.tmp`;
-      await writeFile(temp, JSON.stringify(merged));
-      await rename(temp, file);
+      await writeToolCatalog(input.dataRoot, [...prior.filter(item => !current.some(next => next.name === item.name)), ...current]);
     }
     const { preset, ...workOrder } = withSkills;
     await writeFile(requestFile, JSON.stringify({ taskId: input.taskId, projectRoot: directory, dataRoot: stateRoot, authorizationRoot: input.dataRoot, workerContext: input.workerContext, plugins: input.plugins, generation: input.generation, comfyUrl: input.comfyUrl, objective: order.objective, workOrder, workerPreset: preset, modelSelector, browserProxyDir: browserDirectory, mcpProxyDir: mcpDirectory, mcpDescriptors: descriptors, eventFile: join(runDir, "events.jsonl") }));
