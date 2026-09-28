@@ -1,6 +1,6 @@
 # 核心专家的来源与取舍
 
-核对日期：2026-09-27。人设中的姓名是虚构角色名，不代表真人履历。Alpha 的 29 份人设和 29 份 Skill 按实际工单与工具边界编写；以下仓库作为方法参考，没有安装其插件、Hook、MCP 或运行第三方脚本。原有上游文件及许可证保留在 `upstream/`，本次不扩张导入。
+核对日期：2026-09-27。人设中的姓名是虚构角色名，不代表真人履历。Alpha 的 30 份人设和 30 份 Skill 按实际工单与工具边界编写；以下仓库作为方法参考，没有安装其插件、Hook、MCP 或运行第三方脚本。原有上游文件及许可证保留在 `upstream/`，本次不扩张导入。
 
 | 一手来源 | 固定版本 | 用途与取舍 |
 |---|---|---|
@@ -38,6 +38,29 @@
 | 通用工程实践 | 核心循环与最小可玩切片、固定步长主循环、宽相/窄相碰撞、输入缓冲与土狼时间、图集与批处理、退化策略排查等属于行业通行做法，按 Alpha 的工单边界重写。 |
 | 需要实测或查官方文档的数字 | 图集尺寸与纹理上限、目标帧率下的帧预算、输入延迟、加载耗时、内存占用、引擎 API 行为——Skill 中一律要求实测或查所用引擎官方文档并注明版本与日期，本文档不提供固定数值。 |
 | 美术与音频资产 | 风格参考必须记录真实来源与查看日期；AI 生成素材只作概念与占位并标注，最终资产须替换，版权与素材许可由用户自行确认。 |
+
+### 科研线与文章写作专家的来源与取舍（2026-09-27）
+
+科研线 4 位专家（文献与证据研究员、实验设计与复现专家、科研数据分析师、论文写作与审稿专家）本轮重写人设与 Skill，并新增文章写作与改稿专家。文本由 Alpha 自行编写，**没有复制下列文献的原文，也没有安装插件或运行第三方脚本**；下列文献只作为方法依据，在 Skill 的参考文件中以"延伸阅读"或"参见"形式出现。每条都在 2026-09-27 通过出版方页面、ACL Anthology、DBLP 或 PubMed 等书目记录核对了题名、作者、出处与年份。
+
+| 来源 | 性质 | 用途 |
+|---|---|---|
+| Demšar, JMLR 7 (2006)；Dror et al., ACL 2018；Koehn, EMNLP 2004；Card et al., EMNLP 2020 | 同行评审论文 | 多数据集比较、NLP 显著性检验选择、配对自助法、统计功效（`analyze-results`） |
+| Bouthillier et al., MLSys 2021；Agarwal et al., NeurIPS 2021 | 同行评审论文 | 基准中的方差来源、少量运行时的稳健汇总与区间（`analyze-results`、`design-experiments`） |
+| Wasserstein and Lazar, The American Statistician 70(2) 2016；Weissgerber et al., PLoS Biology 13(4) 2015 | 学会声明 / 同行评审论文 | p 值解读、小样本数据呈现（`analyze-results`） |
+| Kapoor and Narayanan, Patterns 2023；Pineau et al., JMLR 22 (2021)；Dodge et al., EMNLP-IJCNLP 2019 | 同行评审论文 | 数据泄漏类型、复现检查清单、调参预算下的结果报告（`design-experiments`） |
+| Sainz et al., Findings of EMNLP 2023；Zheng et al., NeurIPS 2023 Datasets and Benchmarks | 同行评审论文 | 基准污染、以模型为评判者的偏差（`design-experiments`） |
+| Page et al., BMJ 2021;372:n71（PRISMA 2020）；Wohlin, EASE 2014 | 报告规范 / 同行评审论文 | 系统综述流程、滚雪球检索（`review-literature`） |
+| Gopen and Swan, American Scientist 78(6) 1990 | 期刊文章 | 句子中已知信息与新信息的位置（`write-manuscript`） |
+| [NeurIPS Paper Checklist Guidelines](https://neurips.cc/public/guides/PaperChecklist) | 会议官方说明 | 作为"目标会议检查清单"的示例；具体要求每次投稿前重新查当年官方页面 |
+| GB/T 7714-2025《信息与文献 参考文献著录规则》（2025-12-02 发布，2026-07-01 实施，全部代替 GB/T 7714-2015）；GB/T 15834-2011《标点符号用法》；GB/T 15835-2011《出版物上数字用法》 | 国家标准（[全国标准信息公共服务平台](https://std.samr.gov.cn/)核对现行状态） | 中文参考文献、标点与数字规范（`review-literature`、`write-manuscript`、`write-articles`） |
+
+取舍：
+
+- 统计方法写成"按设计选择"的参考表，不给机械决策树，也不预设任何检验结果；示例数字明确标为格式示例。
+- 数据库与检索渠道只写用途和常见陷阱，覆盖范围与访问方式以实际访问为准。
+- 会议与期刊的页数、模板、匿名、检查清单和 AI 工具使用政策逐年变化，Skill 要求写作前查官方说明并记录核对日期，本文不记录具体条款。
+- 文章写作 Skill 的结构、论证与改稿方法属于通行写作实践，按 Alpha 的事实原则重写；不引用或复制任何写作教材的文字。
 
 来源与许可证按具体文件区分；不能因为网页可读就认为素材或文档允许复制。引擎与平台能力持续更新，下一次使用相关 Skill 时应按当时所用引擎重新核对。
 
