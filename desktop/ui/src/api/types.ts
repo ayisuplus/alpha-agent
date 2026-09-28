@@ -188,6 +188,25 @@ export interface ActivityEntry {
   error?: boolean;
 }
 
+// The durable timeline track, owned by src/runtime/task-event-summary.ts; the UI never imports from src/, so the projection is mirrored here.
+export type TaskEventActor = "user" | "runtime" | "coordinator" | "reviewer" | `worker:${string}`;
+
+export interface TaskTimelineEvent {
+  seq: number;
+  at: string;
+  /** e.g. "status/changed", "evidence/recorded", "plan/approved", "worker/updated". */
+  type: string;
+  /** The run that caused it; null for workbench actions and imports. */
+  runId: string | null;
+  actor: TaskEventActor;
+  /** Chinese, ready to render. */
+  label: string;
+  detail?: string;
+  tone?: "info" | "success" | "warning" | "danger";
+  /** Structured references for joins, so the UI never parses a label. */
+  refs?: { criterionId?: string; evidenceId?: string; passed?: boolean; verdict?: string; stepId?: string; workerId?: string; orderId?: string; pauseReason?: PauseReasonCode; stopReason?: StopReasonCode };
+}
+
 export interface ReviewSummary {
   operationId: string;
   contractVersion: number;

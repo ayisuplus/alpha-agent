@@ -3,7 +3,7 @@ import { ArrowDown, Check, ChevronDown, ChevronRight, CircleDot, CirclePause, Fi
 import type { EvidenceItem, GuidanceStatus, ReviewSummary, TaskView } from "../api/types";
 import { evidenceNear } from "../state/evidence";
 import { formatDateTime, formatDuration, formatTime, guidanceLabel, guidanceText, phaseInfo, toolInfo, type Tone } from "../state/labels";
-import type { Block, TimelineItem, ToolCall, Turn, TurnKind } from "../state/timeline";
+import { checkCriterion, type Block, type TimelineItem, type ToolCall, type Turn, type TurnKind } from "../state/timeline";
 import { openDetail } from "../state/workbench";
 import { Markdown } from "./Markdown";
 import { shortModel } from "./ModelPicker";
@@ -92,7 +92,7 @@ function ToolGroup({ calls, live }: { calls: ToolCall[]; live: boolean }) {
   </div>;
 }
 
-type ProgressBlock = Extract<Block, { type: "phase" | "check" | "error" }>;
+type ProgressBlock = Extract<Block, { type: "phase" | "check" | "error" | "event" }>;
 
 function phaseIcon(phase: string, active: boolean): ReactNode {
   if (active) return <Spinner size={13} />;
@@ -124,8 +124,20 @@ function Progress({ blocks, live, evidence }: { blocks: ProgressBlock[]; live: b
           <span className="progress-label progress-error">{block.message}</span>
         </li>;
       }
-      const criterionId = block.name === "browser" ? "user-path" : block.name === "build" ? "build" : null;
-      const record = criterionId ? evidenceNear(evidence, criterionId, block.at) : null;
+      if (block.type === "event") {
+        // Durable rows carry their own tone; the icon vocabulary matches the phase rows around them.
+        const icon = block.tone === "success" ? <Check size={13} className="tone-text-success" aria-hidden />
+          : block.tone === "warning" ? <CircleDot size={13} className="tone-text-warning" aria-hidden />
+          : block.tone === "danger" ? <X size={13} className="tone-text-danger" aria-hidden />
+          : <span className="progress-dot" aria-hidden />;
+        return <li key={block.id} className={`progress-row${block.tone === "danger" ? " tone-danger" : ""}`}>
+          <span className="progress-icon">{icon}</span>
+          <span className="progress-label">{block.label}</span>
+          {block.detail && <span className="progress-detail" title={block.detail}>{block.detail}</span>}
+        </li>;
+      }
+      const criterionId = checkCriterion(block.name);
+      const record = criterionId ? evidenceNear(evidence, criterionId, block.evidenceAt ?? block.at) : null;
       return <li key={block.id} className={`progress-row ${block.passed ? "" : "tone-danger"}`}>
         <span className="progress-icon"><StateIcon state={block.passed ? "pass" : "fail"} size={13} /></span>
         <span className="progress-label">{toolInfo(block.name).label}{block.passed ? "通过" : "未通过"}</span>
@@ -141,7 +153,7 @@ type Segment = { kind: "progress"; blocks: ProgressBlock[] } | { kind: "block"; 
 function TurnBody({ turn, evidence }: { turn: Turn; evidence: EvidenceItem[] }) {
   const segments: Segment[] = [];
   for (const block of turn.blocks) {
-    if (block.type === "phase" || block.type === "check" || block.type === "error") {
+    if (block.type === "phase" || block.type === "check" || block.type === "error" || block.type === "event") {
       const previous = segments.at(-1);
       if (previous?.kind === "progress") previous.blocks.push(block);
       else segments.push({ kind: "progress", blocks: [block] });
@@ -215,7 +227,7 @@ const NO_WORKERS: WorkerInstance[] = [];
 const AgentTurn = memo(function AgentTurn({ turn, defaultOpen, evidence, workers = NO_WORKERS }: { turn: Turn; defaultOpen: boolean; evidence: EvidenceItem[]; workers?: WorkerInstance[] }) {
   const [open, setOpen] = useState(defaultOpen);
   useEffect(() => { if (turn.live) setOpen(true); }, [turn.live]);
-  const outcome = turn.outcome ? phaseInfo(turn.outcome) : null;
+  const outcome = turn.outcome ? (turn.outcomeTone ? { label: turn.outcome, tone: turn.outcomeTone } : phaseInfo(turn.outcome)) : null;
   const duration = formatDuration(new Date(turn.endedAt).getTime() - new Date(turn.startedAt).getTime());
   const status = turn.live
     ? <Badge tone="accent"><Spinner size={12} />进行中</Badge>
@@ -328,6 +340,11 @@ export function Timeline({ items, task }: { items: TimelineItem[]; task: TaskVie
               return <UserMessage key={item.id} label="补充要求" text={guidanceText(item.text)} at={item.at} status={item.status} />;
             case "question":
               return <UserMessage key={item.id} label="追问" text={item.text} at={item.at} />;
+            case "event":
+              return <div key={item.id} className="system-turn">
+                <header className="system-turn-header"><CircleDot size={14} aria-hidden /><span className="system-turn-title">{item.label}</span><time dateTime={item.at}>{formatDateTime(item.at)}</time></header>
+                {item.detail && <div className="system-turn-body"><p className="timeline-note">{item.detail}</p></div>}
+              </div>;
             case "review":
               return <div key={item.id} className="system-turn">
                 <header className="system-turn-header"><FileDiff size={14} aria-hidden /><span className="system-turn-title">源码快照</span><time dateTime={item.at}>{formatDateTime(item.at)}</time></header>

@@ -1,10 +1,10 @@
-import type { ActivityEntry, ReviewSummary, TaskView } from "../api/types";
+import type { ActivityEntry, ReviewSummary, TaskTimelineEvent, TaskView } from "../api/types";
 import { criterionLabel, taskStatus, taskTitle } from "./labels";
 import { buildTimeline } from "./timeline";
 
 const TURN_NAMES = { create: "创建", revise: "修订", resume: "构建或修复", ask: "回答追问", publish: "发布预览", verify: "浏览器验收", other: "操作" };
 
-export function buildTaskReport(task: TaskView, activity: ActivityEntry[], reviews: ReviewSummary[]): string {
+export function buildTaskReport(task: TaskView, activity: ActivityEntry[], reviews: ReviewSummary[], events: TaskTimelineEvent[] = []): string {
   const lines = [
     `# ${taskTitle(task)}`,
     "",
@@ -24,7 +24,7 @@ export function buildTaskReport(task: TaskView, activity: ActivityEntry[], revie
   }
 
   lines.push("## 执行记录", "");
-  const turns = buildTimeline({ task, activity, reviews, busy: task.running }).filter(item => item.type === "turn");
+  const turns = buildTimeline({ task, activity, reviews, events, busy: task.running }).filter(item => item.type === "turn");
   if (!turns.length) lines.push("暂无可追溯的执行记录。", "");
   for (const turn of turns) {
     lines.push(`### 第 ${turn.index} 轮 · ${TURN_NAMES[turn.kind]}`, "", `- 时间：${turn.startedAt}`, `- 结果：${turn.outcome ?? (turn.live ? "运行中" : "未记录")}`,

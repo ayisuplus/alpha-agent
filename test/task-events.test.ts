@@ -260,3 +260,21 @@ test("the log snapshots itself periodically and loads from the snapshot", async 
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }, 120_000);
+
+test("a lock left by a dead process is taken over instead of blocking the task", async () => {
+  const root = await scratch();
+  try {
+    const ledger = await newTask(root);
+    const dir = taskLogDir(ledger.file);
+    const dead = Bun.spawnSync([process.execPath, "--version"]);
+    expect(dead.exitCode).toBe(0);
+    await writeFile(join(dir, "events.lock"), JSON.stringify({ pid: dead.pid, at: Date.now() }));
+
+    await ledger.recordFailure("Written after the dead owner's lock was taken over");
+    expect(ledger.state.lastFailure).toBe("Written after the dead owner's lock was taken over");
+    expect((await readdir(dir)).filter(name => name.endsWith(".lock"))).toEqual([]);
+    expect((await readEvents(dir)).map(event => event.seq)).toEqual([1, 2]);
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+}, 30_000);

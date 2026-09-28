@@ -53,6 +53,8 @@ function accepted(run: AcceptanceRun, ledger: TaskLedger): TaskLedger {
 async function acceptWebPreview(run: AcceptanceRun): Promise<TaskLedger> {
   const { ctx, runId, projectRoot, signal, emit } = run;
   const ledger = run.ledger;
+  // Every handle used inside this run writes events under its id, so the timeline can attribute them to the turn.
+  const reload = async (): Promise<TaskLedger> => (await TaskLedger.load(ledger.file)).bindRun(runId);
   emit({ type: "status", phase: "验证构建", runId });
   if (!(await buildProduct(ctx, projectRoot, ledger, signal))) {
     emit({ type: "status", phase: signal.aborted ? "已停止" : "失败", runId, pending: ledger.completionGaps() });
@@ -63,20 +65,20 @@ async function acceptWebPreview(run: AcceptanceRun): Promise<TaskLedger> {
   for (let attempt = 0; attempt < 2; attempt++) {
     emit({ type: "status", phase: "浏览器验收", runId });
     try {
-      await controlledVerification(ctx, await TaskLedger.load(ledger.file), signal, run.lease);
-      const verified = await TaskLedger.load(ledger.file);
+      await controlledVerification(ctx, await reload(), signal, run.lease);
+      const verified = await reload();
       emit({ type: "task", task: ctx.taskView(verified) });
       emit({ type: "tool", name: "browser", state: "通过" });
       emit({ type: "status", phase: verified.completionGaps().length ? "待验收" : "已验收", runId, pending: verified.completionGaps() });
       return verified;
     } catch (error) {
       if (ctx.webKernel.controlHolder === "user") {
-        emit({ type: "status", phase: "用户接管", runId, pending: (await TaskLedger.load(ledger.file)).completionGaps() });
-        return await TaskLedger.load(ledger.file);
+        emit({ type: "status", phase: "用户接管", runId, pending: (await reload()).completionGaps() });
+        return reload();
       }
       const reason = error instanceof Error ? error.message : String(error);
       emit({ type: "tool", name: "browser", state: `验收失败：${reason.slice(0, 400)}`, error: true });
-      const current = await TaskLedger.load(ledger.file);
+      const current = await reload();
       if (current.state.status === "active") await current.recordFailure(reason);
       const latestBrowser = current.state.evidence.findLast(item => item.criterionId === "user-path" && item.previewId === current.state.preview?.id);
       if (signal.aborted || attempt === 1 || (latestBrowser?.passed !== false && !reason.includes("Verification plan"))) break;
@@ -90,7 +92,7 @@ async function acceptWebPreview(run: AcceptanceRun): Promise<TaskLedger> {
       await publishPreview(ctx, repaired, projectRoot);
     }
   }
-  const current = await TaskLedger.load(ledger.file);
+  const current = await reload();
   emit({ type: "status", phase: "待验收", runId, pending: current.completionGaps() });
   return current;
 }

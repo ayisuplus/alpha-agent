@@ -5,7 +5,8 @@ import { WorkerSupervisor, inspectWorkerAttempt } from "../../runtime/worker-sup
 import { AgentMailbox } from "../../runtime/agent-mailbox";
 import { isModelAvailable } from "../../runtime/models";
 import { TaskLedger, fingerprintSource } from "../../runtime/task-ledger";
-import { EventConflictError } from "../../runtime/task-events";
+import { EventConflictError, readEvents, taskLogDir } from "../../runtime/task-events";
+import { summarizeTaskEvents } from "../../runtime/task-event-summary";
 import { readSourceReviews } from "../../runtime/source-review";
 import { SettingsError, isModelSelector } from "../../runtime/settings";
 import { SkillPluginError } from "../../plugins/third-party";
@@ -101,6 +102,21 @@ export const taskRoutes: Route[] = [
       if (!ledger) return notFound();
       ctx.flushText(ledger.state.id);
       return Response.json({ entries: await ctx.activityFor(ledger.state.id).read() });
+    },
+  },
+  {
+    // The durable timeline track: what changed the task, straight from its event log. `since` is a sequence cursor.
+    method: "GET", path: path(`/api/tasks/${ID}/events`),
+    async handle({ ctx, request, params: [id] }) {
+      const ledger = await ctx.loadLedger(id);
+      if (!ledger) return notFound();
+      const cursor = Number(new URL(request.url).searchParams.get("since") ?? "0");
+      const since = Number.isFinite(cursor) && cursor > 0 ? cursor : 0;
+      const events = await readEvents(taskLogDir(ledger.file));
+      return Response.json({
+        seq: events.length ? events[events.length - 1].seq : 0,
+        events: summarizeTaskEvents(since ? events.filter(event => event.seq > since) : events),
+      });
     },
   },
   {

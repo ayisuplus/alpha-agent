@@ -284,10 +284,19 @@ export class TaskLedger {
   private seq: number;
   /** Who acts on this task; the log records it so a replay can tell the runtime from the coordinator and the workers. */
   actor: TaskActor = "runtime";
+  /** The run currently writing events, so the timeline can attribute durable entries to a turn. */
+  runId: string | null = null;
 
   private constructor(readonly file: string, readonly state: TaskState, seq: number) {
     this.logDir = taskLogDir(file);
     this.seq = seq;
+  }
+
+  /** Marks this handle as writing events for one run, so the timeline can attribute them to a turn. */
+  bindRun(runId: string, actor: TaskActor = "coordinator"): this {
+    this.runId = runId;
+    this.actor = actor;
+    return this;
   }
 
   static async create(dataRoot: string, input: {
@@ -713,7 +722,7 @@ export class TaskLedger {
     for (let attempt = 0; ; attempt++) {
       const draft = plan();
       if (!draft) return null;
-      const event = { ...draft, at: new Date().toISOString(), actor: this.actor } as TaskEvent;
+      const event = { ...draft, at: new Date().toISOString(), actor: this.actor, ...(this.runId ? { runId: this.runId } : {}) } as TaskEvent;
       // Dry run: the reducer's guards reject the event before anything reaches the log.
       applyEvent(structuredClone(this.state), event);
       try {

@@ -140,6 +140,8 @@ export type TaskEventOf<Type extends TaskEventType> = {
   seq: number;
   at: string;
   actor: TaskActor;
+  /** The run that caused the event, when it happened inside one; lets the timeline attribute entries to a turn. */
+  runId?: string;
   type: Type;
   payload: TaskEventPayloads[Type];
 };

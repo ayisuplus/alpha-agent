@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { api } from "../desktop/ui/src/api/client";
-import type { OperationSnapshot, TaskList, TaskView } from "../desktop/ui/src/api/types";
-import { browserOwner, isOccupied, previewLocked, refreshTasks, resumeTask, store, syncSelected, taskBusy, taskPhase } from "../desktop/ui/src/state/workbench";
+import type { OperationSnapshot, TaskList, TaskTimelineEvent, TaskView } from "../desktop/ui/src/api/types";
+import { browserOwner, isOccupied, previewLocked, refreshTaskEvents, refreshTasks, resumeTask, store, syncSelected, taskBusy, taskPhase } from "../desktop/ui/src/state/workbench";
 
 const operation = (patch: Partial<OperationSnapshot>): OperationSnapshot => ({ id: crypto.randomUUID(), kind: "run", taskId: null, projectId: null, phase: "准备中", browserTaskId: null, cancellable: false, ...patch });
 
@@ -26,12 +26,14 @@ test("older selected-task responses cannot replace a newer task state", async ()
   const taskRequest = api.task;
   const activityRequest = api.activity;
   const reviewsRequest = api.reviews;
+  const eventsRequest = api.taskEvents;
   const pending: Array<(value: TaskView) => void> = [];
   api.task = () => new Promise(resolve => pending.push(resolve));
   api.activity = async () => [];
   api.reviews = async () => [];
+  api.taskEvents = async () => ({ seq: 0, events: [] });
   try {
-    store.set({ selectedId: "task-one", task: null, activity: [], reviews: [] });
+    store.set({ selectedId: "task-one", task: null, activity: [], reviews: [], events: [], eventSeq: 0 });
     const old = syncSelected("task-one");
     const latest = syncSelected("task-one");
     pending[1]({ id: "task-one", status: "complete" } as TaskView);
@@ -39,7 +41,7 @@ test("older selected-task responses cannot replace a newer task state", async ()
     pending[0]({ id: "task-one", status: "active" } as TaskView);
     await old;
     expect(store.get().task?.status).toBe("complete");
-  } finally { api.task = taskRequest; api.activity = activityRequest; api.reviews = reviewsRequest; }
+  } finally { api.task = taskRequest; api.activity = activityRequest; api.reviews = reviewsRequest; api.taskEvents = eventsRequest; }
 });
 
 test("an approval resumes its original task after the user selects another task", async () => {
@@ -93,11 +95,13 @@ test("a started task opens once its own run reports the task it created, not ano
   const taskRequest = api.task;
   const activityRequest = api.activity;
   const reviewsRequest = api.reviews;
+  const eventsRequest = api.taskEvents;
   let runs: TaskList["runs"] = [{ runId: "run-other", taskId: "task-other", kind: "run" }, { runId: "run-new", taskId: null, kind: "run" }];
   api.tasks = async () => ({ tasks: [], runs, operations: [] });
   api.task = async id => ({ id, status: "active" } as TaskView);
   api.activity = async () => [];
   api.reviews = async () => [];
+  api.taskEvents = async () => ({ seq: 0, events: [] });
   try {
     store.set({ selectedId: null, task: null, panel: null, starting: { brief: "新任务", error: null, runId: "run-new" } });
     await refreshTasks();
@@ -106,5 +110,49 @@ test("a started task opens once its own run reports the task it created, not ano
     await refreshTasks();
     expect(store.get().selectedId).toBe("task-new");
     expect(store.get().starting).toBeNull();
-  } finally { api.tasks = tasksRequest; api.task = taskRequest; api.activity = activityRequest; api.reviews = reviewsRequest; }
+  } finally { api.tasks = tasksRequest; api.task = taskRequest; api.activity = activityRequest; api.reviews = reviewsRequest; api.taskEvents = eventsRequest; }
+});
+
+test("the durable track loads with the selected task and a refresh appends only rows past the cursor", async () => {
+  const taskRequest = api.task;
+  const activityRequest = api.activity;
+  const reviewsRequest = api.reviews;
+  const eventsRequest = api.taskEvents;
+  const row = (n: number): TaskTimelineEvent => ({ seq: n, at: `2026-09-24T03:00:0${n}.000Z`, type: "status/changed", runId: null, actor: "runtime", label: `行 ${n}` });
+  let rows = [row(1), row(2), row(3)];
+  const cursors: Array<number | undefined> = [];
+  api.task = async id => ({ id, status: "active" } as TaskView);
+  api.activity = async () => [];
+  api.reviews = async () => [];
+  api.taskEvents = async (_id, since) => {
+    cursors.push(since);
+    return { seq: rows.at(-1)?.seq ?? 0, events: rows.filter(item => !since || item.seq > since) };
+  };
+  try {
+    store.set({ selectedId: "task-a", task: null, activity: [], reviews: [], events: [], eventSeq: 0 });
+    await syncSelected("task-a");
+    expect(cursors).toEqual([0]);
+    expect(store.get().events.map(item => item.seq)).toEqual([1, 2, 3]);
+    expect(store.get().eventSeq).toBe(3);
+    // The `{ type: "task" }` push refreshes from the cursor; nothing new means nothing appended.
+    await refreshTaskEvents("task-a");
+    expect(cursors).toEqual([0, 3]);
+    expect(store.get().events.map(item => item.seq)).toEqual([1, 2, 3]);
+    // A later mutation appends only the new rows.
+    rows = [...rows, row(4)];
+    await refreshTaskEvents("task-a");
+    expect(cursors).toEqual([0, 3, 3]);
+    expect(store.get().events.map(item => item.seq)).toEqual([1, 2, 3, 4]);
+    expect(store.get().eventSeq).toBe(4);
+    // A stale reply that redelivers known rows cannot append them twice.
+    api.taskEvents = async () => ({ seq: 4, events: [row(3), row(4)] });
+    await refreshTaskEvents("task-a");
+    expect(store.get().events.map(item => item.seq)).toEqual([1, 2, 3, 4]);
+    // A reply for a task that is no longer selected is dropped, cursor untouched.
+    api.taskEvents = async () => ({ seq: 9, events: [row(9)] });
+    store.set({ selectedId: "task-b", events: [], eventSeq: 0 });
+    await refreshTaskEvents("task-a");
+    expect(store.get().events).toEqual([]);
+    expect(store.get().eventSeq).toBe(0);
+  } finally { api.task = taskRequest; api.activity = activityRequest; api.reviews = reviewsRequest; api.taskEvents = eventsRequest; }
 });

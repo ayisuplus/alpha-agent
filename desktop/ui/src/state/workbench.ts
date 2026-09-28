@@ -1,10 +1,10 @@
 import { api } from "../api/client";
 import { connectEvents, type ConnectionState } from "../api/events";
-import type { ActivityEntry, ControlHolder, ModelCatalog, OperationSnapshot, ProjectRecord, ReviewSummary, RunInfo, ServerMessage, Settings, SettingsPatch, TaskList, TaskMeta, TaskSummary, TaskView } from "../api/types";
+import type { ActivityEntry, ControlHolder, ModelCatalog, OperationSnapshot, ProjectRecord, ReviewSummary, RunInfo, ServerMessage, Settings, SettingsPatch, TaskList, TaskMeta, TaskSummary, TaskTimelineEvent, TaskView } from "../api/types";
 import { TERMINAL_PHASES, taskTitle } from "./labels";
 import { buildTaskReport } from "./report";
 import { createStore } from "./store";
-import { mergeActivity } from "./timeline";
+import { mergeActivity, mergeTaskEvents } from "./timeline";
 
 export type Detail = { kind: "diff"; operationId: string } | { kind: "evidence"; criterionId?: string; evidenceId?: string } | { kind: "info" };
 export type PendingAction = "start" | "resume" | "revise" | "guidance" | "ask" | "stop" | "publish" | "verify" | "control" | "plan" | "approve" | "goal";
@@ -23,6 +23,10 @@ export interface AppState {
   task: TaskView | null;
   activity: ActivityEntry[];
   reviews: ReviewSummary[];
+  /** The selected task's durable event track, rebuilt from its log, so it survives a server restart. */
+  events: TaskTimelineEvent[];
+  /** Sequence number of the last event log row read for the selected task; the `since` cursor of the next refresh. */
+  eventSeq: number;
   /** Streamed model text for the selected task that has not yet been flushed into an activity entry. */
   liveText: string;
   runningPreview: { taskId: string; url: string } | null;
@@ -53,6 +57,8 @@ export const store = createStore<AppState>({
   task: null,
   activity: [],
   reviews: [],
+  events: [],
+  eventSeq: 0,
   liveText: "",
   runningPreview: null,
   controlHolder: "alpha",
@@ -192,27 +198,42 @@ function scheduleTasksRefresh(): void {
 /** Refetches the selected task; results for a task that is no longer selected are dropped. */
 export async function syncSelected(id: string): Promise<void> {
   const version = ++selectedRequestVersion;
-  const [task, activity, reviews] = await Promise.allSettled([api.task(id), api.activity(id), api.reviews(id)]);
+  // The event cursor belongs to the selected task; a sync for another one (after an approval) leaves it alone.
+  const selected = store.get().selectedId === id;
+  const since = selected ? store.get().eventSeq : 0;
+  const [task, activity, reviews, events] = await Promise.allSettled([api.task(id), api.activity(id), api.reviews(id), selected ? api.taskEvents(id, since) : Promise.resolve(null)]);
   if (store.get().selectedId !== id || version !== selectedRequestVersion) return;
   store.set(state => ({
     task: task.status === "fulfilled" ? task.value : state.task,
     activity: activity.status === "fulfilled" ? mergeActivity(state.activity, activity.value) : state.activity,
     reviews: reviews.status === "fulfilled" ? reviews.value : state.reviews,
+    events: events.status === "fulfilled" && events.value ? mergeTaskEvents(state.events, events.value.events) : state.events,
+    eventSeq: events.status === "fulfilled" && events.value ? Math.max(state.eventSeq, events.value.seq) : state.eventSeq,
   }));
   if (task.status === "rejected") notify(messageOf(task.reason));
+}
+
+/** Appends the durable rows recorded since the cursor; the server pushes `{ type: "task" }` after every mutation. */
+export async function refreshTaskEvents(id: string): Promise<void> {
+  const since = store.get().eventSeq;
+  const result = await api.taskEvents(id, since).catch(() => null);
+  if (!result) return;
+  store.set(state => state.selectedId === id
+    ? { events: mergeTaskEvents(state.events, result.events), eventSeq: Math.max(state.eventSeq, result.seq) }
+    : state);
 }
 
 export async function openTask(id: string): Promise<void> {
   const state = store.get();
   if (state.selectedId !== id) {
-    store.set({ selectedId: id, task: null, activity: [], reviews: [], liveText: "", detail: null, workspaceView: previewLocked(state) ? "preview" : state.workspaceView === "closed" ? "detail" : state.workspaceView, browserTabId: previewLocked(state) ? state.browserTabId : null, starting: null, panel: null, paletteOpen: false });
+    store.set({ selectedId: id, task: null, activity: [], reviews: [], events: [], eventSeq: 0, liveText: "", detail: null, workspaceView: previewLocked(state) ? "preview" : state.workspaceView === "closed" ? "detail" : state.workspaceView, browserTabId: previewLocked(state) ? state.browserTabId : null, starting: null, panel: null, paletteOpen: false });
   } else store.set({ starting: null, panel: null, paletteOpen: false });
   remember(id);
   await syncSelected(id);
 }
 
 export function newTask(): void {
-  store.set(state => ({ selectedId: null, task: null, activity: [], reviews: [], liveText: "", detail: null, workspaceView: previewLocked(state) ? "preview" : "closed", browserTabId: previewLocked(state) ? state.browserTabId : null, starting: null, panel: null, paletteOpen: false }));
+  store.set(state => ({ selectedId: null, task: null, activity: [], reviews: [], events: [], eventSeq: 0, liveText: "", detail: null, workspaceView: previewLocked(state) ? "preview" : "closed", browserTabId: previewLocked(state) ? state.browserTabId : null, starting: null, panel: null, paletteOpen: false }));
   remember(null);
 }
 
@@ -332,8 +353,8 @@ export async function openPreviewInBrowser(id: string): Promise<void> {
 
 export async function exportTaskReport(id: string): Promise<void> {
   try {
-    const [task, activity, reviews] = await Promise.all([api.task(id), api.activity(id), api.reviews(id)]);
-    const content = buildTaskReport(task, activity, reviews);
+    const [task, activity, reviews, timeline] = await Promise.all([api.task(id), api.activity(id), api.reviews(id), api.taskEvents(id)]);
+    const content = buildTaskReport(task, activity, reviews, timeline.events);
     const filename = `${taskTitle(task).replace(/[<>:"/\\|?*]/g, "_")}-报告.md`;
     if (window.alpha?.saveText) {
       if (await window.alpha.saveText(filename, content)) notify("报告已保存", "info");
@@ -475,7 +496,7 @@ function handleMessage(message: ServerMessage): void {
       break;
     case "task": {
       const task = message.task;
-      if (task.id === state.selectedId) selectedRequestVersion++;
+      if (task.id === state.selectedId) { selectedRequestVersion++; void refreshTaskEvents(task.id); }
       store.set(current => ({
         tasks: upsertSummary(current.tasks, task),
         task: current.selectedId === task.id ? task : current.task,

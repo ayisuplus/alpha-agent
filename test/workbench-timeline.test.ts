@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { ActivityEntry, ReviewSummary } from "../desktop/ui/src/api/types";
+import type { ActivityEntry, ReviewSummary, TaskTimelineEvent } from "../desktop/ui/src/api/types";
 import { fileDiff } from "../desktop/ui/src/state/diff";
 import { criterionState, parseEvidence, parseFailure } from "../desktop/ui/src/state/evidence";
 import { DEFAULT_RESUME_INSTRUCTION, guidanceText, titleOf } from "../desktop/ui/src/state/labels";
@@ -13,6 +13,12 @@ function entry(operationId: string | null, kind: ActivityEntry["kind"], value: s
 const at = (offset: number) => new Date(Date.parse("2026-09-24T03:00:00.000Z") + offset * 1_000).toISOString();
 const baseTask = { objective: "构建一个计数器：点击加一", contractVersion: 1, contractHistory: [], guidanceHistory: [], createdAt: at(0) };
 const turns = (items: ReturnType<typeof buildTimeline>) => items.filter((item): item is Turn => item.type === "turn");
+
+let seq = 0;
+function event(runId: string | null, type: string, label: string, extra: Partial<TaskTimelineEvent> = {}): TaskTimelineEvent {
+  clock += 1_000;
+  return { seq: ++seq, at: new Date(clock).toISOString(), type, runId, actor: "runtime", label, ...extra };
+}
 
 test("timeline groups one turn per operation, merges streamed text and pairs tool calls", () => {
   clock = Date.parse("2026-09-24T03:00:00.000Z");
@@ -199,4 +205,65 @@ test("task titles keep the distinguishing part of the original objective's first
   expect(titleOf("Build a tiny static page with a counter button")).toBe("Static page with a counter button");
   expect(titleOf("做：一个很长很长的应用")).toBe("做：一个很长很长的应用");
   expect(titleOf("构建计数器")).toBe("计数器");
+});
+
+test("durable rows join their run's turn and the outcome comes from status/changed, not the activity phase", () => {
+  clock = Date.parse("2026-09-24T03:00:00.000Z"); seq = 0;
+  const activity = [
+    entry("run-1", "status", "任务已创建"),
+    entry("run-1", "text", "Building it."),
+    entry("run-1", "status", "构建中"),
+    entry("run-1", "tool", "build · 通过"),
+    entry("run-1", "status", "待验收"),
+  ];
+  const events = [
+    event("run-1", "phase/changed", "阶段：执行中", { tone: "info", at: activity[2].recordedAt }),
+    event("run-1", "evidence/recorded", "证据 build 通过", { tone: "success", detail: "alpha_check build", at: activity[3].recordedAt, refs: { criterionId: "build", evidenceId: "evidence-1", passed: true } }),
+    event("run-1", "status/changed", "需要回答：等待批准", { tone: "warning" }),
+  ];
+  const items = buildTimeline({ task: baseTask, activity, reviews: [], busy: false, events });
+  const [turn] = turns(items);
+  expect(turn).toMatchObject({ kind: "create", outcome: "需要回答：等待批准", outcomeTone: "warning", modelRun: true });
+  // The activity echo of the status is suppressed; the fine-grained phase label stays; ties order ephemeral before durable.
+  expect(turn.blocks.map(block => block.type === "phase" ? `phase:${block.phase}` : block.type === "event" ? `event:${block.label}` : block.type))
+    .toEqual(["text", "phase:构建中", "event:阶段：执行中", "check", "event:证据 build 通过", "event:需要回答：等待批准"]);
+  expect(turn.blocks.find(block => block.type === "event" && block.eventType === "phase/changed")).toMatchObject({ seq: 1, tone: "info", at: activity[2].recordedAt });
+  // The check joins its evidence through the durable row that recorded it.
+  expect(turn.blocks.find(block => block.type === "check")).toMatchObject({ name: "build", passed: true, evidenceAt: events[1].at });
+});
+
+test("a task without event rows renders exactly as before", () => {
+  clock = Date.parse("2026-09-24T03:00:00.000Z"); seq = 0;
+  const activity = [entry("run-1", "status", "任务已创建"), entry("run-1", "text", "Done."), entry("run-1", "status", "待验收")];
+  const before = buildTimeline({ task: baseTask, activity, reviews: [], busy: false });
+  const after = buildTimeline({ task: baseTask, activity, reviews: [], busy: false, events: [] });
+  expect(after).toEqual(before);
+  expect(turns(after)[0].outcome).toBe("待验收");
+  expect(turns(after)[0].outcomeTone).toBeUndefined();
+  expect(turns(after)[0].blocks.some(block => block.type === "phase" && block.phase === "待验收")).toBe(true);
+});
+
+test("after a restart the durable track alone rebuilds turns and task-level rows", () => {
+  clock = Date.parse("2026-09-24T03:00:00.000Z"); seq = 0;
+  const events = [
+    event(null, "task/imported", "导入既有任务"),
+    event("run-1", "task/created", "任务创建"),
+    event("run-1", "plan/submitted", "计划已提交审阅", { tone: "info" }),
+    event(null, "plan/approved", "计划已批准，开始执行", { tone: "success" }),
+    event("run-2", "phase/changed", "阶段：执行中", { tone: "info" }),
+    event("run-2", "worker/updated", "子实例 abcd1234：已完成", { tone: "success" }),
+    event(null, "checkpoint/committed", "检查点已提交", { tone: "success" }),
+    event("run-2", "run/ended", "运行结束 · coordinator · returned"),
+    event("run-2", "status/changed", "已验收", { tone: "success" }),
+  ];
+  const items = buildTimeline({ task: baseTask, activity: [], reviews: [], busy: false, events });
+  expect(items.map(item => item.type === "turn" ? `turn:${item.id}` : item.type === "event" ? `event:${item.label}` : item.type))
+    .toEqual(["objective", "event:导入既有任务", "turn:run-1", "event:计划已批准，开始执行", "turn:run-2"]);
+  const [first, second] = turns(items);
+  expect(first).toMatchObject({ index: 1, kind: "create", modelRun: false, outcome: "计划已提交审阅", outcomeTone: "accent" });
+  expect(first.blocks.map(block => block.type === "event" ? block.label : block.type)).toEqual(["计划已提交审阅"]);
+  expect(second).toMatchObject({ index: 2, kind: "other", modelRun: true, outcome: "已验收", outcomeTone: "success" });
+  // The checkpoint row (no run) joins the turn surrounding it by time.
+  expect(second.blocks.map(block => block.type === "event" ? block.label : block.type))
+    .toEqual(["阶段：执行中", "子实例 abcd1234：已完成", "检查点已提交", "运行结束 · coordinator · returned", "已验收"]);
 });

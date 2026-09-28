@@ -25,6 +25,7 @@ export function TaskDetail({ task, detail, onBack }: { task: TaskView; detail: D
 function TaskThread({ task }: { task: TaskView }) {
   const activity = useStore(store, state => state.activity);
   const reviews = useStore(store, state => state.reviews);
+  const events = useStore(store, state => state.events);
   const liveText = useStore(store, state => state.liveText);
   const serverBusy = useStore(store, state => taskBusy(state, task.id));
   const serverPhase = useStore(store, state => taskPhase(state, task.id));
@@ -32,7 +33,7 @@ function TaskThread({ task }: { task: TaskView }) {
   const workspaceView = useStore(store, state => state.workspaceView);
 
   const busy = task.running || serverBusy;
-  const items = useMemo(() => buildTimeline({ task, activity, reviews, busy }), [task, activity, reviews, busy]);
+  const items = useMemo(() => buildTimeline({ task, activity, reviews, events, busy }), [task, activity, reviews, events, busy]);
   const withLive = useMemo(() => attachLiveText(items, liveText, busy, new Date().toISOString()), [items, liveText, busy]);
   const phase = serverPhase ?? livePhase(items);
   const back = () => openDetail(null);

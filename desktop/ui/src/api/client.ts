@@ -1,4 +1,4 @@
-import type { ActivityEntry, AgentPreset, AgentPresetSummary, Automation, AutomationRun, ControlHolder, Diagnostics, EvidenceDetail, LocalSchedule, ModelCatalog, PermissionMode, ProjectRecord, PromptRefinement, QueueItem, ReviewDetail, ReviewSummary, Settings, SettingsPatch, SkillPlugin, StorageReport, TaskList, TaskMeta, TaskView } from "./types";
+import type { ActivityEntry, AgentPreset, AgentPresetSummary, Automation, AutomationRun, ControlHolder, Diagnostics, EvidenceDetail, LocalSchedule, ModelCatalog, PermissionMode, ProjectRecord, PromptRefinement, QueueItem, ReviewDetail, ReviewSummary, Settings, SettingsPatch, SkillPlugin, StorageReport, TaskList, TaskMeta, TaskTimelineEvent, TaskView } from "./types";
 
 const SERVER_MESSAGES: Record<string, string> = {
   "A task is already running": "已有任务或操作正在进行，请等它结束",
@@ -103,6 +103,8 @@ export const api = {
   webTabAction: (id: string, tabId: string, action: "focus" | "close") => post<{ ok: boolean }>(`${taskPath(id)}/web-tabs/${tabId}/${action}`, {}),
   webSources: (id: string) => request<{ sources: import("./types").WebSource[]; jobs: import("./types").WebJob[] }>(`${taskPath(id)}/web-sources`),
   activity: (id: string) => request<{ entries: ActivityEntry[] }>(`${taskPath(id)}/activity`).then(result => result.entries),
+  /** The durable timeline track; `since` is a sequence cursor, and `seq` in the reply is the log's last sequence number. */
+  taskEvents: (id: string, since?: number) => request<{ seq: number; events: TaskTimelineEvent[] }>(`${taskPath(id)}/events${since ? `?since=${since}` : ""}`),
   reviews: (id: string) => request<{ reviews: ReviewSummary[] }>(`${taskPath(id)}/reviews`).then(result => result.reviews),
   review: (id: string, operationId: string) => request<{ review: ReviewDetail }>(`${taskPath(id)}/reviews/${encodeURIComponent(operationId)}`).then(result => result.review),
   evidence: (id: string, evidenceId: string) => request<EvidenceDetail>(`${taskPath(id)}/evidence/${encodeURIComponent(evidenceId)}`),

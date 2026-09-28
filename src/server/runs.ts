@@ -52,6 +52,7 @@ export function registerRun(ctx: ServerContext, lease: OperationLease, kind: Run
   const run: RunState = { runId, kind, lease, taskId: ledger?.state.id ?? null, ledger, steeringIds: new Set() };
   ctx.runs.set(runId, run);
   if (ledger) {
+    ledger.bindRun(runId);
     ctx.setContext(ledger);
     ctx.operationIds.set(ledger.state.id, runId);
     ctx.emit({ type: "task", taskId: ledger.state.id, task: ctx.taskView(ledger) });
@@ -183,7 +184,7 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
         async onLedger(created) {
           if (projectTurn) await bindProjectTurn(projectTurn, created);
           await ctx.operationJournal.start(created.state.id, runId);
-          run.ledger = created;
+          run.ledger = created.bindRun(runId);
           run.taskId = created.state.id;
           if (!ctx.operations.forTask(created.state.id)) ctx.operations.bind(lease, { taskId: created.state.id, projectId: created.state.projectId ?? null });
           publishRuns(ctx);
@@ -224,13 +225,13 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
             ...await ctx.configuredRun(current.state.modelSelector, current),
             projectRoot, dataRoot, signal: controller.signal, existingLedger: current, objective: instruction,
             onEvent: forwardEvent,
-            async onLedger(created) { await ctx.operationJournal.start(created.state.id, runId); run.ledger = created; ctx.setContext(created); },
+            async onLedger(created) { await ctx.operationJournal.start(created.state.id, runId); run.ledger = created.bindRun(runId); ctx.setContext(created); },
             ...sessionHooks(ctx, run),
           }),
         });
       };
       const verified = await verifyCycle();
-      currentLedger = await TaskLedger.load(verified.file);
+      currentLedger = (await TaskLedger.load(verified.file)).bindRun(runId);
       const continuation = nextGoalCycle(currentLedger, beforeProgress, controller.signal.aborted, webKernel.controlHolder === "user");
       if (!continuation.continue && continuation.stopReason !== "no-progress") return;
       if (continuation.stopReason === "no-progress") {

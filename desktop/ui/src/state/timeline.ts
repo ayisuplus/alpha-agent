@@ -1,5 +1,5 @@
-import type { ActivityEntry, GuidanceStatus, ReviewSummary, RunRecord, TaskView } from "../api/types";
-import { TERMINAL_PHASES } from "./labels";
+import type { ActivityEntry, GuidanceStatus, ReviewSummary, RunRecord, TaskTimelineEvent, TaskView } from "../api/types";
+import { TERMINAL_PHASES, type Tone } from "./labels";
 
 export interface ToolCall {
   id: string;
@@ -14,9 +14,10 @@ export type Block =
   | { type: "text"; id: string; at: string; text: string; live?: boolean }
   | { type: "tools"; id: string; at: string; calls: ToolCall[] }
   | { type: "phase"; id: string; at: string; phase: string }
-  | { type: "check"; id: string; at: string; name: string; passed: boolean; detail?: string }
+  | { type: "check"; id: string; at: string; name: string; passed: boolean; detail?: string; /** When an `evidence/recorded` durable row covers this check, its timestamp joins the evidence record. */ evidenceAt?: string }
   | { type: "error"; id: string; at: string; message: string }
-  | { type: "guidance"; id: string; at: string; text: string; status?: GuidanceStatus };
+  | { type: "guidance"; id: string; at: string; text: string; status?: GuidanceStatus }
+  | { type: "event"; id: string; at: string; seq: number; eventType: string; label: string; detail?: string; tone?: TaskTimelineEvent["tone"] };
 
 /**
  * What started an operation: a new task, an objective revision, a repair run, a follow-up question, or a runtime-only
@@ -34,6 +35,8 @@ export interface Turn {
   contractVersion: number;
   blocks: Block[];
   outcome: string | null;
+  /** Tone of a durable `outcome`; when set, the outcome label comes from the event track, not from `phaseInfo`. */
+  outcomeTone?: Tone;
   toolCount: number;
   review?: ReviewSummary;
   live: boolean;
@@ -49,6 +52,8 @@ export type TimelineItem =
   /** A follow-up question; its answer is the turn that follows. */
   | { type: "question"; id: string; text: string; at: string }
   | { type: "review"; id: string; review: ReviewSummary; at: string }
+  /** A durable event row that no turn claimed (a workbench action between runs, an import). */
+  | { type: "event"; id: string; at: string; seq: number; label: string; detail?: string; tone?: TaskTimelineEvent["tone"] }
   | { type: "legacy"; id: string; at: string | null }
   | Turn;
 
@@ -56,6 +61,8 @@ export interface TimelineInput {
   task: Pick<TaskView, "objective" | "contractVersion" | "contractHistory" | "guidanceHistory" | "createdAt"> & { runs?: RunRecord[] };
   activity: ActivityEntry[];
   reviews: ReviewSummary[];
+  /** The durable event track of the task; empty for ledgers recorded before it existed. */
+  events?: TaskTimelineEvent[];
   /** Whether an operation for this task is in progress right now. */
   busy: boolean;
 }
@@ -74,6 +81,117 @@ export function mergeActivity(current: ActivityEntry[], incoming: ActivityEntry[
     .map((entry, index) => ({ entry, index }))
     .sort((a, b) => a.entry.recordedAt.localeCompare(b.entry.recordedAt) || a.index - b.index)
     .map(item => item.entry);
+}
+
+/** Appends the durable rows past the stored cursor; the log is append-only, so `seq` dedupes overlapping refreshes. */
+export function mergeTaskEvents(current: TaskTimelineEvent[], incoming: TaskTimelineEvent[]): TaskTimelineEvent[] {
+  const last = current.at(-1)?.seq ?? 0;
+  const fresh = incoming.filter(row => row.seq > last);
+  return fresh.length ? [...current, ...fresh] : current;
+}
+
+/** The acceptance criterion a check row verifies; the browser check records the "user-path" criterion. */
+export function checkCriterion(name: string): string | null {
+  return name === "browser" ? "user-path" : name === "build" ? "build" : null;
+}
+
+// Objective and guidance rows render from the task state itself (contractHistory, guidanceHistory); durable rows would repeat them.
+const RENDERED_ELSEWHERE: Record<string, true> = { "task/created": true, "contract/revised": true, "guidance/recorded": true };
+
+// Activity phases the durable track states precisely; when a turn has event rows, they render once, from the events.
+const DURABLE_PHASES: Record<string, true> = { 待验收: true, 已验收: true, 已停止: true, 失败: true, 需要回答: true, 计划待审阅: true, "无实际进展，已停止": true, 继续规划: true };
+
+// Which durable rows settle a turn's outcome, and how strongly; the last row of the strongest kind wins.
+const OUTCOME_RANK: Record<string, number> = { "phase/changed": 1, "plan/submitted": 2, "plan/approved": 2, "status/changed": 3 };
+
+const OUTCOME_TONES: Record<string, Tone> = { info: "accent", success: "success", warning: "warning", danger: "danger" };
+
+/** A turn rebuilt from the durable track alone, for runs whose activity the server no longer has (e.g. after a restart). */
+function durableTurn(runId: string, rows: TaskTimelineEvent[], contractVersion: number): Turn {
+  return {
+    type: "turn", id: runId, index: 0,
+    kind: rows.some(row => row.type === "task/created") ? "create" : rows.some(row => row.type === "contract/revised") ? "revise" : "other",
+    startedAt: rows[0].at, endedAt: rows.at(-1)!.at, contractVersion,
+    blocks: [], outcome: null, toolCount: 0, modelRun: rows.some(row => row.type === "run/ended"),
+    live: false, models: [], usageTokens: 0,
+  };
+}
+
+/** Merges one run's durable rows into its turn: blocks ordered by time (ties by `seq`), outcome, phase and evidence joins. */
+function attachDurable(turn: Turn, rows: TaskTimelineEvent[]): void {
+  const blocks: Block[] = rows.flatMap(row => row.type in RENDERED_ELSEWHERE
+    ? []
+    : [{ type: "event" as const, id: `event-${row.seq}`, at: row.at, seq: row.seq, eventType: row.type, label: row.label, detail: row.detail, tone: row.tone }]);
+  // Durable rows state task status precisely; the echoed activity phase strings would render them twice.
+  if (blocks.length || turn.blocks.some(block => block.type === "event")) {
+    turn.blocks = turn.blocks.filter(block => !(block.type === "phase" && block.phase in DURABLE_PHASES));
+  }
+  turn.blocks = [...turn.blocks, ...blocks]
+    .sort((a, b) => a.at.localeCompare(b.at) || (a.type === "event" ? a.seq : 0) - (b.type === "event" ? b.seq : 0));
+  let outcome: TaskTimelineEvent | null = null;
+  for (const row of rows) {
+    const rank = OUTCOME_RANK[row.type] ?? 0;
+    if (rank && (!outcome || rank >= (OUTCOME_RANK[outcome.type] ?? 0))) outcome = row;
+  }
+  if (outcome) {
+    turn.outcome = outcome.label;
+    turn.outcomeTone = outcome.tone ? OUTCOME_TONES[outcome.tone] : "neutral";
+  }
+  const last = rows.at(-1)!;
+  if (last.at > turn.endedAt) turn.endedAt = last.at;
+  // Checks join their evidence through the durable row that recorded it, not through nearby timestamps.
+  const evidenceRows = rows.filter(row => row.type === "evidence/recorded");
+  if (!evidenceRows.length) return;
+  for (const block of turn.blocks) {
+    if (block.type !== "check") continue;
+    const criterionId = checkCriterion(block.name);
+    if (!criterionId) continue;
+    const checkTime = Date.parse(block.at);
+    let nearest: TaskTimelineEvent | null = null;
+    let distance = Infinity;
+    for (const row of evidenceRows) {
+      if (row.refs?.criterionId !== criterionId) continue;
+      const delta = Math.abs(Date.parse(row.at) - checkTime);
+      if (delta < distance) { distance = delta; nearest = row; }
+    }
+    if (nearest) block.evidenceAt = nearest.at;
+  }
+}
+
+/**
+ * Merges the durable event track into the activity-built turns: rows join the turn of their run (creating one when the
+ * activity log no longer has it), rows without a run join the turn surrounding them by time, and the rest become
+ * task-level items, which are returned.
+ */
+function mergeDurable(turns: Turn[], events: TaskTimelineEvent[], contractVersion: number): TimelineItem[] {
+  if (!events.length) return [];
+  const rows = [...events].sort((a, b) => a.seq - b.seq);
+  const byRun = new Map<string, TaskTimelineEvent[]>();
+  const loose: TaskTimelineEvent[] = [];
+  for (const row of rows) {
+    if (!row.runId) { loose.push(row); continue; }
+    const group = byRun.get(row.runId);
+    if (group) group.push(row);
+    else byRun.set(row.runId, [row]);
+  }
+  const byId = new Map(turns.map(turn => [turn.id, turn]));
+  for (const [runId, group] of byRun) {
+    let turn = byId.get(runId);
+    if (!turn) {
+      turn = durableTurn(runId, group, contractVersion);
+      turns.push(turn);
+      byId.set(runId, turn);
+    }
+    attachDurable(turn, group);
+  }
+  const items: TimelineItem[] = [];
+  for (const row of loose) {
+    const turn = turns.find(item => row.at >= item.startedAt && row.at <= item.endedAt);
+    if (turn) { attachDurable(turn, [row]); continue; }
+    if (row.type in RENDERED_ELSEWHERE) continue;
+    items.push({ type: "event", id: `event-${row.seq}`, at: row.at, seq: row.seq, label: row.label, detail: row.detail, tone: row.tone });
+  }
+  return items;
 }
 
 export function parseToolValue(value: string): { name: string; state: string } {
@@ -153,10 +271,10 @@ function buildTurn(id: string, entries: ActivityEntry[]): Turn {
   };
 }
 
-const RANK: Record<TimelineItem["type"], number> = { objective: 0, legacy: 1, guidance: 2, question: 2, review: 3, turn: 4 };
+const RANK: Record<TimelineItem["type"], number> = { objective: 0, legacy: 1, event: 2, guidance: 2, question: 2, review: 3, turn: 4 };
 
 export function buildTimeline(input: TimelineInput): TimelineItem[] {
-  const { task, activity, reviews, busy } = input;
+  const { task, activity, reviews, busy, events } = input;
   const items: TimelineItem[] = [];
 
   const history = task.contractHistory ?? [];
@@ -176,8 +294,9 @@ export function buildTimeline(input: TimelineInput): TimelineItem[] {
     if (group) group.push(entry);
     else groups.set(key, [entry]);
   }
-  const turns = [...groups.entries()].map(([id, entries]) => buildTurn(id, entries))
-    .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  const turns = [...groups.entries()].map(([id, entries]) => buildTurn(id, entries));
+  items.push(...mergeDurable(turns, events ?? [], task.contractVersion));
+  turns.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 
   const latest = turns.at(-1);
   if (busy && latest && latest.outcome === null) latest.live = true;
@@ -218,7 +337,7 @@ export function buildTimeline(input: TimelineInput): TimelineItem[] {
     }
   }
   for (const review of byOperation.values()) items.push({ type: "review", id: `review-${review.operationId}`, review, at: review.recordedAt });
-  if (!activity.length && !busy) items.push({ type: "legacy", id: "legacy", at: task.createdAt ?? null });
+  if (!activity.length && !events?.length && !busy) items.push({ type: "legacy", id: "legacy", at: task.createdAt ?? null });
 
   items.push(...turns);
   const at = (item: TimelineItem) => item.type === "turn" ? item.startedAt : item.at ?? "";

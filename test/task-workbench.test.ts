@@ -174,6 +174,14 @@ test("workbench serves recorded evidence but refuses a ledger path outside its d
     expect(persisted.entries.map(item => item.id)).toContain(pushed.entry.id);
     expect((await TaskLedger.load(ledger.file)).state.guidanceHistory?.at(-1)?.instruction).toBe("Keep the screenshot visible on the next run");
 
+    // The durable timeline track comes from the event log, with a sequence cursor for incremental refreshes.
+    const timeline = await fetch(`${base}/api/tasks/${ledger.state.id}/events`).then(response => response.json()) as { seq: number; events: Array<{ seq: number; type: string; label: string; detail?: string; runId: string | null }> };
+    expect(timeline.events.at(-1)).toMatchObject({ type: "guidance/recorded", label: "用户补充", detail: "Keep the screenshot visible on the next run" });
+    expect(timeline.seq).toBe(timeline.events.at(-1)!.seq);
+    const tail = await fetch(`${base}/api/tasks/${ledger.state.id}/events?since=${timeline.seq - 1}`).then(response => response.json()) as { events: Array<{ seq: number }> };
+    expect(tail.events.map(item => item.seq)).toEqual([timeline.seq]);
+    expect((await fetch(`${base}/api/tasks/00000000-0000-4000-8000-000000000000/events`)).status).toBe(404);
+
     const put = (body: unknown, origin = base) => fetch(`${base}/api/settings`, { method: "PUT", headers: { "content-type": "application/json", origin }, body: JSON.stringify(body) });
     expect((await fetch(`${base}/api/settings`).then(response => response.json()) as { settings: { budget: { maxToolCalls: number } } }).settings.budget.maxToolCalls).toBe(120);
     expect((await put({ budget: { maxToolCalls: 60 } }, "http://evil.example")).status).toBe(403);

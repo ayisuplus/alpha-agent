@@ -1,4 +1,4 @@
-import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, truncate, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, truncate, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { TaskState } from "../task-ledger";
 import { EventConflictError } from "./errors";
@@ -6,13 +6,15 @@ import type { TaskEvent, TaskEventDraft } from "./types";
 
 /**
  * Append-only task event log: `<dataRoot>/tasks/<id>/events.v1.jsonl`, one JSON object per line
- * (`{ seq, at, actor, type, payload }`). Appends are serialized by a directory lock shared with every Alpha process
- * and use sequence compare-and-swap, so the main process and subagent processes can write the same task safely.
- * Snapshots are pure caches: deleting them changes nothing but load time.
+ * (`{ seq, at, actor, runId?, type, payload }`). Appends are serialized by an owner-stamped lock file shared with
+ * every Alpha process and use sequence compare-and-swap, so the main process and subagent processes can write the
+ * same task safely; a lock whose owner died is taken over immediately. Snapshots are pure caches: deleting them
+ * changes nothing but load time.
  */
 export const EVENT_LOG_VERSION = 1;
 export const SNAPSHOT_INTERVAL = 200;
-const LOCK_STALE_MS = 30_000;
+/** Backstop for an unreadable lock owner; a dead owner is detected by pid without waiting. */
+const LOCK_STALE_MS = 10_000;
 const LOCK_RETRY_MS = 20;
 const TAIL_WINDOW_BYTES = 64 * 1024;
 
@@ -102,20 +104,32 @@ export async function readEvents(dir: string, fromOffset = 0): Promise<TaskEvent
   }
 }
 
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
+}
+
 async function withLogLock<T>(dir: string, run: () => Promise<T>): Promise<T> {
   // Always create the directory: a log folder can disappear (task cleanup, a test fixture) between two appends.
   await mkdir(dir, { recursive: true });
   const lock = join(dir, "events.lock");
   while (true) {
-    try { await mkdir(lock); break; } catch (error) {
+    try {
+      // Exclusive create writes the owner with it, so a reader never sees a lock it cannot attribute.
+      await writeFile(lock, JSON.stringify({ pid: process.pid, at: Date.now() }), { flag: "wx" });
+      break;
+    } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      // A lock left behind by a crashed process is released after longer than an append can take.
-      const age = Date.now() - await orDefault(stat(lock).then(item => item.mtimeMs), Date.now());
-      if (age > LOCK_STALE_MS) await rm(lock, { recursive: true, force: true });
-      await Bun.sleep(LOCK_RETRY_MS);
+      const owner = JSON.parse(await orDefault(readFile(lock, "utf8"), "null")) as { pid?: number; at?: number } | null;
+      const fresh = Date.now() - (owner?.at ?? 0) <= LOCK_STALE_MS;
+      // A lock whose owner died (a killed run, a crashed app) is taken over at once instead of blocking the task.
+      if (owner?.pid !== undefined && fresh && (owner.pid === process.pid || processAlive(owner.pid))) {
+        await Bun.sleep(LOCK_RETRY_MS);
+        continue;
+      }
+      await unlink(lock).catch(() => undefined);
     }
   }
-  try { return await run(); } finally { await rm(lock, { recursive: true, force: true }); }
+  try { return await run(); } finally { await unlink(lock).catch(() => undefined); }
 }
 
 /**
@@ -128,7 +142,7 @@ export async function appendEvent(dir: string, draft: TaskEventDraft, expectedSe
     const tail = await inspectLogTail(dir);
     if (tail.torn && tail.validBytes < tail.size) await truncate(eventLogPath(dir), tail.validBytes);
     if (tail.seq !== expectedSeq) throw new EventConflictError(expectedSeq, tail.seq);
-    const event = { seq: expectedSeq + 1, at: draft.at, actor: draft.actor, type: draft.type, payload: draft.payload } as TaskEvent;
+    const event = { seq: expectedSeq + 1, at: draft.at, actor: draft.actor, ...(draft.runId ? { runId: draft.runId } : {}), type: draft.type, payload: draft.payload } as TaskEvent;
     await appendFile(eventLogPath(dir), `${JSON.stringify(event)}\n`);
     if (afterAppend) await afterAppend(event);
     return event;
