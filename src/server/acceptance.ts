@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { acceptCodeChange } from "../runtime/code-acceptance";
-import { verifyGeneralDeliverable } from "../runtime/general-work";
+import { recordAnswerCompliance, verifyGeneralDeliverable } from "../runtime/general-work";
 import type { OperationLease } from "../runtime/operation-manager";
 import { assertWritablePaths, type ProjectTurn } from "../runtime/project-state";
 import { requestedOutput } from "../runtime/requested-output";
@@ -47,6 +47,21 @@ function accepted(run: AcceptanceRun, ledger: TaskLedger): TaskLedger {
   run.emit({ type: "task", task: run.ctx.taskView(ledger) });
   run.emit({ type: "status", phase: "已验收", runId: run.runId, pending: [] });
   return ledger;
+}
+
+/** The task's full text answer: what the person reads in the thread and what independent checks grade. */
+async function answerText(run: AcceptanceRun): Promise<string> {
+  run.ctx.flushText(run.ledger.state.id);
+  return (await run.ctx.activityFor(run.ledger.state.id).read()).filter(item => item.kind === "text").map(item => item.value).join("");
+}
+
+/** Acceptance that the stated prohibitions gate first: a violating answer is never "已验收". */
+async function acceptChecked(run: AcceptanceRun, ledger: TaskLedger): Promise<TaskLedger> {
+  if (!(await recordAnswerCompliance(ledger, run.ctx.dataRoot, run.runId, await answerText(run)))) {
+    run.emit({ type: "status", phase: "待验收", runId: run.runId, pending: ledger.completionGaps() });
+    return ledger;
+  }
+  return accepted(run, ledger);
 }
 
 /** Build, publish the local preview and verify the core user path in the visible browser, with one repair round. */
@@ -125,7 +140,7 @@ async function acceptDeliverable(run: AcceptanceRun): Promise<TaskLedger> {
     emit({ type: "status", phase: "待验收", runId, pending: ledger.completionGaps() });
     return ledger;
   }
-  return accepted(run, ledger);
+  return acceptChecked(run, ledger);
 }
 
 /**
@@ -150,7 +165,7 @@ async function acceptAdaptive(run: AcceptanceRun): Promise<TaskLedger> {
   ]);
   if (hasManifest) {
     await verifyGeneralDeliverable(ledger, ctx.dataRoot, false);
-    if (!hasWebPlan && !codeChanged) return accepted(run, ledger);
+    if (!hasWebPlan && !codeChanged) return acceptChecked(run, ledger);
   }
   if (hasWebPlan) {
     if (ledger.state.workspaceOrigin?.kind === "direct") throw new Error("Direct-project web build is unavailable inside the native sandbox");
@@ -180,5 +195,5 @@ async function acceptAdaptive(run: AcceptanceRun): Promise<TaskLedger> {
   if (requested.deliverable) throw new Error("Requested deliverable is missing");
   if (requested.sourceChange) throw new Error("Requested source change is missing");
   if (requested.webProduct) throw new Error("Requested web product is missing");
-  return accepted(run, ledger);
+  return acceptChecked(run, ledger);
 }

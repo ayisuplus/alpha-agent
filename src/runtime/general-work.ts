@@ -3,6 +3,7 @@ import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { TaskLedger, fingerprintSource, type TaskType } from "./task-ledger";
 import { listResearchSources } from "./research-source";
+import { prohibitionViolations, statedProhibitions } from "./stated-prohibitions";
 
 export interface UploadedInput { name: string; mimeType: string; bytes: Uint8Array }
 interface Deliverable { outputs: Array<{ path: string; sourceIds?: string[] }> }
@@ -74,6 +75,14 @@ export async function verifyGeneralDeliverable(ledger: TaskLedger, dataRoot: str
       await ledger.recordEvidence({ criterionId: "sources", kind: "source", revision: ledger.state.revision!, passed: true, source: join(dataRoot, "sources", ledger.state.id, `${source.id}.json`), contentHash: source.sha256, referenceIds: [source.id] });
     }
   }
+  const prohibited = statedProhibitions(ledger.state.objective);
+  if (prohibited.length) {
+    for (const output of outputs) {
+      if (!TEXT_OUTPUT.test(output.path)) continue;
+      const violations = prohibitionViolations(await readFile(output.path, "utf8"), prohibited);
+      if (violations.length) throw new Error(`Output ${basename(output.path)} uses prohibited terms: ${violations.join(", ")}`);
+    }
+  }
   for (const output of outputs) {
     const frozenDir = join(dataRoot, "artifacts", ledger.state.id, randomUUID());
     await mkdir(frozenDir, { recursive: true });
@@ -82,4 +91,35 @@ export async function verifyGeneralDeliverable(ledger: TaskLedger, dataRoot: str
     await ledger.recordEvidence({ criterionId: "deliverable", kind: "artifact", revision: ledger.state.revision!, passed: true, source: frozenPath, contentHash: output.hash, referenceIds: output.sourceIds });
   }
   if (complete) await ledger.complete();
+}
+
+/** Text outputs carry copy, so what the objective forbids in words applies to them too. */
+const TEXT_OUTPUT = /\.(?:md|txt|tsv|csv|json|srt|vtt|xml|ya?ml|html?)$/i;
+
+/**
+ * The runtime, not the model, decides whether the answer respects what the objective forbids in words
+ * ("不要使用“最”“第一”这类绝对化用语"). The scan covers the task's full text answer — the surface the person reads
+ * in the thread and independent checks grade — so a prohibited term anywhere keeps the task out of "已验收".
+ * Clean answers get passing evidence for the `compliance` criterion; violations are recorded as failing evidence,
+ * which leaves the criterion unmet: exactly the completion gap that keeps the task from completing.
+ */
+export async function recordAnswerCompliance(ledger: TaskLedger, dataRoot: string, runId: string, text: string): Promise<boolean> {
+  const terms = statedProhibitions(ledger.state.objective);
+  if (!terms.length) return true;
+  if (!ledger.state.criteria.some(item => item.id === "compliance")) {
+    await ledger.setCriteria([...ledger.state.criteria, { id: "compliance", description: "回答不含目标明示的禁用词", kind: "asset" }]);
+  }
+  const violations = prohibitionViolations(text, terms);
+  const contentHash = sha256(new TextEncoder().encode(text));
+  const evidencePath = join(dataRoot, "evidence", `${ledger.state.id}-${runId}-compliance-${contentHash.slice(0, 12)}.json`);
+  await mkdir(join(dataRoot, "evidence"), { recursive: true });
+  await writeFile(evidencePath, JSON.stringify({ terms, violations, contentHash }, null, 2), { flag: "wx" }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "EEXIST") throw error;
+  });
+  await ledger.recordEvidence({ criterionId: "compliance", kind: "asset", revision: ledger.state.revision!, passed: !violations.length, source: evidencePath, contentHash });
+  if (violations.length) {
+    await ledger.recordFailure(`Answer uses prohibited terms: ${violations.join(", ")}`);
+    return false;
+  }
+  return true;
 }

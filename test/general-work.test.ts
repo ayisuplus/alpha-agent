@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { createDocument } from "../src/runtime/document-tool";
-import { createGeneralWorkspace, verifyGeneralDeliverable } from "../src/runtime/general-work";
+import { createGeneralWorkspace, recordAnswerCompliance, verifyGeneralDeliverable } from "../src/runtime/general-work";
 import { requestedOutput } from "../src/runtime/requested-output";
 
 test("file-work keeps input and artifact hashes and completes without a web preview", async () => {
@@ -58,4 +58,50 @@ test("a general answer is checked against the outputs the objective asks for, ig
   expect(requestedOutput("解释这个模块的设计，不用修改代码")).toMatchObject({ sourceChange: false });
   expect(requestedOutput("帮我修复登录模块的 bug，无需生成文档")).toEqual({ deliverable: false, sourceChange: true, webProduct: false });
   expect(requestedOutput("创建一个记账网页")).toMatchObject({ webProduct: true });
+});
+
+test("an answer that violates the objective's stated prohibitions is never accepted", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-general-compliance-"));
+  const productsRoot = join(root, "products");
+  const dataRoot = join(root, "data");
+  await mkdir(productsRoot);
+  const ledger = await createGeneralWorkspace({ taskType: "general", objective: "写一段产品介绍。不要使用“最”“顶级”这类绝对化用语。直接给出正文即可。", productsRoot, dataRoot });
+  await ledger.refreshRevision();
+  expect(await recordAnswerCompliance(ledger, dataRoot, "run-one", "这是最好的顶级保温杯。")).toBe(false);
+  expect(ledger.state.lastFailure).toContain("prohibited terms: 最, 顶级");
+  expect(ledger.state.evidence.at(-1)).toMatchObject({ criterionId: "compliance", passed: false });
+  expect(ledger.completionGaps()).toEqual(["compliance"]);
+  // A clean answer records passing evidence and closes the gap; a second violating answer reopens it.
+  expect(await recordAnswerCompliance(ledger, dataRoot, "run-two", "316 不锈钢内胆，12 小时保温。")).toBe(true);
+  expect(ledger.completionGaps()).toEqual([]);
+  expect(await recordAnswerCompliance(ledger, dataRoot, "run-three", "顶级内胆。")).toBe(false);
+  expect(ledger.completionGaps()).toEqual(["compliance"]);
+});
+
+test("an objective without stated prohibitions keeps the acceptance path unchanged", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-general-plain-"));
+  const productsRoot = join(root, "products");
+  const dataRoot = join(root, "data");
+  await mkdir(productsRoot);
+  const ledger = await createGeneralWorkspace({ taskType: "general", objective: "用一句话回答：1+1 等于几？不需要生成文件。", productsRoot, dataRoot });
+  await ledger.refreshRevision();
+  expect(await recordAnswerCompliance(ledger, dataRoot, "run-one", "1+1 等于 2。")).toBe(true);
+  expect(ledger.state.criteria).toEqual([]);
+  expect(ledger.state.evidence).toEqual([]);
+});
+
+test("a deliverable text output may not use what the objective forbids", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-general-output-"));
+  const productsRoot = join(root, "products");
+  const dataRoot = join(root, "data");
+  await mkdir(productsRoot);
+  const ledger = await createGeneralWorkspace({ taskType: "file-work", objective: "写一份推广文案。禁止出现“全网最低价”。", productsRoot, dataRoot });
+  await writeFile(join(ledger.state.projectRoot, "outputs", "copy.md"), "全网最低价，快来抢购");
+  await writeFile(join(ledger.state.projectRoot, "alpha-deliverable.json"), JSON.stringify({ outputs: [{ path: "outputs/copy.md" }] }));
+  await ledger.refreshRevision();
+  await expect(verifyGeneralDeliverable(ledger, dataRoot)).rejects.toThrow("uses prohibited terms: 全网最低价");
+  await writeFile(join(ledger.state.projectRoot, "outputs", "copy.md"), "工厂直供，欢迎选购");
+  await ledger.refreshRevision();
+  await verifyGeneralDeliverable(ledger, dataRoot);
+  expect(ledger.state.status).toBe("complete");
 });
