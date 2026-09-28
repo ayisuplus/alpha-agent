@@ -1,4 +1,4 @@
-import type { AgentPresetSummary, ExpertLine } from "../api/types";
+import type { ExpertSummary, ExpertLine } from "../api/types";
 import { expertLineLabel } from "../state/labels";
 import { expertForTemplate } from "./ExpertPicker";
 
@@ -15,7 +15,7 @@ const STARTERS: Starter[] = [
 ];
 
 /** Example briefs for an empty home screen; picking one fills the brief and, when enabled, its expert. */
-export function TaskStarters({ experts, onPick }: { experts: AgentPresetSummary[] | null; onPick(prompt: string, expertId: string): void }) {
+export function TaskStarters({ experts, onPick }: { experts: ExpertSummary[] | null; onPick(prompt: string, expertId: string): void }) {
   return <section className="task-starters" aria-label="从一个场景开始">
     <h2>从一个场景开始</h2>
     <div className="task-starter-grid">

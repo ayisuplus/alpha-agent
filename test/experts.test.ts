@@ -2,12 +2,12 @@ import { expect, test } from "bun:test";
 import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentPresetStore, presetSnapshot, verifyPresetSnapshot } from "../src/runtime/agent-presets";
+import { ExpertStore, snapshotExpert, verifyExpertSnapshot } from "../src/runtime/experts";
 import { initialExpertCandidates, searchExpertCandidates } from "../src/runtime/expert-selection";
 import { createSkillResourceTool } from "../src/runtime/skill-resource-tool";
 import { TaskLedger } from "../src/runtime/task-ledger";
 import { workerSystemPrompt } from "../src/runtime/omp-runner";
-import { resolveWorkOrders } from "../src/runtime/work-order-tool";
+import { bindWorkOrders } from "../src/runtime/worker-binding";
 import { fingerprintSource } from "../src/runtime/task-ledger";
 import { executeWorkOrders, type WorkOrder } from "../src/runtime/work-orders";
 import { SkillPluginStore } from "../src/plugins/third-party";
@@ -17,7 +17,7 @@ import { loadWorkerSkillSnapshots } from "../src/runtime/skill-snapshot";
 test("every core specialty is discoverable and dispatches a readable immutable Skill", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-core-dispatch-"));
   try {
-    const store = new AgentPresetStore(root);
+    const store = new ExpertStore(root);
     const core = await store.installCoreExperts([]);
     const queries: Record<string, string> = {
       "solution-architect": "模块职责 接口契约 architecture system design",
@@ -52,13 +52,13 @@ test("every core specialty is discoverable and dispatches a readable immutable S
       "file-manager": "文件管理 整理 搜索 清理 大文件 重复 空间 file organization",
     };
     expect(core).toHaveLength(Object.keys(queries).length);
-    const snapshots = core.map(presetSnapshot);
+    const snapshots = core.map(snapshotExpert);
     for (const [templateId, query] of Object.entries(queries)) {
       const expert = snapshots.find(item => item.id === `core-${templateId}`)!;
-      verifyPresetSnapshot(expert);
+      verifyExpertSnapshot(expert);
       expect(searchExpertCandidates(query, snapshots, 1)[0]?.id).toBe(expert.id);
       expect(initialExpertCandidates(query, snapshots)).toContain(expert.id);
-      const [order] = resolveWorkOrders([{ id: templateId, objective: query, mode: "investigate", ownedPaths: [], readPaths: ["source.txt"], resources: [], expertId: expert.id }], snapshots);
+      const [order] = bindWorkOrders([{ id: templateId, objective: query, mode: "investigate", ownedPaths: [], readPaths: ["source.txt"], resources: [], expertId: expert.id, skillIds: [...(expert.skillIds ?? [])] }], snapshots);
       const isolated = join(root, "workers", templateId);
       const dispatched = await snapshotSkills(root, isolated, order);
       const skills = await loadWorkerSkillSnapshots(isolated, dispatched);
@@ -81,14 +81,14 @@ test("every core specialty is discoverable and dispatches a readable immutable S
 test("curation retires selected legacy experts without deleting snapshots or overriding edits", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-core-curation-"));
   try {
-    const store = new AgentPresetStore(root);
+    const store = new ExpertStore(root);
     const legacy = await store.copy("backend");
     const personal = await store.copy("frontend");
-    const frozen = presetSnapshot(legacy);
+    const frozen = snapshotExpert(legacy);
     const core = await store.installCoreExperts([legacy.id]);
     expect((await store.enabled()).map(item => item.id)).toEqual([personal.id, ...core.map(item => item.id)]);
     expect((await store.get(legacy.id)).enabled).toBe(false);
-    expect(presetSnapshot(await store.get(legacy.id))).toEqual(frozen);
+    expect(snapshotExpert(await store.get(legacy.id))).toEqual(frozen);
     expect(await store.loadBundledSkills(frozen)).toHaveLength(1);
     const edited = await store.update("core-frontend", { name: "我的前端专家" });
     await store.setEnabled(edited.id, false);
@@ -106,20 +106,20 @@ test("syncing core experts adopts the current template, keeps enabled state and 
     const templates = join(root, "templates");
     await cp(join(import.meta.dir, "..", "presets", "agents"), templates, { recursive: true });
     const dataRoot = join(root, "data");
-    const before = new AgentPresetStore(dataRoot, templates);
+    const before = new ExpertStore(dataRoot, templates);
     await before.syncCoreExperts(["paper-writer", "data-analyst"]);
     await before.setEnabled("core-data-analyst", false);
-    const frozen = presetSnapshot(await before.get("core-paper-writer"));
+    const frozen = snapshotExpert(await before.get("core-paper-writer"));
     await writeFile(join(templates, "paper-writer.md"), `${frozen.instructions}
 
 新增的写作规则。`);
-    const after = new AgentPresetStore(dataRoot, templates);
+    const after = new ExpertStore(dataRoot, templates);
     await expect(after.syncCoreExperts(["paper-writer", "missing-template"])).rejects.toThrow("模板不存在");
-    expect(presetSnapshot(await after.get("core-paper-writer"))).toEqual(frozen);
+    expect(snapshotExpert(await after.get("core-paper-writer"))).toEqual(frozen);
     const [synced] = await after.syncCoreExperts(["paper-writer"]);
     expect(synced.instructions).toContain("新增的写作规则");
     expect(synced.hash).not.toBe(frozen.hash);
-    verifyPresetSnapshot(presetSnapshot(synced));
+    verifyExpertSnapshot(snapshotExpert(synced));
     expect(await after.loadBundledSkills(frozen)).toHaveLength(1);
     await after.syncCoreExperts(["data-analyst"]);
     expect((await after.get("core-data-analyst")).enabled).toBe(false);
@@ -132,7 +132,7 @@ test("syncing core experts adopts the current template, keeps enabled state and 
 test("a core ID collision cannot partially retire or overwrite the expert library", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-core-conflict-"));
   try {
-    const store = new AgentPresetStore(root);
+    const store = new ExpertStore(root);
     const legacy = await store.copy("frontend");
     await store.importLocalBatch([{ id: "core-frontend", name: "My unrelated expert", description: "Do not overwrite", instructions: "Preserve me", skills: [], source: { url: "local", revision: "1", path: "mine" } }]);
     const before = await readFile(join(root, "agent-presets.json"), "utf8");
@@ -145,7 +145,7 @@ test("a core ID collision cannot partially retire or overwrite the expert librar
 test("templates are optional, user experts persist, and deleted experts leave frozen snapshots intact", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-presets-"));
   try {
-    const store = new AgentPresetStore(root);
+    const store = new ExpertStore(root);
     const initial = await store.list();
     expect(initial).toEqual([]);
     expect(await store.templates()).toHaveLength(30);
@@ -160,9 +160,9 @@ test("templates are optional, user experts persist, and deleted experts leave fr
     expect(changed.hash).not.toBe(frozen.hash);
     expect(frozen.instructions).toBe(original.instructions);
     expect((await store.get("frontend")).hash).toBe(original.hash);
-    expect((await new AgentPresetStore(root).get(copy.id)).name).toBe("项目前端");
+    expect((await new ExpertStore(root).get(copy.id)).name).toBe("项目前端");
     await store.setEnabled(copy.id, false);
-    expect((await new AgentPresetStore(root).enabled())).toEqual([]);
+    expect((await new ExpertStore(root).enabled())).toEqual([]);
     const created = await store.create({ name: "审查", description: "复核源码", instructions: "检查实际差异。", skillIds: [] });
     expect((await store.enabled()).map(item => item.id)).toEqual([created.id]);
     await store.delete(created.id);
@@ -179,31 +179,31 @@ test("worker receives only its selected full role and merge records the frozen v
     await mkdir(join(product, "src"), { recursive: true });
     await writeFile(join(product, "src", "front.txt"), "old");
     await writeFile(join(product, "src", "back.txt"), "old");
-    const store = new AgentPresetStore(join(root, "state"));
+    const store = new ExpertStore(join(root, "state"));
     const front = await store.copy("frontend");
     const back = await store.copy("backend");
     const presets = await store.enabled();
-    const orders: WorkOrder[] = resolveWorkOrders([
+    const orders: WorkOrder[] = bindWorkOrders([
       { id: "front", objective: "Edit frontend", ownedPaths: ["src/front.txt"], resources: ["front"], expertId: front.id },
       { id: "back", objective: "Edit backend", ownedPaths: ["src/back.txt"], resources: ["back"], expertId: back.id },
     ], presets).map(order => ({ ...order, fullAccess: true }));
-    const frontPrompt = workerSystemPrompt(orders[0], orders[0].preset).join("\n");
-    expect(frontPrompt).toContain(orders[0].preset!.instructions);
-    expect(frontPrompt).not.toContain(orders[1].preset!.instructions);
+    const frontPrompt = workerSystemPrompt(orders[0], orders[0].expert).join("\n");
+    expect(frontPrompt).toContain(orders[0].expert!.instructions);
+    expect(frontPrompt).not.toContain(orders[1].expert!.instructions);
     expect(frontPrompt).toContain("src/front.txt");
     expect(frontPrompt).toContain("task hints, not access limits");
-    expect(() => resolveWorkOrders([{ ...orders[0], expertId: "missing" }], presets)).toThrow("不存在或未启用");
+    expect(() => bindWorkOrders([{ ...orders[0], expertId: "missing" }], presets)).toThrow("不存在或未启用");
     expect(() => workerSystemPrompt(orders[0])).toThrow("快照缺失");
     const report = await executeWorkOrders({
       projectRoot: product, dataRoot: join(root, "state"), taskId: "11111111-1111-4111-8111-111111111111", baseRevision: await fingerprintSource(product), orders,
       async runWorker(order, directory) {
-        await writeFile(join(directory, order.ownedPaths[0]), order.preset!.name);
+        await writeFile(join(directory, order.ownedPaths[0]), order.expert!.name);
         return { evidence: [], unresolved: [] };
       },
     });
     expect(report.status).toBe("merged");
-    expect(report.presets?.front.hash).toBe(orders[0].preset!.hash);
-    expect(report.presets?.back.id).toBe(back.id);
+    expect(report.experts?.front.hash).toBe(orders[0].expert!.hash);
+    expect(report.experts?.back.id).toBe(back.id);
     expect(await readFile(join(product, "src", "front.txt"), "utf8")).toBe(front.name);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -216,7 +216,7 @@ test("expert package keeps a persona file and private Skill snapshot without glo
     await writeFile(join(pack, "skills", "proof", "SKILL.md"), "---\nname: proof\ndescription: Check evidence\n---\n\nVerify the claim.\n");
     await writeFile(join(pack, "skills", "proof", "reference.txt"), "fixed reference");
     await writeFile(join(root, "plugin-packs", "installed.json"), JSON.stringify({ plugins: [{ id: "sample", name: "sample", source: "https://github.com/a/sample.git", revision: "a".repeat(40), enabled: true, skillCount: 1 }] }));
-    const experts = new AgentPresetStore(root);
+    const experts = new ExpertStore(root);
     const created = await experts.create({ name: "Evidence reviewer", description: "Review changes", instructions: "Check concrete evidence.", skillIds: ["sample:proof"] });
     const frozen = (await experts.enabled())[0];
     const packageRoot = join(root, "expert-packs", created.id, created.package!.revision);
@@ -225,7 +225,7 @@ test("expert package keeps a persona file and private Skill snapshot without glo
     await new SkillPluginStore(root).setEnabled("sample", false);
     expect(await new SkillPluginStore(root).loadSkills()).toEqual([]);
     expect((await experts.loadBundledSkills(frozen)).map(item => item.name)).toEqual(["sample:proof"]);
-    const [order] = resolveWorkOrders([{ id: "review", objective: "Review proof", mode: "review", ownedPaths: [], readPaths: ["app.ts"], resources: [], expertId: created.id }], [frozen]);
+    const [order] = bindWorkOrders([{ id: "review", objective: "Review proof", mode: "review", ownedPaths: [], readPaths: ["app.ts"], resources: [], expertId: created.id, skillIds: ["sample:proof"] }], [frozen]);
     const isolated = join(root, "isolated-worker");
     const dispatched = await snapshotSkills(root, isolated, order);
     expect(dispatched.skillSnapshots).toMatchObject([{ id: "sample:proof", hash: created.package!.skills[0].hash }]);
@@ -247,12 +247,12 @@ test("local expert import keeps bundled Skills private and worker reads its exac
     const state = join(root, "state");
     await mkdir(source, { recursive: true });
     await writeFile(join(source, "SKILL.md"), "---\nname: A WorkBuddy name with spaces\ndescription: Check the result\n---\n\nCheck actual output.\n");
-    const store = new AgentPresetStore(state);
+    const store = new ExpertStore(state);
     const record = { id: "wb-local-review", name: "Local reviewer", description: "Review source", instructions: "Inspect concrete changes.", source: { url: root, revision: "source-v1", path: "review/agents/reviewer.md" }, skills: [{ id: "wb-pack:proof", source }] };
     const [expert] = await store.importLocalBatch([record]);
     expect((await new SkillPluginStore(state).loadSkills())).toEqual([]);
     expect((await store.loadBundledSkills(expert)).map(item => item.name)).toEqual(["wb-pack:proof"]);
-    const [order] = resolveWorkOrders([{ id: "review", objective: "Review", mode: "review", ownedPaths: [], readPaths: ["app.ts"], resources: [], expertId: expert.id }], [expert]);
+    const [order] = bindWorkOrders([{ id: "review", objective: "Review", mode: "review", ownedPaths: [], readPaths: ["app.ts"], resources: [], expertId: expert.id, skillIds: ["wb-pack:proof"] }], [expert]);
     const isolated = join(root, "worker-state");
     const dispatched = await snapshotSkills(state, isolated, order);
     expect((await loadWorkerSkillSnapshots(isolated, dispatched)).map(item => item.name)).toEqual(["wb-pack:proof"]);
@@ -287,25 +287,25 @@ test("workbench API lists, copies and edits roles while rejecting another origin
     if (!port) throw new Error(`Server did not start: ${output}`);
     const base = `http://127.0.0.1:${port}`;
     const json = { "content-type": "application/json", origin: base };
-    const listed = await fetch(`${base}/api/agent-presets`).then(response => response.json()) as { presets: Array<{ id: string; instructions?: string }> };
-    expect(listed.presets).toEqual([]);
-    const templates = await fetch(`${base}/api/agent-presets/templates`).then(response => response.json()) as { presets: Array<{ id: string; instructions?: string }> };
-    expect(templates.presets.find(item => item.id === "frontend")?.instructions).toBeUndefined();
-    const detail = await fetch(`${base}/api/agent-presets/frontend`).then(response => response.json()) as { preset: { instructions: string } };
-    expect(detail.preset.instructions).toContain("页面逻辑");
-    const copied = await fetch(`${base}/api/agent-presets/frontend/copy`, { method: "POST", headers: json, body: "{}" }).then(response => response.json()) as { preset: { id: string } };
-    const id = copied.preset.id;
-    const forbidden = await fetch(`${base}/api/agent-presets/${id}`, { method: "PUT", headers: { ...json, origin: "http://other.invalid" }, body: "{}" });
+    const listed = await fetch(`${base}/api/experts`).then(response => response.json()) as { experts: Array<{ id: string; instructions?: string }> };
+    expect(listed.experts).toEqual([]);
+    const templates = await fetch(`${base}/api/experts/templates`).then(response => response.json()) as { experts: Array<{ id: string; instructions?: string }> };
+    expect(templates.experts.find(item => item.id === "frontend")?.instructions).toBeUndefined();
+    const detail = await fetch(`${base}/api/experts/frontend`).then(response => response.json()) as { expert: { instructions: string } };
+    expect(detail.expert.instructions).toContain("页面逻辑");
+    const copied = await fetch(`${base}/api/experts/frontend/copy`, { method: "POST", headers: json, body: "{}" }).then(response => response.json()) as { expert: { id: string } };
+    const id = copied.expert.id;
+    const forbidden = await fetch(`${base}/api/experts/${id}`, { method: "PUT", headers: { ...json, origin: "http://other.invalid" }, body: "{}" });
     expect(forbidden.status).toBe(403);
-    const saved = await fetch(`${base}/api/agent-presets/${id}`, { method: "PUT", headers: json, body: JSON.stringify({ name: "产品前端", description: "实现页面", instructions: "详细的项目角色要求" }) });
+    const saved = await fetch(`${base}/api/experts/${id}`, { method: "PUT", headers: json, body: JSON.stringify({ name: "产品前端", description: "实现页面", instructions: "详细的项目角色要求" }) });
     expect(saved.status).toBe(200);
-    const toggled = await fetch(`${base}/api/agent-presets/${id}`, { method: "PATCH", headers: json, body: JSON.stringify({ enabled: false }) });
+    const toggled = await fetch(`${base}/api/experts/${id}`, { method: "PATCH", headers: json, body: JSON.stringify({ enabled: false }) });
     expect(toggled.status).toBe(200);
-    const restored = await new AgentPresetStore(join(root, ".alpha")).get(id);
+    const restored = await new ExpertStore(join(root, ".alpha")).get(id);
     expect(restored).toMatchObject({ name: "产品前端", enabled: false, instructions: "详细的项目角色要求" });
-    const removed = await fetch(`${base}/api/agent-presets/${id}`, { method: "DELETE", headers: json });
+    const removed = await fetch(`${base}/api/experts/${id}`, { method: "DELETE", headers: json });
     expect(removed.status).toBe(200);
-    expect((await new AgentPresetStore(join(root, ".alpha")).list())).toEqual([]);
+    expect((await new ExpertStore(join(root, ".alpha")).list())).toEqual([]);
     const projectRoot = join(root, "products", "skill-task");
     await mkdir(projectRoot, { recursive: true });
     const ledger = await TaskLedger.create(join(root, ".alpha"), { objective: "Inspect a Skill proposal", projectRoot, taskType: "code-change", criteria: [{ id: "check", description: "Check", kind: "test" }] });
@@ -331,7 +331,7 @@ test("workbench API lists, copies and edits roles while rejecting another origin
 test("the library groups experts by the business line of the core template they derive from", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-expert-lines-"));
   try {
-    const store = new AgentPresetStore(root);
+    const store = new ExpertStore(root);
     const templates = await store.templates();
     expect(templates.every(item => item.line)).toBe(true);
     expect(templates.find(item => item.id === "xiaohongshu-planner")?.line).toBe("content");
@@ -345,14 +345,14 @@ test("the library groups experts by the business line of the core template they 
     expect(catalog.find(item => item.id === own.id)?.line).toBeUndefined();
     // Lines are display-only: stored experts and dispatch snapshots never carry them.
     expect((await store.list()).some(item => item.line)).toBe(false);
-    expect(presetSnapshot(catalog.find(item => item.id === "core-frontend")!)).not.toHaveProperty("line");
+    expect(snapshotExpert(catalog.find(item => item.id === "core-frontend")!)).not.toHaveProperty("line");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("agent-presets.json carries its store tag and an untagged document still loads", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-presets-tag-"));
   try {
-    const store = new AgentPresetStore(root);
+    const store = new ExpertStore(root);
     await store.create({ name: "自写专家", description: "只做一件事", instructions: "按用户说明工作。" });
     const saved = JSON.parse(await readFile(join(root, "agent-presets.json"), "utf8")) as { format?: string; version?: number; custom?: unknown[] };
     expect(saved.format).toBe("agent-presets");

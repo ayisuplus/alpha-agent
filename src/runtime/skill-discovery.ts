@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { TaskLedger } from "./task-ledger";
+import { frontmatterField, frontmatterList } from "./skill-manifest";
 
 export interface SkillCandidate {
   name: string;
@@ -26,14 +27,6 @@ async function getJson(url: string, fetcher: typeof fetch, deadline: AbortSignal
   return response.json();
 }
 
-function frontmatter(text: string, field: string): string | undefined {
-  const header = /^---\s*\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1];
-  return header ? new RegExp(`^${field}:\\s*["']?([^\\r\\n"']+)`, "mi").exec(header)?.[1]?.trim() : undefined;
-}
-
-function frontmatterList(text: string, field: string): string[] {
-  return (frontmatter(text, field) ?? "").replace(/^\[|\]$/g, "").split(/[\s,]+/).map(item => item.trim()).filter(Boolean);
-}
 
 function scorePath(path: string, name: string): number {
   const folder = path.toLowerCase().split("/").at(-2) ?? "";
@@ -64,8 +57,8 @@ export async function searchPublicSkills(query: string, fetcher: typeof fetch = 
         const response = await fetcher(`https://raw.githubusercontent.com/${result.source}/${commit.sha}/${path}`, { signal: AbortSignal.any([deadline, AbortSignal.timeout(10_000)]) });
         if (!response.ok) continue;
         const content = (await response.text()).slice(0, 80_000);
-        if (frontmatter(content, "name")?.toLowerCase() !== result.name.toLowerCase()) continue;
-        found.push({ name: result.name, description: frontmatter(content, "description") ?? "来源仓库未提供单行说明", source: `https://github.com/${result.source}`, revision: commit.sha!, path, installs: result.installs, requirements: { tools: frontmatterList(content, "requires-tools"), services: frontmatterList(content, "requires-services"), conflicts: frontmatterList(content, "conflicts-with") } });
+        if (frontmatterField(content, "name")?.toLowerCase() !== result.name.toLowerCase()) continue;
+        found.push({ name: result.name, description: frontmatterField(content, "description") ?? "来源仓库未提供单行说明", source: `https://github.com/${result.source}`, revision: commit.sha!, path, installs: result.installs, requirements: { tools: frontmatterList(content, "requires-tools"), services: frontmatterList(content, "requires-services"), conflicts: frontmatterList(content, "conflicts-with") } });
       }
       if (found.length === 1) candidates.push(found[0]);
     } catch {

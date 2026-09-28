@@ -1,10 +1,10 @@
 import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { AgentPresetStore } from "../src/runtime/agent-presets";
+import { ExpertStore } from "../src/runtime/experts";
 
 const apply = process.argv.includes("--apply");
 const dataRoot = resolve(process.argv.find((arg, index) => index > 1 && !arg.startsWith("--")) ?? join(import.meta.dir, "..", ".alpha"));
-const store = new AgentPresetStore(dataRoot);
+const store = new ExpertStore(dataRoot);
 const existing = await store.list();
 // Retire only the known bulk-import family; preserve separately created experts.
 const retired = existing.filter(item => item.enabled && item.id.startsWith("wb-") && /[\\/]marketplaces[\\/]experts[\\/]?$/.test(item.source?.url ?? ""));

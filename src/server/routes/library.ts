@@ -2,57 +2,57 @@ import { SkillPluginError } from "../../plugins/third-party";
 import type { MCPPermission } from "../../runtime/mcp-permissions";
 import { SLUG, body, failure, path, type Route } from "../http";
 
-const presetDetail = path(`/api/agent-presets/${SLUG}`);
+const expertDetail = path(`/api/experts/${SLUG}`);
 const plugin = path(`/api/plugins/${SLUG}`);
 
 export const libraryRoutes: Route[] = [
   {
-    method: "GET", path: "/api/agent-presets",
-    async handle({ ctx }) { return Response.json({ presets: (await ctx.agentPresetStore.catalog()).map(({ instructions: _instructions, ...item }) => item) }); },
+    method: "GET", path: "/api/experts",
+    async handle({ ctx }) { return Response.json({ experts: (await ctx.expertStore.catalog()).map(({ instructions: _instructions, ...item }) => item) }); },
   },
   {
-    method: "GET", path: "/api/agent-presets/templates",
-    async handle({ ctx }) { return Response.json({ presets: (await ctx.agentPresetStore.templates()).map(({ instructions: _instructions, ...item }) => item) }); },
+    method: "GET", path: "/api/experts/templates",
+    async handle({ ctx }) { return Response.json({ experts: (await ctx.expertStore.templates()).map(({ instructions: _instructions, ...item }) => item) }); },
   },
   {
-    method: "GET", path: presetDetail,
+    method: "GET", path: expertDetail,
     async handle({ ctx, params: [id] }) {
-      try { return Response.json({ preset: await ctx.agentPresetStore.get(id) }); }
+      try { return Response.json({ expert: await ctx.expertStore.get(id) }); }
       catch (error) { return failure(error, 404); }
     },
   },
   {
-    method: "POST", path: "/api/agent-presets",
+    method: "POST", path: "/api/experts",
     async handle({ ctx, request }) {
-      try { return Response.json({ preset: await ctx.agentPresetStore.create(await request.json() as { name?: unknown; description?: unknown; instructions?: unknown; skillIds?: unknown }) }); }
+      try { return Response.json({ expert: await ctx.expertStore.create(await request.json() as { name?: unknown; description?: unknown; instructions?: unknown; skillIds?: unknown }) }); }
       catch (error) { return failure(error); }
     },
   },
   {
-    method: "POST", path: path(`/api/agent-presets/${SLUG}/copy`),
+    method: "POST", path: path(`/api/experts/${SLUG}/copy`),
     async handle({ ctx, params: [id] }) {
-      try { return Response.json({ preset: await ctx.agentPresetStore.copy(id) }); }
+      try { return Response.json({ expert: await ctx.expertStore.copy(id) }); }
       catch (error) { return failure(error); }
     },
   },
   {
-    method: "PATCH", path: presetDetail,
+    method: "PATCH", path: expertDetail,
     async handle({ ctx, request, params: [id] }) {
-      try { return Response.json({ preset: await ctx.agentPresetStore.setEnabled(id, (await request.json() as { enabled?: unknown }).enabled as boolean) }); }
+      try { return Response.json({ expert: await ctx.expertStore.setEnabled(id, (await request.json() as { enabled?: unknown }).enabled as boolean) }); }
       catch (error) { return failure(error); }
     },
   },
   {
-    method: "PUT", path: presetDetail,
+    method: "PUT", path: expertDetail,
     async handle({ ctx, request, params: [id] }) {
-      try { return Response.json({ preset: await ctx.agentPresetStore.update(id, await request.json() as { name?: unknown; description?: unknown; instructions?: unknown; skillIds?: unknown }) }); }
+      try { return Response.json({ expert: await ctx.expertStore.update(id, await request.json() as { name?: unknown; description?: unknown; instructions?: unknown; skillIds?: unknown }) }); }
       catch (error) { return failure(error); }
     },
   },
   {
-    method: "DELETE", path: presetDetail,
+    method: "DELETE", path: expertDetail,
     async handle({ ctx, params: [id] }) {
-      try { await ctx.agentPresetStore.delete(id); return Response.json({ deleted: true }); }
+      try { await ctx.expertStore.delete(id); return Response.json({ deleted: true }); }
       catch (error) { return failure(error); }
     },
   },

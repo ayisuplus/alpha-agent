@@ -23,7 +23,7 @@ async function validModel(value: unknown): Promise<string | undefined | Response
 
 async function validExpert(ctx: ServerContext, value: unknown): Promise<string | undefined | Response> {
   const expertId = typeof value === "string" && value ? value : undefined;
-  if (value != null && value !== "" && (!expertId || !(await ctx.agentPresetStore.enabled()).some(item => item.id === expertId))) return Response.json({ error: "指定专家不存在或未启用" }, { status: 400 });
+  if (value != null && value !== "" && (!expertId || !(await ctx.expertStore.enabled()).some(item => item.id === expertId))) return Response.json({ error: "指定专家不存在或未启用" }, { status: 400 });
   return expertId;
 }
 
@@ -87,7 +87,7 @@ export const startRoutes: Route[] = [
         if (mount) await verifySandbox({ cwd: mount.path, roots, dataRoot: ctx.dataRoot, network: permissionMode === "full", signal: new AbortController().signal });
         const expertValue = form.get("expertId");
         const expertId = typeof expertValue === "string" && expertValue ? expertValue : undefined;
-        if (expertId && !(await ctx.agentPresetStore.enabled()).some(item => item.id === expertId)) return Response.json({ error: "指定专家不存在或未启用" }, { status: 400 });
+        if (expertId && !(await ctx.expertStore.enabled()).some(item => item.id === expertId)) return Response.json({ error: "指定专家不存在或未启用" }, { status: 400 });
         const capabilities = await ctx.selectedCapabilities(JSON.parse(String(form.get("skillIds") ?? "[]")), JSON.parse(String(form.get("pluginIds") ?? "[]")), !!mount);
         const files = await ctx.uploadedFiles(form.getAll("files"));
         const projectRoot = mount?.path ?? (project ? join(ctx.productsRoot, `project-${project.id}`) : join(ctx.productsRoot, `work-${randomUUID()}`));

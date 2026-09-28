@@ -14,7 +14,7 @@ import { TaskActivity, type ActivityKind } from "../runtime/task-activity";
 import { SettingsStore, WorkbenchMeta } from "../runtime/settings";
 import { ComfyClient } from "../runtime/comfy-client";
 import { SkillPluginStore, hashSkillDirectory } from "../plugins/third-party";
-import { AgentPresetStore } from "../runtime/agent-presets";
+import { ExpertStore } from "../runtime/experts";
 import { BrowserLock, OperationManager, type OperationLease } from "../runtime/operation-manager";
 import { BrowserBridge } from "../runtime/browser-bridge";
 import { BrowserKernel } from "../runtime/browser-kernel";
@@ -449,7 +449,7 @@ export async function createServerContext() {
   return {
     appRoot, workspaceRoot, dataRoot, productsRoot, directBaselineRoot,
     settingsStore, skillPluginStore, workbenchMeta, projectStore, webPermissions,
-    agentPresetStore: new AgentPresetStore(dataRoot),
+    expertStore: new ExpertStore(dataRoot),
     commandApprovals,
     mcpPermissions: new MCPPermissionStore(dataRoot),
     operationJournal: new OperationJournal(dataRoot),

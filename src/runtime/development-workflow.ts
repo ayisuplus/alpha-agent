@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createTwoFilesPatch } from "diff";
-import { AgentPresetStore } from "./agent-presets";
+import { ExpertStore } from "./experts";
 import { runTask, type RunOptions } from "./omp-runner";
 import { snapshotSource, sourceChanges } from "./source-review";
 import { taskBudgetUsed, type TaskLedger } from "./task-ledger";
@@ -59,7 +59,7 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
   const before = await snapshotSource(options.projectRoot);
   const coordinatorId = randomUUID();
   const designated = options.existingLedger?.state.designatedExpertId;
-  const coordinatorExpert = designated ? (await new AgentPresetStore(options.dataRoot).enabled()).find(item => item.id === designated) : undefined;
+  const coordinatorExpert = designated ? (await new ExpertStore(options.dataRoot).enabled()).find(item => item.id === designated) : undefined;
   if (designated && !coordinatorExpert) throw new Error(`用户指定专家已停用或删除：${designated}`);
   let createdLedger: TaskLedger | undefined;
   let ledger: TaskLedger;
@@ -132,7 +132,7 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
     const changedPaths = changes.map(item => item.path).slice(0, 80).join(", ") || "no source change in this run";
     const actualDiff = changes.slice(0, 20).map(item => createTwoFilesPatch(`before/${item.path}`, `after/${item.path}`, item.before ?? "", item.after ?? "").slice(0, 8_000)).join("\n").slice(0, 32_000);
     const reviewStep = ledger.state.cognition?.steps.find(step => step.mode === "review");
-    const suggestedReviewer = reviewStep?.expertId ? (await new AgentPresetStore(options.dataRoot).enabled()).find(item => item.id === reviewStep.expertId) : undefined;
+    const suggestedReviewer = reviewStep?.expertId ? (await new ExpertStore(options.dataRoot).enabled()).find(item => item.id === reviewStep.expertId) : undefined;
     const reviewExpert = suggestedReviewer?.package?.skills.length ? suggestedReviewer : undefined;
     if (!supervisor) throw new Error("Worker supervisor is not ready for final review");
     const reviewedRevision = ledger.state.revision;
@@ -142,7 +142,7 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
       id: reviewStep?.id ?? "final-review", agentId: randomUUID(), instanceId, mode: "review", fullAccess: true, ownedPaths: [], readPaths: ["."], resources: ["final-review"], contractVersion: reviewedContract, baseRevision: reviewedRevision ?? undefined, decisionReason: "Independent review is required before final acceptance",
       objective: `Review source correctness against this task: ${ledger.state.objective}. Acceptance criteria: ${ledger.state.criteria.map(item => `${item.id}: ${item.description}`).join(" | ")}. Configured tests and browser checks are separate. Changed paths this run: ${changedPaths}. Actual bounded diff:\n${actualDiff || "No text diff captured; inspect current source and task evidence."}\nCheck the requested behavior end to end; do not dismiss a requirement as pre-existing without verifying it. Read source without changing it. Submit alpha_worker_result with a review verdict and exact current source evidence when passing. Send findings to the primary agent.`,
       skillIds: [...new Set([...(reviewExpert?.skillIds ?? []), ...(reviewExpert || !reviewStep?.expertId ? reviewStep?.skillIds ?? [] : [])])], acceptance: ["Return an independent source verdict with exact current source evidence; make no source edits"],
-      ...(reviewExpert ? { expertId: reviewExpert.id, presetId: reviewExpert.id, preset: reviewExpert } : {}),
+      ...(reviewExpert ? { expertId: reviewExpert.id, expert: reviewExpert } : {}),
     };
     options.onEvent?.({ type: "status", value: `独立工作树审查 · ${reviewExpert?.name ?? "通用执行"}` });
     currentToolCalls = 0;

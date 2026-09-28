@@ -1,4 +1,4 @@
-import type { ActivityEntry, AgentPreset, AgentPresetSummary, Automation, AutomationRun, ControlHolder, Diagnostics, EvidenceDetail, LocalSchedule, ModelCatalog, PermissionMode, ProjectRecord, PromptRefinement, QueueItem, ReviewDetail, ReviewSummary, Settings, SettingsPatch, SkillPlugin, StorageReport, TaskList, TaskMeta, TaskTimelineEvent, TaskView } from "./types";
+import type { ActivityEntry, Expert, ExpertSummary, Automation, AutomationRun, ControlHolder, Diagnostics, EvidenceDetail, LocalSchedule, ModelCatalog, PermissionMode, ProjectRecord, PromptRefinement, QueueItem, ReviewDetail, ReviewSummary, Settings, SettingsPatch, SkillPlugin, StorageReport, TaskList, TaskMeta, TaskTimelineEvent, TaskView } from "./types";
 
 const SERVER_MESSAGES: Record<string, string> = {
   "A task is already running": "已有任务或操作正在进行，请等它结束",
@@ -58,15 +58,15 @@ const taskPath = (id: string) => `/api/tasks/${encodeURIComponent(id)}`;
 export const api = {
   settings: () => request<{ settings: Settings }>("/api/settings").then(result => result.settings),
   updateSettings: (patch: SettingsPatch) => send<{ settings: Settings }>("PUT", "/api/settings", patch).then(result => result.settings),
-  agentPresets: () => request<{ presets: AgentPresetSummary[] }>("/api/agent-presets").then(result => result.presets),
-  agentPresetTemplates: () => request<{ presets: AgentPresetSummary[] }>("/api/agent-presets/templates").then(result => result.presets),
-  agentPreset: (id: string) => request<{ preset: AgentPreset }>(`/api/agent-presets/${encodeURIComponent(id)}`).then(result => result.preset),
-  createAgentPreset: (draft: Pick<AgentPreset, "name" | "description" | "instructions"> & { skillIds?: string[] }) => post<{ preset: AgentPreset }>("/api/agent-presets", draft).then(result => result.preset),
-  deleteAgentPreset: (id: string) => send<{ deleted: boolean }>("DELETE", `/api/agent-presets/${encodeURIComponent(id)}`, {}).then(result => result.deleted),
+  experts: () => request<{ experts: ExpertSummary[] }>("/api/experts").then(result => result.experts),
+  expertTemplates: () => request<{ experts: ExpertSummary[] }>("/api/experts/templates").then(result => result.experts),
+  expert: (id: string) => request<{ expert: Expert }>(`/api/experts/${encodeURIComponent(id)}`).then(result => result.expert),
+  createExpert: (draft: Pick<Expert, "name" | "description" | "instructions"> & { skillIds?: string[] }) => post<{ expert: Expert }>("/api/experts", draft).then(result => result.expert),
+  deleteExpert: (id: string) => send<{ deleted: boolean }>("DELETE", `/api/experts/${encodeURIComponent(id)}`, {}).then(result => result.deleted),
   decideSkillProposal: (taskId: string, proposalId: string, decision: "install" | "reject") => post<{ task: TaskView }>(`/api/tasks/${encodeURIComponent(taskId)}/skills/${encodeURIComponent(proposalId)}/decision`, { decision }).then(result => result.task),
-  setAgentPresetEnabled: (id: string, enabled: boolean) => send<{ preset: AgentPreset }>("PATCH", `/api/agent-presets/${encodeURIComponent(id)}`, { enabled }).then(result => result.preset),
-  copyAgentPreset: (id: string) => post<{ preset: AgentPreset }>(`/api/agent-presets/${encodeURIComponent(id)}/copy`, {}).then(result => result.preset),
-  updateAgentPreset: (id: string, patch: Pick<AgentPreset, "name" | "description" | "instructions"> & { skillIds?: string[] }) => send<{ preset: AgentPreset }>("PUT", `/api/agent-presets/${encodeURIComponent(id)}`, patch).then(result => result.preset),
+  setExpertEnabled: (id: string, enabled: boolean) => send<{ expert: Expert }>("PATCH", `/api/experts/${encodeURIComponent(id)}`, { enabled }).then(result => result.expert),
+  copyExpert: (id: string) => post<{ expert: Expert }>(`/api/experts/${encodeURIComponent(id)}/copy`, {}).then(result => result.expert),
+  updateExpert: (id: string, patch: Pick<Expert, "name" | "description" | "instructions"> & { skillIds?: string[] }) => send<{ expert: Expert }>("PUT", `/api/experts/${encodeURIComponent(id)}`, patch).then(result => result.expert),
   plugins: () => request<{ plugins: SkillPlugin[] }>("/api/plugins").then(result => result.plugins),
   capabilities: () => request<{ plugins: SkillPlugin[]; skills: Array<{ id: string; name: string; description: string }> }>("/api/capabilities"),
   installPlugin: (source: string) => post<{ plugin: SkillPlugin }>("/api/plugins/install", { source }).then(result => result.plugin),

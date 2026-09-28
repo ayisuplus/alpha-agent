@@ -4,7 +4,7 @@ import { NeedsInputError, runTask } from "../src/runtime/omp-runner";
 import { shutdownLanguageServers } from "../src/runtime/omp-settings";
 import { hashSkillDirectory } from "../src/plugins/third-party";
 import type { WorkOrder, WorkerResult } from "../src/runtime/work-orders";
-import type { AgentPresetSnapshot } from "../src/runtime/agent-presets";
+import type { ExpertSnapshot } from "../src/runtime/experts";
 import type { TaskState } from "../src/runtime/task-ledger";
 import { TaskLedger } from "../src/runtime/task-ledger";
 import { pendingWorkerMessages } from "../src/runtime/agent-mailbox";
@@ -13,7 +13,7 @@ import { WorkerStopError, workerStopReason } from "../src/runtime/worker-stop";
 
 const [requestFile, resultFile] = Bun.argv.slice(2);
 if (!requestFile || !resultFile) throw new Error("Worker request and result paths are required");
-const request = JSON.parse(await readFile(requestFile, "utf8")) as { taskId?: string; projectRoot: string; dataRoot: string; authorizationRoot?: string; workerContext?: Pick<TaskState, "taskType" | "workspaceOrigin" | "capabilities" | "permissionMode">; objective: string; workOrder: WorkOrder; workerPreset?: AgentPresetSnapshot; modelSelector?: string; eventFile?: string; plugins?: { comfyui: boolean }; generation?: { image: boolean; voice: boolean; video: boolean }; comfyUrl?: string; mcpProxyDir?: string; mcpDescriptors?: WorkerMCPDescriptor[] };
+const request = JSON.parse(await readFile(requestFile, "utf8")) as { taskId?: string; projectRoot: string; dataRoot: string; authorizationRoot?: string; workerContext?: Pick<TaskState, "taskType" | "workspaceOrigin" | "capabilities" | "permissionMode">; objective: string; workOrder: WorkOrder; workerExpert?: ExpertSnapshot; modelSelector?: string; eventFile?: string; plugins?: { comfyui: boolean }; generation?: { image: boolean; voice: boolean; video: boolean }; comfyUrl?: string; mcpProxyDir?: string; mcpDescriptors?: WorkerMCPDescriptor[] };
 const controller = new AbortController();
 let eventSequence = 0;
 let eventWrites: Promise<unknown> = Promise.resolve();

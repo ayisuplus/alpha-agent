@@ -21,7 +21,7 @@ try {
   if (!model) throw new Error("No authenticated model");
   const selector = `${model.provider}/${model.id}`;
   for (const role of ["coordinator", "answer"] as const) {
-    const facts: SessionFacts = { role, ledger, direct: false, agentPresets: [], skills: [], pluginToolNames: [], pluginInstructions: [], mcpToolNames: [], hooksLoaded: false, officeReadToolNames: [], canDispatch: true, browserConnected: false };
+    const facts: SessionFacts = { role, ledger, direct: false, experts: [], skills: [], pluginToolNames: [], pluginInstructions: [], mcpToolNames: [], hooksLoaded: false, officeReadToolNames: [], canDispatch: true, browserConnected: false };
     const settings = await ompSessionSettings(project, join(root, "omp"), { pinHashline: isCodeWork(ledger.state.taskType) });
     const toolNames = sessionToolNames(facts).filter(name => ["read", "grep", "edit", "write", "ast_grep", "lsp"].includes(name));
     const { session } = await createAgentSession({

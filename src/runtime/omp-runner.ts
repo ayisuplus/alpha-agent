@@ -28,7 +28,7 @@ import { ProjectStore } from "./projects";
 import { verifySandbox } from "./sandbox-exec";
 import { createAsyncWorkTools } from "./async-work-tools";
 import type { WorkerSupervisor } from "./worker-supervisor";
-import { AgentPresetStore, verifyPresetSnapshot, type AgentPresetSnapshot } from "./agent-presets";
+import { ExpertStore, verifyExpertSnapshot, type ExpertSnapshot } from "./experts";
 import { loadBuiltinPlugins } from "../plugins";
 import { createOfficePlugin } from "../plugins/office";
 import { SkillPluginStore, hashSkillDirectory } from "../plugins/third-party";
@@ -89,8 +89,8 @@ export interface RunOptions {
   /** review: independent read-only source review; answer: read-only reply to a follow-up question, never changes the task. */
   executionMode?: "review" | "answer";
   reviewInstanceId?: string;
-  reviewExpert?: AgentPresetSnapshot;
-  workerPreset?: AgentPresetSnapshot;
+  reviewExpert?: ExpertSnapshot;
+  workerExpert?: ExpertSnapshot;
   /** Local ComfyUI endpoint for the media tools; the tools' own default applies when omitted. */
   comfyUrl?: string;
   /** Recorded on a newly created task so later runs keep using it; omitted means the task follows the default. */
@@ -153,8 +153,8 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   const reviewing = options.executionMode === "review";
   const answering = options.executionMode === "answer";
   const workerReadOnly = !!options.workOrder && options.workOrder.mode !== "implement";
-  if (reviewing && options.reviewExpert) verifyPresetSnapshot(options.reviewExpert);
-  const expertStore = new AgentPresetStore(dataRoot);
+  if (reviewing && options.reviewExpert) verifyExpertSnapshot(options.reviewExpert);
+  const expertStore = new ExpertStore(dataRoot);
   const ledger = options.existingLedger ?? await TaskLedger.create(dataRoot, {
     objective: options.objective,
     designatedExpertId: options.designatedExpertId,
@@ -210,10 +210,10 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   if (!Number.isInteger(maxToolCalls) || maxToolCalls < 1 || !Number.isInteger(wallTimeMs) || wallTimeMs < 1_000) throw new Error("Invalid task budget");
   await options.onLedger?.(ledger);
 
-  let agentPresets: AgentPresetSnapshot[];
+  let experts: ExpertSnapshot[];
   let skills: Awaited<ReturnType<SkillPluginStore["loadSkills"]>>;
   let hooks: Awaited<ReturnType<SkillPluginStore["loadHooks"]>>;
-  let directExpert: AgentPresetSnapshot | undefined;
+  let directExpert: ExpertSnapshot | undefined;
   try {
     if (ledger.state.capabilities && !options.workOrder) {
       const installed = await pluginStore.list();
@@ -222,9 +222,9 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
         if (!plugin?.enabled || plugin.revision !== selected.revision) throw new Error(`Selected plugin is unavailable or changed: ${selected.id}`);
       }
     }
-    agentPresets = options.workOrder || reviewing ? [] : await expertStore.enabled();
+    experts = options.workOrder || reviewing ? [] : await expertStore.enabled();
     const expertPerspective = profile.expertPerspective && !reviewing;
-    directExpert = expertPerspective && ledger.state.designatedExpertId ? agentPresets.find(item => item.id === ledger.state.designatedExpertId) : undefined;
+    directExpert = expertPerspective && ledger.state.designatedExpertId ? experts.find(item => item.id === ledger.state.designatedExpertId) : undefined;
     if (expertPerspective && ledger.state.designatedExpertId && !directExpert) throw new Error(`用户指定专家已停用或删除：${ledger.state.designatedExpertId}`);
     const selectedSkillIds = options.workOrder ? undefined : ledger.state.capabilities?.skills.map(item => item.id);
     const loadedSkills = options.workOrder ? [] : reviewing ? (options.reviewExpert?.skillIds?.length ? await pluginStore.loadSkills() : []) : await pluginStore.loadSkills(selectedSkillIds);
@@ -246,7 +246,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     await ledger.needInput(`专家或 Skill 无法加载：${reason}`, "capability");
     throw new NeedsInputError(reason);
   }
-  if (!options.workOrder && !reviewing && !answering) await ledger.setInitialCandidates(initialExpertCandidates(ledger.state.objective, agentPresets));
+  if (!options.workOrder && !reviewing && !answering) await ledger.setInitialCandidates(initialExpertCandidates(ledger.state.objective, experts));
 
   const permission = options.workOrder?.fullAccess && direct
     ? { mode: options.workerContext?.permissionMode ?? "ask" as const, roots: [projectRoot] }
@@ -305,8 +305,8 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   }
 
   const facts: SessionFacts = {
-    role, ledger, direct: !!direct, permissionMode: permission?.mode, workOrder: options.workOrder, workerPreset: options.workerPreset,
-    reviewExpert: options.reviewExpert, directExpert, agentPresets, skills, pluginToolNames: plugins.tools.map(tool => tool.name),
+    role, ledger, direct: !!direct, permissionMode: permission?.mode, workOrder: options.workOrder, workerExpert: options.workerExpert,
+    reviewExpert: options.reviewExpert, directExpert, experts, skills, pluginToolNames: plugins.tools.map(tool => tool.name),
     pluginInstructions: plugins.instructions, mcpToolNames: mcpTools.map(tool => tool.name), hooksLoaded: hooks.length > 0,
     officeReadToolNames: officeReadTools.map(tool => tool.name), canDispatch: !!options.getWorkerSupervisor,
     browserConnected: !!(options.browser || options.browserProxyDir),
@@ -362,7 +362,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
         return [
           ...common, ...attachments(), ...profile.deliveryTools(!!direct).map(name => delivery[name]()), ...webTools(),
           ...(profile.commands ? [commandTool()] : []),
-          ...(profile.dispatch && options.getWorkerSupervisor ? createAsyncWorkTools(options.getWorkerSupervisor, ledger, dataRoot, agentPresets, skills) : []),
+          ...(profile.dispatch && options.getWorkerSupervisor ? createAsyncWorkTools(options.getWorkerSupervisor, ledger, dataRoot, experts, skills) : []),
           createCapabilitySearchTool(dataRoot), createCapabilityMCPTool(dataRoot, projectRoot, ledger.state.id, reason => pauseForInput(reason, "approval")), ...createCognitionTools(ledger, dataRoot), ...createExpertTools(expertStore, pluginStore),
           skillReader(),
           ...plugins.tools,

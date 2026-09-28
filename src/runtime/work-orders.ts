@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { copyFile, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { fingerprintSource } from "./task-ledger";
-import type { AgentPresetSnapshot } from "./agent-presets";
+import type { ExpertSnapshot } from "./experts";
 import { isAllowedModelSelector } from "./model-policy";
 import { excludedSourceDirectory } from "./source-review";
 import type { WorkerStopReason } from "./task-events";
@@ -35,9 +35,13 @@ export interface WorkOrder {
   contractVersion?: number;
   cognitionRevision?: number;
   baseRevision?: string;
-  presetId?: string;
   /** Resolved once when the parent run starts; never supplied by the model. */
-  preset?: AgentPresetSnapshot;
+  expert?: ExpertSnapshot;
+}
+
+/** The bound expert snapshot. Orders serialized before the field rename carry `preset`; folds read both. */
+export function orderExpert(order: { expert?: ExpertSnapshot; preset?: ExpertSnapshot }): ExpertSnapshot | undefined {
+  return order.expert ?? order.preset;
 }
 
 export interface WorkerResult {
@@ -70,7 +74,7 @@ export interface WorkBatchReport {
   rolledBack?: string[];
   inFlight?: { file: string; temporary: string };
   results: Record<string, WorkerResult>;
-  presets?: Record<string, Pick<AgentPresetSnapshot, "id" | "name" | "hash" | "source">>;
+  experts?: Record<string, Pick<ExpertSnapshot, "id" | "name" | "hash" | "source">>;
   reason?: string;
   /** Per-order end reason, so the parent task records `worker/result` without parsing `reason`. */
   stopReasons?: Record<string, WorkerStopReason>;
@@ -264,7 +268,7 @@ export async function executeWorkOrders(input: {
   if (input.batchId && !/^[0-9a-f-]{36}$/.test(input.batchId)) throw new Error("Invalid worker batch ID");
   const workRoot = join(resolve(input.dataRoot), "workers", input.taskId, input.batchId ?? randomUUID());
   const reportFile = join(workRoot, "merge.json");
-  const report: WorkBatchReport = { status: "rejected", elapsedMs: 0, baseRevision: input.baseRevision, workRoot, changes: {}, committed: [], results: {}, presets: Object.fromEntries(input.orders.filter(order => order.preset).map(order => [order.id, { id: order.preset!.id, name: order.preset!.name, hash: order.preset!.hash, source: order.preset!.source }])) };
+  const report: WorkBatchReport = { status: "rejected", elapsedMs: 0, baseRevision: input.baseRevision, workRoot, changes: {}, committed: [], results: {}, experts: Object.fromEntries(input.orders.filter(order => order.expert).map(order => [order.id, { id: order.expert!.id, name: order.expert!.name, hash: order.expert!.hash, source: order.expert!.source }])) };
   const save = async () => {
     const temporary = `${reportFile}.${randomUUID()}.tmp`;
     await writeFile(temporary, JSON.stringify(report, null, 2));

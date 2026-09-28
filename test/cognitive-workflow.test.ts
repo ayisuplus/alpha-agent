@@ -3,14 +3,14 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskLedger } from "../src/runtime/task-ledger";
-import { resolveWorkOrders } from "../src/runtime/work-order-tool";
+import { bindWorkOrders } from "../src/runtime/worker-binding";
 import { executeWorkOrders } from "../src/runtime/work-orders";
 import { publicSkillQuery, discoverForGap } from "../src/runtime/skill-discovery";
 import { validateSkillBindings } from "../src/runtime/skill-binding";
 import { checkFileToolCall } from "../src/runtime/file-tool-guard";
 import { initialExpertCandidates, searchExpertCandidates } from "../src/runtime/expert-selection";
 import { SkillPluginStore, hashSkillDirectory } from "../src/plugins/third-party";
-import { AgentPresetStore } from "../src/runtime/agent-presets";
+import { ExpertStore } from "../src/runtime/experts";
 import { createCognitionTools } from "../src/runtime/cognition-tool";
 import { createWorkerCapabilityTool } from "../src/runtime/worker-capability-tool";
 import { createWorkerResultTool } from "../src/runtime/worker-result-tool";
@@ -75,11 +75,11 @@ test("a newly created expert can be selected in the same task turn", async () =>
   try {
     const dataRoot = join(root, "state");
     const [plan] = createCognitionTools(ledger, dataRoot);
-    const expert = await new AgentPresetStore(dataRoot).create({ name: "代码审查", description: "检查代码差异", instructions: "检查具体缺陷。", skillIds: [] });
+    const expert = await new ExpertStore(dataRoot).create({ name: "代码审查", description: "检查代码差异", instructions: "检查具体缺陷。", skillIds: [] });
     const result = await plan.execute("plan", { summary: "Use a reviewer", reason: "User requested review", candidates: [expert.id], steps: [{ id: "review", objective: "Check changes", mode: "review", dependsOn: [], expertId: expert.id, skillIds: [] }] }, undefined, undefined as never);
     expect(result.isError).toBeUndefined();
     expect(ledger.state.cognition?.candidates).toEqual([expert.id]);
-    await new AgentPresetStore(dataRoot).setEnabled(expert.id, false);
+    await new ExpertStore(dataRoot).setEnabled(expert.id, false);
     const disabled = await plan.execute("plan", { summary: "Use disabled reviewer", reason: "Invalid", candidates: [expert.id], steps: [] }, undefined, undefined as never);
     expect(disabled.isError).toBe(true);
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -119,8 +119,8 @@ test("general work takes the designated expert's perspective without waiting for
 test("neutral read-only work succeeds without edits; reviewer file access is limited", async () => {
   const { root, projectRoot, ledger } = await fixture();
   try {
-    const [order] = resolveWorkOrders([{ id: "inspect", objective: "Inspect app", mode: "investigate", ownedPaths: [], resources: [] }], []);
-    expect(order.preset).toBeUndefined();
+    const [order] = bindWorkOrders([{ id: "inspect", objective: "Inspect app", mode: "investigate", ownedPaths: [], resources: [] }], []);
+    expect(order.expert).toBeUndefined();
     const report = await executeWorkOrders({ projectRoot, dataRoot: join(root, "state"), taskId: ledger.state.id, baseRevision: ledger.state.revision!, orders: [order], async runWorker() { return { status: "completed", findings: ["app.ts exports value"], evidence: ["read app.ts"], unresolved: [] }; } });
     expect(report.status).toBe("merged");
     expect(report.committed).toEqual([]);
@@ -140,7 +140,7 @@ test("review orders can inspect project source but cannot read secrets or write"
   try {
     await writeFile(join(projectRoot, "app.test.ts"), "test source\n");
     await writeFile(join(projectRoot, ".env"), "secret\n");
-    const [order] = resolveWorkOrders([{ id: "review", objective: "Review app", mode: "review", ownedPaths: [], readPaths: ["app.ts"], resources: [] }], []);
+    const [order] = bindWorkOrders([{ id: "review", objective: "Review app", mode: "review", ownedPaths: [], readPaths: ["app.ts"], resources: [] }], []);
     expect(order.readPaths).toContain(".");
     await checkFileToolCall("read", { path: "app.test.ts" }, projectRoot, order, [], true);
     await expect(checkFileToolCall("read", { path: ".env" }, projectRoot, order, [], true)).rejects.toThrow("protected file");

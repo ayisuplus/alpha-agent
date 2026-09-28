@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile, readdir, realpath, stat, writeFile } from "n
 import { dirname, join } from "node:path";
 import type { Skill } from "@oh-my-pi/pi-coding-agent";
 import { hashSkillDirectory, SkillPluginStore } from "../plugins/third-party";
+import { copySkillDirectory } from "./skill-snapshot";
 
 export interface ExpertPackage {
   revision: string;
@@ -18,29 +19,6 @@ function packageRoot(dataRoot: string, expertId: string, revision: string): stri
 
 export function personaText(name: string, description: string, instructions: string): string {
   return `# ${name}\n\n适用范围：${description}\n\n${instructions}\n`;
-}
-
-async function copySkillDirectory(source: string, target: string): Promise<string> {
-  let size = 0;
-  async function walk(from: string, to: string): Promise<void> {
-    await mkdir(to, { recursive: true });
-    for (const entry of await readdir(from, { withFileTypes: true })) {
-      if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile())) throw new Error(`专家 Skill 包含不支持的文件：${entry.name}`);
-      const fromPath = join(from, entry.name);
-      const toPath = join(to, entry.name);
-      if (entry.isDirectory()) await walk(fromPath, toPath);
-      else {
-        size += (await stat(fromPath)).size;
-        if (size > 8_000_000) throw new Error("专家 Skill 超过 8 MB 限额");
-        await copyFile(fromPath, toPath);
-      }
-    }
-  }
-  const before = await hashSkillDirectory(source);
-  await walk(source, target);
-  const after = await hashSkillDirectory(target);
-  if (before !== after) throw new Error("专家 Skill 在打包时发生变化");
-  return after;
 }
 
 /** A versioned package stores persona text and exact read-only Skill resources. */

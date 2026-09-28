@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { loadSkillsFromDir, type PreparedExtension, type Skill } from "@oh-my-pi/pi-coding-agent";
 import { connectPluginMCP, readPluginMCP } from "./mcp";
 import { warnUnknownStoreVersion } from "../runtime/store-tag";
+import { frontmatterField } from "../runtime/skill-manifest";
 
 export interface SkillPlugin {
   id: string;
@@ -54,8 +55,7 @@ export async function hashSkillDirectory(root: string): Promise<string> {
 
 async function assertSelectedEntrypoint(root: string, name: string): Promise<void> {
   const entrypoint = await readFile(join(root, "SKILL.md"), "utf8");
-  const header = /^---\s*\r?\n([\s\S]*?)\r?\n---/.exec(entrypoint)?.[1];
-  const declared = header ? /^name:\s*["']?([^\r\n"']+)/mi.exec(header)?.[1]?.trim() : undefined;
+  const declared = frontmatterField(entrypoint, "name");
   if (declared !== name) throw new SkillPluginError("固定版本中的 Skill 名称与提案不一致");
 }
 

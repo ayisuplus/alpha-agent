@@ -128,7 +128,6 @@ const TOOLS: Record<string, { label: string; icon: ToolIcon }> = {
   edit: { label: "编辑", icon: "edit" },
   write: { label: "写入", icon: "write" },
   alpha_build: { label: "构建", icon: "build" },
-  alpha_delegate: { label: "分派工单", icon: "delegate" },
   alpha_generate_image: { label: "生成图片", icon: "image" },
   alpha_generate_voice: { label: "生成语音", icon: "voice" },
   alpha_generate_video: { label: "生成视频", icon: "video" },

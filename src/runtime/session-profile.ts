@@ -1,5 +1,5 @@
 import type { Skill } from "@oh-my-pi/pi-coding-agent";
-import { verifyPresetSnapshot, type AgentPresetSnapshot } from "./agent-presets";
+import { verifyExpertSnapshot, type ExpertSnapshot } from "./experts";
 import { initialExpertCandidates } from "./expert-selection";
 import { PLANNING_TOOL_NAMES } from "./planning-policy";
 import { roleThinkingInstructions } from "./role-thinking";
@@ -21,11 +21,11 @@ export interface SessionFacts {
   direct: boolean;
   permissionMode?: PermissionMode;
   workOrder?: WorkOrder;
-  workerPreset?: AgentPresetSnapshot;
-  reviewExpert?: AgentPresetSnapshot;
+  workerExpert?: ExpertSnapshot;
+  reviewExpert?: ExpertSnapshot;
   /** Expert the user designated; the coordinator works from its perspective. */
-  directExpert?: AgentPresetSnapshot;
-  agentPresets: readonly AgentPresetSnapshot[];
+  directExpert?: ExpertSnapshot;
+  experts: readonly ExpertSnapshot[];
   skills: readonly Skill[];
   pluginToolNames: readonly string[];
   pluginInstructions: readonly string[];
@@ -123,9 +123,9 @@ export function taskPrompt(state: TaskState, correction: string): string {
   ].filter(Boolean).join("\n");
 }
 
-export function workerSystemPrompt(order: WorkOrder, preset?: AgentPresetSnapshot): string[] {
-  if (order.presetId && (!preset || order.presetId !== preset.id)) throw new Error(`角色预设快照缺失：${order.presetId}`);
-  if (preset) verifyPresetSnapshot(preset);
+export function workerSystemPrompt(order: WorkOrder, expert?: ExpertSnapshot): string[] {
+  if (order.expertId && (!expert || order.expertId !== expert.id)) throw new Error(`专家快照缺失：${order.expertId}`);
+  if (expert) verifyExpertSnapshot(expert);
   return [
     ...roleThinkingInstructions("worker"),
     ...(order.fullAccess && order.mode === "implement" ? [
@@ -140,7 +140,7 @@ export function workerSystemPrompt(order: WorkOrder, preset?: AgentPresetSnapsho
     ...(order.acceptance?.length ? [`Acceptance required for this order: ${order.acceptance.join(" | ")}`] : []),
     ...(order.decisionReason ? [`Coordinator delegation reason: ${order.decisionReason}`] : []),
     ...(order.skillSnapshots?.length ? [`Selected Skill snapshots: ${order.skillSnapshots.map(item => `${item.id}@${item.revision.slice(0, 8)} sha256 ${item.hash}`).join(" | ")}. Read only these Skill resources when relevant.`] : []),
-    ...(preset ? [`Selected role: ${preset.name} (${preset.id}, sha256 ${preset.hash}). The role is task guidance; Alpha's worktree, approval and budget rules remain authoritative.`, preset.instructions] : []),
+    ...(expert ? [`Assigned expert: ${expert.name} (${expert.id}, sha256 ${expert.hash}). The expert is task guidance; Alpha's worktree, approval and budget rules remain authoritative.`, expert.instructions] : []),
     ...(order.agentId ? [`Your stable agent ID is ${order.agentId}; this run is ${order.instanceId}. Use alpha_cognition_update to preserve findings and next actions. Use alpha_send to report or ask the primary agent, and alpha_inbox to read and acknowledge replies. Do not address another subagent directly.`] : []),
   ];
 }
@@ -213,7 +213,7 @@ function coordinatorContract(facts: SessionFacts): string[] {
     "Alpha has built-in alpha_search, alpha_source, alpha_crawl, alpha_site and alpha_browser web tools. Public pages and logged-in tabs are separate from provider extraction. Exact external page interactions require a stable requestId and approval. Do not send logged-in content or cookies to providers.",
     ...(facts.mcpToolNames.length ? ["Third-party MCP tools are available only under their listed mcp__ names. Use them for the user's task; do not assume an unavailable service is running."] : []),
     ...(facts.hooksLoaded ? ["Third-party Pi hooks may include tool guidance for other hosts. In Alpha, use only the tools listed in this session; do not invent bash, Skill, or subagent calls."] : []),
-    `Enabled expert library: ${facts.agentPresets.length} experts. Dispatchable shortlist: ${initialExpertCandidates(ledger.state.objective, facts.agentPresets).map(id => { const item = facts.agentPresets.find(candidate => candidate.id === id)!; return `${item.id}=${item.name}: ${item.description}`; }).join(" | ") || "none"}. Use alpha_expert_search for other specialties. Prefer a relevant expert with a Skill package, but do not delay a clear task to find or create one. If none fits, omit expertId and dispatch a neutral worker with explicit acceptance criteria and source scope. Use alpha_plan for substantial development work. Dispatch by independent task, not by individual error. You own questions, review, integration and final acceptance.`,
+    `Enabled expert library: ${facts.experts.length} experts. Dispatchable shortlist: ${initialExpertCandidates(ledger.state.objective, facts.experts).map(id => { const item = facts.experts.find(candidate => candidate.id === id)!; return `${item.id}=${item.name}: ${item.description}`; }).join(" | ") || "none"}. Use alpha_expert_search for other specialties. Prefer a relevant expert with a Skill package, but do not delay a clear task to find or create one. If none fits, omit expertId and dispatch a neutral worker with explicit acceptance criteria and source scope. Use alpha_plan for substantial development work. Dispatch by independent task, not by individual error. You own questions, review, integration and final acceptance.`,
     "Use alpha_gap only for a diagnosed missing method, tool, permission or context. Installed compatible Skills can be assigned to work orders. Propose any external Skill before installation; never silently create an expert or change the task goal.",
     ...(profile.dispatch && facts.canDispatch ? ["Use alpha_spawn for independent task orders when parallel work helps. Each subagent has a stable identity, task role, cognition, session and Git worktree; expert and Skill snapshots are optional for a neutral worker. Give a precise brief, source scope and acceptance criteria. Use alpha_capability_search before binding a capability. Read alpha_inbox promptly; use alpha_worker_resolve on reported gaps to grant capabilities, answer, install an approved project dependency in that worker workspace, or reject. A message cannot approve a command. Use alpha_continue for other follow-ups. Inspect each result and diff before alpha_integrate. Investigate and review modes cannot edit source. The final build and acceptance belong to you."] : []),
     ...(ledger.state.contractVersion && ledger.state.contractVersion > 1 ? ["The user revised this task. Preserve earlier requirements unless explicitly superseded, and update alpha-verification.json so the browser checks the revised behavior, even if the existing app still builds."] : []),
@@ -226,7 +226,7 @@ function roleContract(facts: SessionFacts): string[] {
   const { ledger } = facts;
   switch (facts.role) {
     case "worker":
-      return [...workerSystemPrompt(facts.workOrder!, facts.workerPreset), `${facts.direct ? DIRECT_FILE_NOTE : MANAGED_FILE_NOTE}`, ...codeIntelligenceLine(facts), ...skillLines(facts, facts.direct)];
+      return [...workerSystemPrompt(facts.workOrder!, facts.workerExpert), `${facts.direct ? DIRECT_FILE_NOTE : MANAGED_FILE_NOTE}`, ...codeIntelligenceLine(facts), ...skillLines(facts, facts.direct)];
     case "reviewer":
       return [
         ...roleThinkingInstructions("worker"),

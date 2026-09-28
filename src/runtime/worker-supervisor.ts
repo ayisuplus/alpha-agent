@@ -2,7 +2,7 @@ import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { createTwoFilesPatch } from "diff";
 import { runModelWorkOrders } from "./model-workers";
-import { integratePreparedWorkOrder, prepareAgentWorkspace, validateOrders, type WorkBatchReport, type WorkOrder } from "./work-orders";
+import { integratePreparedWorkOrder, orderExpert, prepareAgentWorkspace, validateOrders, type WorkBatchReport, type WorkOrder } from "./work-orders";
 import { randomUUID } from "node:crypto";
 import { fingerprintSource, type TaskLedger } from "./task-ledger";
 import type { BrowserSession } from "./visible-browser";
@@ -17,7 +17,7 @@ import { WorkerStopError, workerStopReason } from "./worker-stop";
 import type { WorkerStopReason } from "./task-events";
 
 const workerToolCalls = 80;
-const workerWallTimeMs = 600_000;
+const workerWallTimeMs = 600_000; // The supervisor budget; model-workers kills the subprocess at +10s so a finished result can still be written.
 
 async function ensureWorktreeBase(projectRoot: string, managed: boolean): Promise<void> {
   const git = async (...args: string[]) => {
@@ -193,7 +193,8 @@ export class WorkerSupervisor {
       const order = { ...requested, modelSelector: workerModels[requested.mode ?? "implement"] ?? this.input.modelSelector };
       const id = order.instanceId!;
       if (!id) throw new Error("Worker instance ID is required");
-      await this.ledger.queueWorker({ id, parentId: this.input.parentId, order, expert: order.preset ? { id: order.preset.id, name: order.preset.name, hash: order.preset.hash } : undefined });
+      const bound = orderExpert(order);
+      await this.ledger.queueWorker({ id, parentId: this.input.parentId, order, expert: bound ? { id: bound.id, name: bound.name, hash: bound.hash } : undefined });
       this.attempts.set(id, { order, controller: new AbortController(), reserved: true });
       assigned.push(id);
       this.reservedCalls += workerToolCalls;
@@ -220,7 +221,7 @@ export class WorkerSupervisor {
       decisionReason: `Continue the assigned result: ${instruction.trim()}`.slice(0, 500),
       ownedPaths: mode && mode !== "implement" ? [] : prior.order.ownedPaths,
       readPaths: [...new Set(prior.order.readPaths ?? [])],
-      skillIds: [...agent.skillIds], skillSnapshots: agent.skillSnapshots?.map(item => ({ ...item })), preset: agent.expert,
+      skillIds: [...agent.skillIds], skillSnapshots: agent.skillSnapshots?.map(item => ({ ...item })), expert: agent.expert,
       capabilityIds, capabilitySnapshots: agent.capabilitySnapshots?.map(item => ({ ...item })), contextRevision: (agent.contextRevision ?? 1) + (install || addedCapabilities.some(item => !(agent.capabilityIds ?? []).includes(item)) ? 1 : 0),
       install,
       contractVersion: this.ledger.state.contractVersion ?? 1,

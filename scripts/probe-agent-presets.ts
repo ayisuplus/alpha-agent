@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { AgentPresetStore } from "../src/runtime/agent-presets";
+import { ExpertStore } from "../src/runtime/experts";
 import { DEFAULT_MODEL } from "../src/runtime/omp-runner";
 import { runModelWorkOrders } from "../src/runtime/model-workers";
-import { resolveWorkOrders } from "../src/runtime/work-order-tool";
+import { bindWorkOrders } from "../src/runtime/worker-binding";
 import { fingerprintSource } from "../src/runtime/task-ledger";
 import { publishLocalPreview } from "../src/runtime/local-preview";
 
@@ -17,10 +17,10 @@ await writeFile(join(product, "build.ts"), `import { cp, mkdir } from "node:fs/p
 await writeFile(join(product, "index.html"), `<!doctype html><html lang="zh"><meta charset="utf-8"><title>角色预设探针</title><style>body{font:18px sans-serif;color:#16202a;background:#fff;padding:32px}button{font:inherit}</style><h1>角色预设探针</h1><button id="show">显示结果</button><p id="result">等待点击</p><script type="module">import { label } from './src/ui.js'; import { value } from './src/data.js'; document.querySelector('#show').addEventListener('click', () => { document.querySelector('#result').textContent = label() + ' / ' + value(); });</script></html>`);
 await writeFile(join(product, "src", "ui.js"), `export function label() { return "待实现"; }\n`);
 await writeFile(join(product, "src", "data.js"), `export function value() { return "待实现"; }\n`);
-const presets = await new AgentPresetStore(dataRoot).enabled();
-const orders = resolveWorkOrders([
-  { id: "frontend", objective: 'In src/ui.js, replace only the returned Chinese string "待实现" with "前端已就绪". Keep the function and all other files unchanged.', ownedPaths: ["src/ui.js"], resources: ["ui"], presetId: "frontend" },
-  { id: "backend", objective: 'In src/data.js, replace only the returned Chinese string "待实现" with "后端已就绪". Keep the function and all other files unchanged.', ownedPaths: ["src/data.js"], resources: ["data"], presetId: "backend" },
+const presets = await new ExpertStore(dataRoot).enabled();
+const orders = bindWorkOrders([
+  { id: "frontend", objective: 'In src/ui.js, replace only the returned Chinese string "待实现" with "前端已就绪". Keep the function and all other files unchanged.', ownedPaths: ["src/ui.js"], resources: ["ui"]},
+  { id: "backend", objective: 'In src/data.js, replace only the returned Chinese string "待实现" with "后端已就绪". Keep the function and all other files unchanged.', ownedPaths: ["src/data.js"], resources: ["data"]},
 ], presets);
 const events: string[] = [];
 const report = await runModelWorkOrders({
@@ -35,6 +35,6 @@ const build = Bun.spawn([process.execPath, "run", "build"], { cwd: product, stdo
 const [buildOutput, buildError, exit] = await Promise.all([new Response(build.stdout).text(), new Response(build.stderr).text(), build.exited]);
 if (exit !== 0) throw new Error(`Integrated build failed: ${buildOutput}\n${buildError}`);
 const preview = await publishLocalPreview({ projectRoot: product, buildDir: join(product, "dist"), dataRoot, revision: await fingerprintSource(product) });
-console.log(JSON.stringify({ ready: true, result: join(root, "result.json"), url: preview.record.url, report: report.status, presets: report.presets }));
+console.log(JSON.stringify({ ready: true, result: join(root, "result.json"), url: preview.record.url, report: report.status, presets: report.experts }));
 await new Promise<void>(done => process.once("SIGINT", done));
 preview.stop();

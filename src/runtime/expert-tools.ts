@@ -1,6 +1,6 @@
 import { type } from "@oh-my-pi/omptype";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
-import { AgentPresetStore } from "./agent-presets";
+import { ExpertStore } from "./experts";
 import { SkillPluginStore } from "../plugins/third-party";
 import { searchExpertCandidates } from "./expert-selection";
 
@@ -9,7 +9,7 @@ const createParameters = type(fields);
 const updateParameters = type({ id: "string", ...fields });
 const deleteParameters = type({ id: "string" });
 
-export function createExpertTools(store: AgentPresetStore, plugins: SkillPluginStore): Array<CustomTool<any>> {
+export function createExpertTools(store: ExpertStore, plugins: SkillPluginStore): Array<CustomTool<any>> {
   const check = async (ids: string[], expertId?: string) => {
     const bundled = expertId ? (await store.get(expertId)).package?.skills.map(item => item.id) ?? [] : [];
     const available = new Set([...(await plugins.loadSkills()).map(item => item.name), ...bundled]);

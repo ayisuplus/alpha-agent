@@ -2,13 +2,13 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { AgentPresetStore } from "../src/runtime/agent-presets";
+import { ExpertStore } from "../src/runtime/experts";
 import { acceptCodeChange } from "../src/runtime/code-acceptance";
 import { runDevelopmentWorkflow } from "../src/runtime/development-workflow";
 import { runModelWorkOrders } from "../src/runtime/model-workers";
 import { fingerprintSource } from "../src/runtime/task-ledger";
 import { importCodeWorkspace } from "../src/runtime/workspace-import";
-import { resolveWorkOrders } from "../src/runtime/work-order-tool";
+import { bindWorkOrders } from "../src/runtime/worker-binding";
 import type { VisibleBrowser } from "../src/runtime/visible-browser";
 
 const projectRoot = resolve(import.meta.dir, "..");
@@ -35,7 +35,7 @@ async function check(source: string): Promise<{ exitCode: number; output: string
   return { exitCode, output: `${stdout}\n${stderr}`.slice(-3000) };
 }
 
-const experts = await new AgentPresetStore(dataRoot).enabled();
+const experts = await new ExpertStore(dataRoot).enabled();
 const coach = experts.find(item => item.source?.path === "engineering-workflow-skills/agents/engineering-workflow-coach.md");
 if (!coach) throw new Error("Imported engineering workflow expert is missing");
 report.expert = { id: coach.id, name: coach.name, skills: coach.skillIds, packageRevision: coach.package?.revision };
@@ -43,7 +43,7 @@ await save();
 
 try {
   const source = await fixture("browser-source");
-  const [order] = resolveWorkOrders([{ id: "browser", objective: "Use alpha_browser observe on the connected local preview. Verify its visible text contains 'Cart total: 33' and there are no console errors. Report the observed browser evidence and a review verdict; do not change files.", mode: "review", ownedPaths: [], readPaths: ["src/cart.ts"], resources: [] }], [coach]);
+  const [order] = bindWorkOrders([{ id: "browser", objective: "Use alpha_browser observe on the connected local preview. Verify its visible text contains 'Cart total: 33' and there are no console errors. Report the observed browser evidence and a review verdict; do not change files.", mode: "review", ownedPaths: [], readPaths: ["src/cart.ts"], resources: [] }], [coach]);
   let browserCalls = 0;
   const observation = { title: "Cart", url: "http://127.0.0.1:8123/", text: "Cart total: 33", controls: [], consoleErrors: [], failedRequests: [], brokenImages: [], viewport: { width: 1280, height: 800, horizontalOverflow: false } };
   const browser = { observe: async () => { browserCalls++; return observation; } } as unknown as VisibleBrowser;
@@ -60,7 +60,7 @@ if (process.argv.includes("--browser-only")) {
 
 try {
   const source = await fixture("capability-source");
-  const [order] = resolveWorkOrders([{ id: "visual", objective: "The requested acceptance needs a real browser inspection of the rendered UI, which this isolated worker cannot do directly. Record an exact browser capability request to the coordinator, then report needs-context; do not claim visual verification.", mode: "review", ownedPaths: [], readPaths: ["src/cart.ts"], resources: [] }], [coach]);
+  const [order] = bindWorkOrders([{ id: "visual", objective: "The requested acceptance needs a real browser inspection of the rendered UI, which this isolated worker cannot do directly. Record an exact browser capability request to the coordinator, then report needs-context; do not claim visual verification.", mode: "review", ownedPaths: [], readPaths: ["src/cart.ts"], resources: [] }], [coach]);
   const result = await runModelWorkOrders({ projectRoot: source, dataRoot, taskId: randomUUID(), baseRevision: await fingerprintSource(source), orders: [order], modelSelector: model, signal: AbortSignal.timeout(180_000) });
   report.capability = { status: result.status, reason: result.reason, result: result.results.visual, committed: result.committed };
 } catch (error) { report.capability = { error: error instanceof Error ? error.message : String(error) }; }
@@ -68,7 +68,7 @@ await save();
 
 try {
   const source = await fixture("worker-source");
-  const [order] = resolveWorkOrders([{ id: "cart", objective: "Fix calculateTotal so it multiplies price by quantity and passes the existing cart test. Keep the public signature.", mode: "implement", ownedPaths: ["src/cart.ts"], readPaths: ["test/cart.test.ts", "package.json"], resources: [], acceptance: ["Existing cart test passes"] }], [coach]);
+  const [order] = bindWorkOrders([{ id: "cart", objective: "Fix calculateTotal so it multiplies price by quantity and passes the existing cart test. Keep the public signature.", mode: "implement", ownedPaths: ["src/cart.ts"], readPaths: ["test/cart.test.ts", "package.json"], resources: [], acceptance: ["Existing cart test passes"] }], [coach]);
   const usage: unknown[] = [];
   const result = await runModelWorkOrders({ projectRoot: source, dataRoot, taskId: randomUUID(), baseRevision: await fingerprintSource(source), orders: [order], modelSelector: model, signal: AbortSignal.timeout(180_000), onWorkerUsage: (_order, value) => { usage.push(value); } });
   report.worker = { status: result.status, reason: result.reason, changed: result.changes, results: result.results, usage, source: await readFile(join(source, "src", "cart.ts"), "utf8"), check: await check(source) };

@@ -28,7 +28,14 @@ export interface TaskProfile {
   commands: boolean;
   /** The coordinator can dispatch subagents. */
   dispatch: boolean;
-  /** A user-designated expert shapes the coordinator's own perspective (dispatching types give it a work order). */
+  /**
+   * How a user-designated expert binds — the same picker entry, two contracts:
+   * - dispatching types (`web-product`, `code-change`): execution contract — some implementing order must carry the
+   *   expert, and acceptance requires a completed instance of exactly this expert (`task-completion`'s
+   *   `designated-expert` gap; `worker-binding`'s allocation guard refuses dispatch without it);
+   * - the other types: perspective only — the expert is the coordinator's persona and methods, no instance is
+   *   required and none is implied.
+   */
   expertPerspective: boolean;
   /** Third-party hooks and MCP servers the user selected are loaded for the coordinator. */
   thirdParty: boolean;

@@ -116,7 +116,7 @@ export interface GuidanceRecord {
 export type ExecutionMode = "investigate" | "implement" | "review";
 export interface AgentRecord {
   id: string;
-  expert?: import("./agent-presets").AgentPresetSnapshot;
+  expert?: import("./experts").ExpertSnapshot;
   skillIds: string[];
   skillSnapshots?: NonNullable<import("./work-orders").WorkOrder["skillSnapshots"]>;
   capabilityIds?: string[];
@@ -528,10 +528,10 @@ export class TaskLedger {
   }
 
   async queueWorker(input: { id: string; parentId?: string; order: import("./work-orders").WorkOrder; expert?: { id: string; name: string; hash: string } }): Promise<void> {
-    const { preset, ...order } = input.order;
+    const { expert: expertSnapshot, ...order } = input.order;
     await this.commit(() => ({
       type: "worker/queued",
-      payload: { attemptId: input.id, ...(input.parentId ? { parentId: input.parentId } : {}), order, ...(preset ? { preset } : {}), ...(input.expert ? { expert: input.expert } : {}), startedAt: new Date().toISOString() },
+      payload: { attemptId: input.id, ...(input.parentId ? { parentId: input.parentId } : {}), order, ...(expertSnapshot ? { expertSnapshot } : {}), ...(input.expert ? { expert: input.expert } : {}), startedAt: new Date().toISOString() },
     }));
   }
 

@@ -1,6 +1,6 @@
 import { type } from "@oh-my-pi/omptype";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
-import { AgentPresetStore } from "./agent-presets";
+import { ExpertStore } from "./experts";
 import { SkillPluginStore } from "../plugins/third-party";
 import type { CognitionStep, TaskLedger } from "./task-ledger";
 import { discoverForGap } from "./skill-discovery";
@@ -29,7 +29,7 @@ export function createCognitionTools(ledger: TaskLedger, dataRoot: string): [Cus
       loadMode: "essential",
       async execute(_id, args) {
         try {
-          const [experts, skills] = await Promise.all([new AgentPresetStore(dataRoot).enabled(), new SkillPluginStore(dataRoot).loadSkills()]);
+          const [experts, skills] = await Promise.all([new ExpertStore(dataRoot).enabled(), new SkillPluginStore(dataRoot).loadSkills()]);
           const expertIds = new Set(experts.map(item => item.id));
           const skillIds = new Set(skills.map(item => item.name));
           const candidates = [...new Set(args.candidates)];

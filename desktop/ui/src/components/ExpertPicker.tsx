@@ -1,26 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Search, UserRound } from "lucide-react";
 import { api } from "../api/client";
-import type { AgentPresetSummary } from "../api/types";
+import type { ExpertSummary } from "../api/types";
 import { EXPERT_LINES, expertLineLabel } from "../state/labels";
 import { openSettings } from "../state/workbench";
 import { Spinner } from "./ui";
 import "./ModelPicker.css";
 
-let cached: AgentPresetSummary[] | null = null;
+let cached: ExpertSummary[] | null = null;
 
 /** Enabled experts, shared across pickers; refreshed whenever a picker opens. */
-async function loadExperts(): Promise<AgentPresetSummary[]> {
-  cached = (await api.agentPresets()).filter(item => item.enabled);
+async function loadExperts(): Promise<ExpertSummary[]> {
+  cached = (await api.experts()).filter(item => item.enabled);
   return cached;
 }
 
 /** Finds the enabled expert derived from a core template, e.g. `xiaohongshu-planner` → `core-xiaohongshu-planner`. */
-export function expertForTemplate(experts: readonly AgentPresetSummary[], templateId: string): AgentPresetSummary | undefined {
+export function expertForTemplate(experts: readonly ExpertSummary[], templateId: string): ExpertSummary | undefined {
   return experts.find(item => item.id === `core-${templateId}`) ?? experts.find(item => item.basedOn === templateId);
 }
 
-export function useEnabledExperts(): AgentPresetSummary[] | null {
+export function useEnabledExperts(): ExpertSummary[] | null {
   const [experts, setExperts] = useState(cached);
   useEffect(() => {
     let current = true;
@@ -55,7 +55,7 @@ export function ExpertPicker({ value, onChange, placement = "up" }: { value: str
     const needle = query.trim().toLocaleLowerCase();
     const shown = (experts ?? []).filter(item => !needle || `${item.name} ${item.description}`.toLocaleLowerCase().includes(needle));
     const order = [...EXPERT_LINES.map(item => item.id as string), "custom"];
-    const byLine = new Map<string, AgentPresetSummary[]>();
+    const byLine = new Map<string, ExpertSummary[]>();
     for (const item of shown) byLine.set(item.line ?? "custom", [...(byLine.get(item.line ?? "custom") ?? []), item]);
     return [...byLine.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
   }, [experts, query]);
@@ -69,7 +69,7 @@ export function ExpertPicker({ value, onChange, placement = "up" }: { value: str
 
   return <div className="model-picker" ref={root}>
     <button className="model-picker-button" aria-haspopup="listbox" aria-expanded={open}
-      title={selected ? `指定专家：${selected.name}` : "由 Alpha 按任务选择专家"} onClick={() => setOpen(current => !current)}>
+      title={selected ? `指定专家：${selected.name}。代码与网页任务由该专家的子代理执行，验收需要它完成的实例；其他任务把它作为主代理的专家视角` : "由 Alpha 按任务选择专家"} onClick={() => setOpen(current => !current)}>
       <UserRound size={14} aria-hidden />
       <span className="model-picker-value">{selected ? selected.name : "专家 · 自动"}</span>
       <ChevronDown size={13} aria-hidden />

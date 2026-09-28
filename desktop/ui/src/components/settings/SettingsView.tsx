@@ -4,7 +4,7 @@ import { useStore } from "../../state/store";
 import { closePanel, openSettings, store, type SettingsSection } from "../../state/workbench";
 import { IconButton, Spinner } from "../ui";
 import { ModelSettings } from "./ModelSettings";
-import { AgentPresetsSettings } from "./AgentPresetsSettings";
+import { ExpertsSettings } from "./ExpertsSettings";
 import { GenerationSettings, InterfaceSettings, RunSettings, ShortcutSettings } from "./sections";
 import { WebSettings } from "./WebSettings";
 import { DiagnosticsSettings, WorkspaceSettings } from "./WorkspaceSettings";
@@ -15,7 +15,7 @@ interface SectionEntry { id: SettingsSection; label: string; icon: LucideIcon; r
 export const SECTIONS: SectionEntry[] = [
   { id: "model", label: "模型", icon: Bot, render: ModelSettings },
   { id: "run", label: "运行", icon: Gauge, render: RunSettings },
-  { id: "agents", label: "专家库", icon: Users, render: AgentPresetsSettings },
+  { id: "agents", label: "专家库", icon: Users, render: ExpertsSettings },
   { id: "generation", label: "插件", icon: Sparkles, render: GenerationSettings },
   { id: "web", label: "网页服务", icon: Globe, render: WebSettings },
   { id: "interface", label: "界面", icon: MonitorCog, render: InterfaceSettings },
@@ -42,7 +42,7 @@ export function SettingsView({ section }: { section: SettingsSection }) {
         </button>)}
       </nav>
       <div className="settings-content">
-        {settings ? <><div hidden={entry.id !== "agents"}><AgentPresetsSettings /></div>{entry.id !== "agents" && <Body />}</> : <p className="settings-loading"><Spinner size={14} />正在读取设置…</p>}
+        {settings ? <><div hidden={entry.id !== "agents"}><ExpertsSettings /></div>{entry.id !== "agents" && <Body />}</> : <p className="settings-loading"><Spinner size={14} />正在读取设置…</p>}
       </div>
     </div>
   </div>;

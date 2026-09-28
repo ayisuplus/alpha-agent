@@ -6,7 +6,7 @@ import type { Skill } from "@oh-my-pi/pi-coding-agent";
 import { builtinPlugins } from "../plugins";
 import { readPluginMCP } from "../plugins/mcp";
 import { hashSkillDirectory, SkillPluginStore } from "../plugins/third-party";
-import { AgentPresetStore } from "./agent-presets";
+import { ExpertStore } from "./experts";
 
 export type CapabilityKind = "skill" | "mcp-server" | "mcp-tool" | "builtin-tool";
 export interface CapabilityEntry {
@@ -32,9 +32,9 @@ export async function capabilityPool(dataRoot: string): Promise<CapabilityEntry[
     if (!plugin) continue;
     entries.push({ id: skill.name, kind: "skill", name: skill.name, description: skill.description, source: plugin.id, revision: plugin.revision, hash: await hashSkillDirectory(skill.baseDir), enabled: true });
   }
-  for (const expert of await new AgentPresetStore(dataRoot).list()) {
+  for (const expert of await new ExpertStore(dataRoot).list()) {
     if (!expert.package?.skills.length) continue;
-    for (const skill of await new AgentPresetStore(dataRoot).loadBundledSkills(expert)) {
+    for (const skill of await new ExpertStore(dataRoot).loadBundledSkills(expert)) {
       const item = expert.package.skills.find(entry => entry.id === skill.name)!;
       entries.push({ id: expertSkillId(expert.id, skill.name), kind: "skill", name: skill.name, description: skill.description, source: `expert:${expert.id}`, revision: expert.package.revision, hash: item.hash, enabled: expert.enabled });
     }
@@ -59,9 +59,9 @@ export async function capabilityPool(dataRoot: string): Promise<CapabilityEntry[
 
 export async function resolvePoolSkill(dataRoot: string, id: string): Promise<{ skill: Skill; revision: string; hash: string }> {
   if (id.startsWith("expert-")) {
-    const expert = (await new AgentPresetStore(dataRoot).list()).find(item => item.package?.skills.some(skill => expertSkillId(item.id, skill.id) === id));
+    const expert = (await new ExpertStore(dataRoot).list()).find(item => item.package?.skills.some(skill => expertSkillId(item.id, skill.id) === id));
     if (!expert?.enabled) throw new Error(`Skill is unavailable: ${id}`);
-    const skill = (await new AgentPresetStore(dataRoot).loadBundledSkills(expert)).find(item => expertSkillId(expert.id, item.name) === id);
+    const skill = (await new ExpertStore(dataRoot).loadBundledSkills(expert)).find(item => expertSkillId(expert.id, item.name) === id);
     if (!skill || !expert.package) throw new Error(`Skill is unavailable: ${id}`);
     return { skill, revision: expert.package.revision, hash: await hashSkillDirectory(skill.baseDir) };
   }

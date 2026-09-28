@@ -31,3 +31,18 @@ Worker 是有稳定身份的任务级子代理，不是专家类型，也不是�
 Skill 可以在 frontmatter 中声明 `requires-tools`、`requires-services` 和 `conflicts-with`。派发前检查这些显式要求；工具执行时再次按模式检查权限。运行时不会把 Skill 中的文字当作授权。
 
 内置开发流程借鉴了 [Superpowers 的 subagent-driven-development](https://github.com/obra/superpowers/blob/main/skills/subagent-driven-development/SKILL.md)：给独立任务清晰的工单、由主代理处理中途问题、每轮检查结果并在集成前审查。参考的本地版本为提交 `5bf4e78011075bcfc0dc295f0724994cd123ee71`，其许可证为 MIT、Copyright © 2025 Jesse Vincent。Alpha 没有复制它的固定 Subagent 设定、Hook 或提示模板；已安装的历史包仍保留在原位置，但新任务不装载其外部流程。
+
+## 术语表（2026-09-29 梳理）
+
+子代理与专家的边界只有一条：**专家提供知识，子代理负责执行，交点只有派发工单时的一次绑定**。统一词汇：
+
+| 术语 | 含义 | 曾用名 / 历史拼法 |
+|---|---|---|
+| 专家（expert） | 版本化知识包：人设 + 方法 + 随包 Skill 快照。绑定专家只装载其人设；Skill 与能力（MCP/内置工具）一律显式选择 | 代码旧名 `AgentPreset*` 已统一为 `Expert*`；`preset`/`agent-preset` 皆指专家 |
+| 子代理（worker） | 任务级执行身份：稳定 `agentId` + 执行模式 + 绑定的专家快照 + 轮次（`instanceId`）+ 结果与消息 | 旧文档混用 worker/subagent/agent/instance：instance 现在只指一轮执行 |
+| 执行模式（mode） | 权限：`investigate`/`review` 只读，`implement` 可写源码 | 原与"角色"混用 |
+| 会话角色（session role） | 运行形态：`coordinator`/`worker`/`reviewer`/`planner`/`answer` | 原与"角色"混用；worker 提示词里的 "Selected role" 已改为 "Assigned expert" |
+| 绑定契约 | 同一个"指定专家"入口，两种契约：`web-product`/`code-change` 是**执行契约**（必须有该专家完成的实例，`task-completion` 的 `designated-expert` 缺口 + `worker-binding` 的分配守卫）；其余类型是**专家视角**（仅作主代理人设，不要求实例） | 见 `task-profile.ts` 的 `expertPerspective` 注释 |
+| 派发 | 单一入口 `alpha_spawn` → `worker-binding.ts`（计划一致性 → 指定专家分配 → 绑定 → Skill 要求校验） | 旧的 `alpha_delegate` 双轨已删除 |
+
+存储与数据的历史拼法（有意保留）：`.alpha/agent-presets.json` 文件名与其 `format: "agent-presets"` 标记、`presets/agents/index.json` 的 `presets` 键、`.alpha/expert-packs/`（专家包只做版本快照，人设以注册表数据为准）。

@@ -19,7 +19,7 @@ test("subagent messages pass through the primary mailbox with durable IDs and ex
     const agentId = crypto.randomUUID();
     const runId = crypto.randomUUID();
     const preset = { id: "test-expert", name: "Test expert", description: "Test", instructions: "Test", hash: "a".repeat(64), skillIds: ["test:skill"], package: { revision: "b".repeat(64), skills: [{ id: "test:skill", hash: "c".repeat(64) }] } };
-    const order: WorkOrder = { id: "research", objective: "Investigate", mode: "investigate", ownedPaths: [], readPaths: ["."], resources: ["research"], agentId, instanceId: runId, fullAccess: true, skillIds: ["test:skill"], preset };
+    const order: WorkOrder = { id: "research", objective: "Investigate", mode: "investigate", ownedPaths: [], readPaths: ["."], resources: ["research"], agentId, instanceId: runId, fullAccess: true, skillIds: ["test:skill"], expert: preset };
     const reads: string[] = [];
     await checkFileToolCall("alpha_send", {}, projectRoot, order, [], false, undefined, path => reads.push(path));
     await checkFileToolCall("alpha_inbox", {}, projectRoot, order, [], false, undefined, path => reads.push(path));

@@ -15,7 +15,7 @@ async function withFacts(taskType: TaskType, patch: Partial<SessionFacts>, check
     await mkdir(projectRoot, { recursive: true });
     const ledger = await TaskLedger.create(join(root, ".alpha"), { objective: "Explain the cart", projectRoot, taskType, criteria });
     check({
-      role: "coordinator", ledger, direct: false, agentPresets: [], skills: [], pluginToolNames: ["plugin_write"], pluginInstructions: [],
+      role: "coordinator", ledger, direct: false, experts: [], skills: [], pluginToolNames: ["plugin_write"], pluginInstructions: [],
       mcpToolNames: ["mcp__alpha_x_write"], hooksLoaded: false, officeReadToolNames: [], canDispatch: true, browserConnected: false, ...patch,
     });
   } finally { await rm(root, { recursive: true, force: true }); }

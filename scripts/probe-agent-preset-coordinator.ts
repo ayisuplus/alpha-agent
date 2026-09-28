@@ -34,10 +34,10 @@ try {
   const api = await readFile(join(product, "src", "api.js"), "utf8");
   const result = { root, taskId, status: ledger.state.status, events, reports, client, api };
   await writeFile(join(root, "result.json"), JSON.stringify(result, null, 2));
-  if (!merged || !clientOrder || !apiOrder || merged.presets?.[clientOrder]?.id !== "frontend" || merged.presets?.[apiOrder]?.id !== "backend" || !client.includes("前端已就绪") || !api.includes("后端已就绪")) {
+  if (!merged || !clientOrder || !apiOrder || merged.experts?.[clientOrder]?.id !== "frontend" || merged.experts?.[apiOrder]?.id !== "backend" || !client.includes("前端已就绪") || !api.includes("后端已就绪")) {
     throw new Error(`Coordinator role selection did not meet probe expectations; evidence: ${join(root, "result.json")}`);
   }
-  console.log(JSON.stringify({ ready: true, result: join(root, "result.json"), taskId, roles: merged.presets, tools: events.filter(event => event.type === "tool-start").map(event => event.value) }));
+  console.log(JSON.stringify({ ready: true, result: join(root, "result.json"), taskId, roles: merged.experts, tools: events.filter(event => event.type === "tool-start").map(event => event.value) }));
 } catch (error) {
   await writeFile(join(root, "failure.json"), JSON.stringify({ taskId, events, error: error instanceof Error ? error.message : String(error) }, null, 2));
   throw error;

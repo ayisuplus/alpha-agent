@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AgentPresetSnapshot } from "../src/runtime/agent-presets";
+import type { ExpertSnapshot } from "../src/runtime/experts";
 import type { AgentRecord, CognitionState, CognitionStep, TaskState, WorkerCognition, WorkerRequestRecord } from "../src/runtime/task-ledger";
 import { workerReducers } from "../src/runtime/task-events/apply/worker";
 import { InvariantError } from "../src/runtime/task-events/errors";
@@ -64,7 +64,7 @@ function order(overrides: Partial<WorkOrder> = {}): WorkOrder {
   return { id: "step-1", objective: "Implement", ownedPaths: ["src/"], resources: [], acceptance: ["Tests pass"], ...overrides };
 }
 
-const preset: AgentPresetSnapshot = { id: "preset-1", name: "Expert", description: "d", instructions: "i", hash: "hash-1" };
+const preset: ExpertSnapshot = { id: "preset-1", name: "Expert", description: "d", instructions: "i", hash: "hash-1" };
 
 function workerRequest(overrides: Partial<WorkerRequestRecord> = {}): WorkerRequestRecord {
   return { id: "req-1", agentId: "agent-1", runId: "w1", orderId: "step-1", kind: "capability", blockedStep: "step-1", capabilityIds: ["cap-1"], contractVersion: 1, sourceRevision: "rev-1", status: "open", recordedAt: AT, ...overrides };
@@ -129,11 +129,20 @@ describe("worker/dispatched", () => {
 });
 
 describe("worker/queued", () => {
+  test("events written before the expert snapshot rename still fold", () => {
+    const state = baseState({ cognition: cognition({ steps: [step("step-1")] }) });
+    const workOrder = order({ agentId: "agent-1", skillIds: ["sk-1"] });
+    // Old logs carried the full snapshot under `preset`; the fold reads both spellings.
+    apply(state, "worker/queued", { attemptId: "w1", order: workOrder, preset, startedAt: T1 } as never);
+    expect(state.cognition!.agents?.[0]).toMatchObject({ id: "agent-1", expert: preset });
+    expect(state.cognition!.instances?.[0]).toMatchObject({ id: "w1", status: "queued" });
+  });
+
   test("upserts a new agent record and queues the instance", () => {
     const state = baseState({ contractVersion: 4, cognition: cognition({ steps: [step("step-1")] }) });
     const workOrder = order({ agentId: "agent-1", skillIds: ["sk-1"], capabilityIds: ["cap-1"], contextRevision: 2, decisionReason: "because", mode: "implement" });
     const expert = { id: "e-1", name: "Expert", hash: "hash-1" };
-    apply(state, "worker/queued", { attemptId: "w1", parentId: "p0", order: workOrder, preset, expert, startedAt: T1 });
+    apply(state, "worker/queued", { attemptId: "w1", parentId: "p0", order: workOrder, expertSnapshot: preset, expert, startedAt: T1 });
     expect(state.cognition!.agents).toEqual([{ id: "agent-1", expert: preset, skillIds: ["sk-1"], capabilityIds: ["cap-1"], contextRevision: 2, mode: "implement", orderId: "step-1", lastAttemptId: "w1", status: "queued" }]);
     const queued = state.cognition!.instances![0];
     expect(queued).toEqual({ id: "w1", agentId: "agent-1", parentId: "p0", orderId: "step-1", order: workOrder, decisionReason: "because", mode: "implement", expert, skills: [], contractVersion: 4, cognitionRevision: 3, baseRevision: "rev-1", status: "queued", startedAt: T1 });
@@ -200,17 +209,17 @@ describe("worker/queued", () => {
   test("identity, expert or skill changes on an existing agent are rejected", () => {
     const state = baseState({ cognition: cognition({ agents: [agentRecord({ status: "returned", expert: preset, skillIds: ["sk-1"] })] }) });
     expectInvariant(
-      () => apply(state, "worker/queued", { attemptId: "w1", order: order({ agentId: "agent-1", skillIds: ["sk-1"] }), preset: { ...preset, hash: "hash-2" }, startedAt: T1 }),
+      () => apply(state, "worker/queued", { attemptId: "w1", order: order({ agentId: "agent-1", skillIds: ["sk-1"] }), expertSnapshot: { ...preset, hash: "hash-2" }, startedAt: T1 }),
       "apply/subagent-identity-changed",
       "Subagent identity or expert/skills changed",
     );
     expectInvariant(
-      () => apply(state, "worker/queued", { attemptId: "w1", order: order({ id: "step-2", agentId: "agent-1", skillIds: ["sk-1"] }), preset, startedAt: T1 }),
+      () => apply(state, "worker/queued", { attemptId: "w1", order: order({ id: "step-2", agentId: "agent-1", skillIds: ["sk-1"] }), expertSnapshot: preset, startedAt: T1 }),
       "apply/subagent-identity-changed",
       "Subagent identity or expert/skills changed",
     );
     expectInvariant(
-      () => apply(state, "worker/queued", { attemptId: "w1", order: order({ agentId: "agent-1", skillIds: ["sk-2"] }), preset, startedAt: T1 }),
+      () => apply(state, "worker/queued", { attemptId: "w1", order: order({ agentId: "agent-1", skillIds: ["sk-2"] }), expertSnapshot: preset, startedAt: T1 }),
       "apply/subagent-identity-changed",
       "Subagent identity or expert/skills changed",
     );

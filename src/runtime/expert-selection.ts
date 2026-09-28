@@ -1,4 +1,4 @@
-import type { AgentPresetSnapshot } from "./agent-presets";
+import type { ExpertSnapshot } from "./experts";
 
 function terms(value: string): Set<string> {
   const text = value.toLowerCase();
@@ -14,13 +14,13 @@ function specialtyTerms(value: string): string[] {
 }
 
 /** A cheap initial shortlist. The model may revise it; a shortlist never starts an instance. */
-export function initialExpertCandidates(objective: string, experts: readonly AgentPresetSnapshot[]): string[] {
+export function initialExpertCandidates(objective: string, experts: readonly ExpertSnapshot[]): string[] {
   const wanted = new Set(specialtyTerms(objective));
   return experts.filter(expert => expert.package?.skills.length).map(expert => ({ id: expert.id, score: [...terms(`${expert.name} ${expert.description}`)].filter(term => wanted.has(term)).length }))
     .filter(item => item.score > 1).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, 3).map(item => item.id);
 }
 
-export function searchExpertCandidates(query: string, experts: readonly AgentPresetSnapshot[], limit = 8): AgentPresetSnapshot[] {
+export function searchExpertCandidates(query: string, experts: readonly ExpertSnapshot[], limit = 8): ExpertSnapshot[] {
   const wanted = specialtyTerms(query);
   if (!wanted.length) return [];
   return experts.filter(expert => expert.package?.skills.length).map(expert => {

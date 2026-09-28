@@ -1,31 +1,31 @@
 import { useEffect, useState } from "react";
 import { Plus, Search } from "lucide-react";
 import { api } from "../../api/client";
-import type { AgentPreset, AgentPresetSummary, ExpertLine } from "../../api/types";
+import type { Expert, ExpertSummary, ExpertLine } from "../../api/types";
 import { EXPERT_LINES, expertLineLabel } from "../../state/labels";
 import { notify } from "../../state/workbench";
 import { Markdown } from "../Markdown";
 import { Button } from "../ui";
 import { SectionTitle, Toggle } from "./controls";
-import "./agent-presets.css";
+import "./experts.css";
 
-type Draft = Pick<AgentPreset, "name" | "description" | "instructions"> & { skillIds: string };
+type Draft = Pick<Expert, "name" | "description" | "instructions"> & { skillIds: string };
 type LineFilter = ExpertLine | "all" | "custom";
 
-export function AgentPresetsSettings() {
+export function ExpertsSettings() {
   const [query, setQuery] = useState("");
   const [line, setLine] = useState<LineFilter>("all");
-  const [presets, setPresets] = useState<AgentPresetSummary[]>([]);
-  const [templates, setTemplates] = useState<AgentPresetSummary[]>([]);
+  const [presets, setPresets] = useState<ExpertSummary[]>([]);
+  const [templates, setTemplates] = useState<ExpertSummary[]>([]);
   const [selectedId, setSelectedId] = useState("");
-  const [selected, setSelected] = useState<AgentPreset | null>(null);
+  const [selected, setSelected] = useState<Expert | null>(null);
   const [draft, setDraft] = useState<Draft | null>(() => {
     try { return JSON.parse(localStorage.getItem("alpha-expert-draft-new") ?? "null") as Draft | null; } catch { return null; }
   });
   const [busy, setBusy] = useState(false);
 
   const refresh = async () => {
-    const [all, availableTemplates] = await Promise.all([api.agentPresets(), api.agentPresetTemplates()]);
+    const [all, availableTemplates] = await Promise.all([api.experts(), api.expertTemplates()]);
     setPresets(all);
     setTemplates(availableTemplates);
   };
@@ -35,7 +35,7 @@ export function AgentPresetsSettings() {
     let current = true;
     setSelected(null);
     if (!selectedId) return () => { current = false; };
-    void api.agentPreset(selectedId).then(preset => {
+    void api.expert(selectedId).then(preset => {
       if (!current) return;
       setSelected(preset);
       const saved = localStorage.getItem(`alpha-expert-draft-${preset.id}`);
@@ -47,10 +47,10 @@ export function AgentPresetsSettings() {
     if (draft && (selectedId === "" || selected?.id === selectedId)) localStorage.setItem(`alpha-expert-draft-${selectedId || "new"}`, JSON.stringify(draft));
   }, [draft, selected, selectedId]);
 
-  const updateEnabled = async (item: AgentPresetSummary, enabled: boolean) => {
+  const updateEnabled = async (item: ExpertSummary, enabled: boolean) => {
     setBusy(true);
     try {
-      const next = await api.setAgentPresetEnabled(item.id, enabled);
+      const next = await api.setExpertEnabled(item.id, enabled);
       setPresets(all => all.map(preset => preset.id === item.id ? { ...preset, enabled: next.enabled } : preset));
       if (selected?.id === item.id) setSelected(next);
     } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
@@ -61,7 +61,7 @@ export function AgentPresetsSettings() {
     if (!selected) return;
     setBusy(true);
     try {
-      const created = await api.copyAgentPreset(selected.id);
+      const created = await api.copyExpert(selected.id);
       await refresh();
       setSelectedId(created.id);
       notify("专家已加入专家库", "info");
@@ -73,7 +73,7 @@ export function AgentPresetsSettings() {
     if (!selected || !draft) return;
     setBusy(true);
     try {
-      const updated = await api.updateAgentPreset(selected.id, { ...draft, skillIds: draft.skillIds.split(",").map(item => item.trim()).filter(Boolean) });
+      const updated = await api.updateExpert(selected.id, { ...draft, skillIds: draft.skillIds.split(",").map(item => item.trim()).filter(Boolean) });
       setSelected(updated);
       localStorage.removeItem(`alpha-expert-draft-${selected.id}`);
       await refresh();
@@ -86,7 +86,7 @@ export function AgentPresetsSettings() {
     if (!draft) return;
     setBusy(true);
     try {
-      const created = await api.createAgentPreset({ ...draft, skillIds: draft.skillIds.split(",").map(item => item.trim()).filter(Boolean) });
+      const created = await api.createExpert({ ...draft, skillIds: draft.skillIds.split(",").map(item => item.trim()).filter(Boolean) });
       await refresh();
       setSelectedId(created.id);
       localStorage.removeItem("alpha-expert-draft-new");
@@ -99,7 +99,7 @@ export function AgentPresetsSettings() {
     if (!selected || selected.builtin) return;
     setBusy(true);
     try {
-      await api.deleteAgentPreset(selected.id);
+      await api.deleteExpert(selected.id);
       setSelectedId("");
       setSelected(null);
       setDraft(null);
@@ -110,9 +110,9 @@ export function AgentPresetsSettings() {
   };
 
   const needle = query.trim().toLocaleLowerCase();
-  const matchesQuery = (item: AgentPresetSummary) => !needle || `${item.name} ${item.description}`.toLocaleLowerCase().includes(needle);
-  const inLine = (item: AgentPresetSummary) => line === "all" || (line === "custom" ? !item.line : item.line === line);
-  const visible = (item: AgentPresetSummary) => matchesQuery(item) && inLine(item);
+  const matchesQuery = (item: ExpertSummary) => !needle || `${item.name} ${item.description}`.toLocaleLowerCase().includes(needle);
+  const inLine = (item: ExpertSummary) => line === "all" || (line === "custom" ? !item.line : item.line === line);
+  const visible = (item: ExpertSummary) => matchesQuery(item) && inLine(item);
   const enabled = presets.filter(item => item.enabled && visible(item));
   const disabled = presets.filter(item => !item.enabled && visible(item));
   const shownTemplates = templates.filter(visible);
@@ -122,8 +122,8 @@ export function AgentPresetsSettings() {
     ...EXPERT_LINES.filter(item => item.id !== "general").map(item => ({ id: item.id, label: item.label })),
     { id: "custom", label: expertLineLabel(undefined) },
   ];
-  const skillSummary = (item: AgentPresetSummary) => item.package?.skills.length ? `人设 + ${item.package.skills.length} 个 Skill` : item.builtin ? "核心模板" : "待补齐 Skill";
-  const presetRow = (item: AgentPresetSummary) => <div className="agent-preset-row" key={item.id} data-selected={selectedId === item.id || undefined}>
+  const skillSummary = (item: ExpertSummary) => item.package?.skills.length ? `人设 + ${item.package.skills.length} 个 Skill` : item.builtin ? "核心模板" : "待补齐 Skill";
+  const presetRow = (item: ExpertSummary) => <div className="agent-preset-row" key={item.id} data-selected={selectedId === item.id || undefined}>
     <button className="agent-preset-select" aria-current={selectedId === item.id ? "true" : undefined} onClick={() => setSelectedId(item.id)}>
       <span className="agent-preset-name"><strong>{item.name}</strong>{line === "all" && <span className="agent-preset-line">{expertLineLabel(item.line)}</span>}</span>
       <small className="agent-preset-description">{item.description}</small>

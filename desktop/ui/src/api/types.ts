@@ -344,7 +344,7 @@ export interface SkillPlugin {
 
 export type ExpertLine = "development" | "research" | "content" | "game" | "office" | "general";
 
-export interface AgentPresetSummary {
+export interface ExpertSummary {
   id: string;
   name: string;
   description: string;
@@ -358,7 +358,7 @@ export interface AgentPresetSummary {
   source?: { url: string; revision: string; path: string };
 }
 
-export interface AgentPreset extends AgentPresetSummary {
+export interface Expert extends ExpertSummary {
   instructions: string;
 }
 

@@ -33,7 +33,8 @@ export const workerReducers: FamilyReducers = {
   "worker/queued": (state, event) => {
     assertActive(state);
     const cognition = ensureCognition(state);
-    const { attemptId, parentId, order, preset, expert, startedAt } = event.payload;
+    const { attemptId, parentId, order, expert, startedAt } = event.payload;
+    const preset = event.payload.expertSnapshot ?? (event.payload as { preset?: import("../../experts").ExpertSnapshot }).preset;
     if (cognition.instances?.some(item => item.id === attemptId)) throw new InvariantError("apply/worker-attempt-exists", "Worker attempt already exists");
     if (order.agentId) {
       if (!preset && (!order.acceptance?.some(item => item.trim()) || !(order.ownedPaths.length || order.readPaths?.length))) throw new InvariantError("apply/neutral-subagent-underspecified", "Neutral subagent requires acceptance criteria and source scope");

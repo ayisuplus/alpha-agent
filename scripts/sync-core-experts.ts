@@ -3,7 +3,7 @@
 // user edited are never overwritten. --add <id,id> installs the named templates that are not in the library yet.
 import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { AgentPresetStore, type AgentPreset } from "../src/runtime/agent-presets";
+import { ExpertStore, type Expert } from "../src/runtime/experts";
 
 const repo = resolve(import.meta.dir, "..");
 const args = process.argv.slice(2);
@@ -32,10 +32,10 @@ function committedVersions(templateId: string, file: string): Persona[] {
 }
 
 const samePersona = (a: Persona, b: Persona) => a.name === b.name && a.description === b.description && a.instructions === b.instructions && JSON.stringify(a.skillIds) === JSON.stringify(b.skillIds);
-const personaOf = (preset: AgentPreset): Persona => ({ name: preset.name, description: preset.description, instructions: preset.instructions, skillIds: preset.skillIds ?? [] });
-const skillHashes = (preset: AgentPreset) => JSON.stringify(preset.package?.skills.map(item => [item.id, item.hash]) ?? []);
+const personaOf = (preset: Expert): Persona => ({ name: preset.name, description: preset.description, instructions: preset.instructions, skillIds: preset.skillIds ?? [] });
+const skillHashes = (preset: Expert) => JSON.stringify(preset.package?.skills.map(item => [item.id, item.hash]) ?? []);
 
-const store = new AgentPresetStore(dataRoot);
+const store = new ExpertStore(dataRoot);
 const templates = await store.templates();
 const index = JSON.parse(await readFile(join(repo, "presets", "agents", "index.json"), "utf8")) as { presets: IndexEntry[] };
 const installed = (await store.list()).filter(item => item.basedOn && item.id === `core-${item.basedOn}`);

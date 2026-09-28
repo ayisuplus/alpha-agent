@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, realpath } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { AgentPresetStore, type LocalExpertImport } from "../src/runtime/agent-presets";
+import { ExpertStore, type LocalExpertImport } from "../src/runtime/experts";
 
 const defaultSource = "C:\\Users\\36322\\.workbuddy\\plugins\\marketplaces\\experts";
 const sourceRoot = resolve(process.argv[2] ?? defaultSource);
@@ -62,8 +62,8 @@ for (const plugin of (await readdir(pluginsRoot, { withFileTypes: true })).filte
 if (!records.length) throw new Error("没有找到顶层专家");
 if (new Set(records.map(item => item.id)).size !== records.length) throw new Error("专家 ID 重复");
 if (!dryRun) {
-  const imported = await new AgentPresetStore(dataRoot).importLocalBatch(records);
-  const verified = await new AgentPresetStore(dataRoot).list();
+  const imported = await new ExpertStore(dataRoot).importLocalBatch(records);
+  const verified = await new ExpertStore(dataRoot).list();
   if (imported.some(item => !verified.some(saved => saved.id === item.id && saved.hash === item.hash))) throw new Error("导入后验证失败");
 }
 console.log(JSON.stringify({ sourceRoot, dataRoot, dryRun, pluginCount: report.length, expertCount: records.length, skillBindings: records.reduce((sum, item) => sum + item.skills.length, 0), plugins: report }, null, 2));

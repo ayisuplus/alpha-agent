@@ -384,7 +384,7 @@ test("persistent subagent continues in its worktree and merges cumulative change
   const state = await fixture();
   const agentId = crypto.randomUUID();
   const preset = { id: "test-expert", name: "Test expert", description: "Test", instructions: "Test", hash: "a".repeat(64), skillIds: ["test:skill"], package: { revision: "b".repeat(64), skills: [{ id: "test:skill", hash: "c".repeat(64) }] } };
-  const work = { ...order("persistent", "src/first.txt"), fullAccess: true, agentId, preset, skillIds: ["test:skill"], modelSelector: "deepseek/deepseek-flash" };
+  const work = { ...order("persistent", "src/first.txt"), fullAccess: true, agentId, expert: preset, skillIds: ["test:skill"], modelSelector: "deepseek/deepseek-flash" };
   await new SettingsStore(state.dataRoot).update({ workerModels: { implement: "xiaomi-token-plan-cn/mimo-v2.6-flash", review: "deepseek/deepseek-v4-pro" } });
   let runs = 0;
   const supervisor = new WorkerSupervisor({ ...state, remainingCalls: () => 1000, runWorkers: input => executeWorkOrders({ ...input,

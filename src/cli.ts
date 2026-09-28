@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { acceptCodeChange } from "./runtime/code-acceptance";
-import { AgentPresetStore } from "./runtime/agent-presets";
+import { ExpertStore } from "./runtime/experts";
 import { runDevelopmentWorkflow } from "./runtime/development-workflow";
 import { TaskLedger } from "./runtime/task-ledger";
 import { taskProfile } from "./runtime/task-profile";
@@ -79,7 +79,7 @@ if (command === "run") {
   const objective = await brief();
   if (!sourcePath || !objective) throw new Error("Usage: bun run alpha run-code --source <directory> (--brief <goal> | --brief-file <path>) [--model provider/id] [--expert expert-id]");
   const designatedExpertId = option("expert");
-  if (designatedExpertId && !(await new AgentPresetStore(dataRoot).enabled()).some(item => item.id === designatedExpertId)) throw new Error(`Expert does not exist or is disabled: ${designatedExpertId}`);
+  if (designatedExpertId && !(await new ExpertStore(dataRoot).enabled()).some(item => item.id === designatedExpertId)) throw new Error(`Expert does not exist or is disabled: ${designatedExpertId}`);
   const ledger = await importCodeWorkspace({ sourcePath, productsRoot: join(dirname(dataRoot), "products"), dataRoot, objective, modelSelector: option("model"), designatedExpertId });
   const controller = new AbortController();
   process.once("SIGINT", () => controller.abort());

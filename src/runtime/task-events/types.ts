@@ -1,5 +1,5 @@
 import type { AgentMessage } from "../agent-mailbox";
-import type { AgentPresetSnapshot } from "../agent-presets";
+import type { ExpertSnapshot } from "../experts";
 import type { PauseReasonCode, StopReasonCode } from "../pause-reasons";
 import type {
   AcceptanceCriterion, CognitionState, CognitionStep, DevelopmentState, Evidence, ExecutionMode,
@@ -116,7 +116,8 @@ export interface TaskEventPayloads {
     attemptId: string;
     parentId?: string;
     order: WorkOrder;
-    preset?: AgentPresetSnapshot;
+    /** The bound expert's full snapshot. Events written before the field rename carry `preset`; folds read both. */
+    expertSnapshot?: ExpertSnapshot;
     expert?: { id: string; name: string; hash: string };
     startedAt: string;
   };

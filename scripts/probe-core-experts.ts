@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { AgentPresetStore } from "../src/runtime/agent-presets";
+import { ExpertStore } from "../src/runtime/experts";
 import { createSkillResourceTool } from "../src/runtime/skill-resource-tool";
 
 const { createAgentSession, discoverAuthStorage, ModelRegistry, SessionManager } = await import("@oh-my-pi/pi-coding-agent");
@@ -10,7 +10,7 @@ const model = modelRegistry.getAvailable().find(item => item.provider === "xiaom
 if (!model) throw new Error("MiMo V2.6 Flash is unavailable; no fallback model selected");
 const root = resolve(".alpha", "probes", `core-experts-${new Date().toISOString().replace(/[:.]/g, "-")}`);
 await mkdir(root, { recursive: true });
-const store = new AgentPresetStore(join(root, "state"));
+const store = new ExpertStore(join(root, "state"));
 const cases = [
   { id: "backend", prompt: "请审查这段修改是否可合入，不修改源码。契约：只有文档所有者可以删除。代码：app.delete('/docs/:id', requireLogin, async (req,res) => { await db.query('DELETE FROM docs WHERE id = ?', [req.params.id]); res.sendStatus(204); }); 现有测试只验证已登录账号删除自己的文档返回 204。数据库字段：docs(id, owner_id)。给出结论、依据和必要验证。" },
   { id: "data-analyst", prompt: "请审查统计方案。A、B 两个模型在同一测试集上各训练 3 个配对种子，每种子保存 100 个 epoch 的准确率；作者把每个模型的 300 行视为独立样本做 t 检验，并选择在该测试集上最高的 checkpoint 报结果，声称显著优于 B。现在只给你方案，没有原始分数。请建议如何报告和修正。" },

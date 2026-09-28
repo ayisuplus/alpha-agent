@@ -3,7 +3,7 @@ import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, stat, writ
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { executeWorkOrders, type WorkBatchReport, type WorkOrder, type WorkerResult } from "./work-orders";
 import { hashSkillDirectory, SkillPluginStore, type SkillPlugin } from "../plugins/third-party";
-import { AgentPresetStore } from "./agent-presets";
+import { ExpertStore } from "./experts";
 import { createBrowserTool } from "./browser-tool";
 import type { BrowserSession } from "./visible-browser";
 import { parseWorkerBrowserRequest } from "./worker-browser-tool";
@@ -14,38 +14,15 @@ import { parseWorkerMCPRequest, writeWorkerMCPResponse, type WorkerMCPDescriptor
 import { commandApprovalStore, type CommandRequest } from "./command-approval";
 import { independentCommandReviewer } from "./auto-reviewer";
 import { readToolCatalog, writeToolCatalog } from "./mcp-tool-catalog";
+import { copySkillDirectory } from "./skill-snapshot";
 import { WorkerStopError, workerStopReason } from "./worker-stop";
 
 const appRoot = resolve(import.meta.dir, "..", "..");
 
-async function copySkill(source: string, target: string): Promise<string> {
-  const digest = createHash("sha256");
-  let total = 0;
-  async function walk(from: string, to: string, prefix = ""): Promise<void> {
-    await mkdir(to, { recursive: true });
-    for (const entry of (await readdir(from, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
-      if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile())) throw new Error(`Skill contains unsupported entry: ${entry.name}`);
-      const relative = `${prefix}${entry.name}`;
-      if (entry.isDirectory()) await walk(join(from, entry.name), join(to, entry.name), `${relative}/`);
-      else {
-        const path = join(from, entry.name);
-        const size = (await stat(path)).size;
-        total += size;
-        if (total > 8_000_000) throw new Error("Selected Skill exceeds snapshot size limit");
-        const bytes = await readFile(path);
-        digest.update(relative).update("\0").update(bytes).update("\0");
-        await copyFile(path, join(to, entry.name));
-      }
-    }
-  }
-  await walk(source, target);
-  return digest.digest("hex");
-}
-
 export async function snapshotSkills(dataRoot: string, stateRoot: string, order: WorkOrder): Promise<WorkOrder> {
   const pluginStore = new SkillPluginStore(dataRoot);
   const [available, installed, catalog] = await Promise.all([pluginStore.loadSkills(), pluginStore.list(), capabilityPool(dataRoot)]);
-  const bundled = order.preset ? await new AgentPresetStore(dataRoot).loadBundledSkills(order.preset) : [];
+  const bundled = order.expert ? await new ExpertStore(dataRoot).loadBundledSkills(order.expert) : [];
   const selected: SkillPlugin[] = [];
   const skillSnapshots: NonNullable<WorkOrder["skillSnapshots"]> = [];
   const capabilitySnapshots: NonNullable<WorkOrder["capabilitySnapshots"]> = [];
@@ -73,13 +50,13 @@ export async function snapshotSkills(dataRoot: string, stateRoot: string, order:
     const skill = bundledSkill ?? pooled?.skill ?? available.find(item => item.name === id);
     const pluginId = id.split(":")[0];
     const plugin = bundledSkill
-      ? { id: pluginId, name: pluginId, source: `expert:${order.preset!.id}`, revision: order.preset!.package!.revision, enabled: true, skillCount: 0, hookCount: 0, hooksEnabled: false, mcpCount: 0, mcpEnabled: false }
+      ? { id: pluginId, name: pluginId, source: `expert:${order.expert!.id}`, revision: order.expert!.package!.revision, enabled: true, skillCount: 0, hookCount: 0, hooksEnabled: false, mcpCount: 0, mcpEnabled: false }
       : installed.find(item => item.id === pluginId && item.enabled) ?? (pooled && id.startsWith("expert-") ? { id: pluginId, name: pluginId, source: `pool:${id}`, revision: pooled.revision, enabled: true, skillCount: 0, hookCount: 0, hooksEnabled: false, mcpCount: 0, mcpEnabled: false } : undefined);
     const pathWithin = skill?.containRoot ? relative(await realpath(skill.containRoot), await realpath(skill.baseDir)) : "..";
     if (!skill || !plugin || !skill.containRoot || pathWithin === ".." || pathWithin.startsWith(`..${sep}`) || isAbsolute(pathWithin)) throw new Error(`Skill 不可用于 worker：${id}`);
     const path = id.startsWith("expert-") ? `selected/${pooled!.hash}` : undefined;
     const target = path ? join(stateRoot, "plugin-packs", path) : join(stateRoot, "plugin-packs", pluginId, "skills", id.slice(pluginId.length + 1));
-    const hash = await copySkill(skill.baseDir, target);
+    const hash = await copySkillDirectory(skill.baseDir, target);
     skillSnapshots.push({ id, hash, revision: plugin.revision, ...(path ? { path } : {}) });
     if (!selected.some(item => item.id === pluginId)) selected.push({ ...plugin, enabled: true, skillCount: 0, hookCount: 0, hooksEnabled: false, mcpCount: 0, mcpEnabled: false });
     selected.find(item => item.id === pluginId)!.skillCount++;
@@ -178,8 +155,8 @@ export function runModelWorkOrders(input: {
       const current = descriptors.map(item => ({ name: item.name, server: item.server, description: item.description, revision: pluginRevisions.find(plugin => item.server.startsWith(`alpha_${plugin.id}_`))?.revision ?? "" }));
       await writeToolCatalog(input.dataRoot, [...prior.filter(item => !current.some(next => next.name === item.name)), ...current]);
     }
-    const { preset, ...workOrder } = withSkills;
-    await writeFile(requestFile, JSON.stringify({ taskId: input.taskId, projectRoot: directory, dataRoot: stateRoot, authorizationRoot: input.dataRoot, workerContext: input.workerContext, plugins: input.plugins, generation: input.generation, comfyUrl: input.comfyUrl, objective: order.objective, workOrder, workerPreset: preset, modelSelector, browserProxyDir: browserDirectory, mcpProxyDir: mcpDirectory, mcpDescriptors: descriptors, eventFile: join(runDir, "events.jsonl") }));
+    const { expert, ...workOrder } = withSkills;
+    await writeFile(requestFile, JSON.stringify({ taskId: input.taskId, projectRoot: directory, dataRoot: stateRoot, authorizationRoot: input.dataRoot, workerContext: input.workerContext, plugins: input.plugins, generation: input.generation, comfyUrl: input.comfyUrl, objective: order.objective, workOrder, workerExpert: expert, modelSelector, browserProxyDir: browserDirectory, mcpProxyDir: mcpDirectory, mcpDescriptors: descriptors, eventFile: join(runDir, "events.jsonl") }));
     await input.onWorkerEvent?.(withSkills, "started");
     const browserTool = createBrowserTool(() => input.browserAccess?.() === false ? null : input.browser ?? null, input.dataRoot, input.browserUrl);
     const handled = new Set<string>();
