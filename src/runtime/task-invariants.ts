@@ -1,4 +1,5 @@
-import { computeCompletionGaps, type TaskState } from "./task-ledger";
+import { computeCompletionGaps } from "./task-completion";
+import type { TaskState } from "./task-ledger";
 
 /**
  * Executable form of the invariants in docs/cognitive-state-machine-plan-2026-09-28.md §4.6.

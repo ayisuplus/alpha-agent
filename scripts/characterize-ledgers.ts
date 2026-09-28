@@ -1,9 +1,12 @@
-// Regenerates or verifies the ledger characterization baseline, and replays the same probe over copies of real task
-// ledgers. Run: bun run scripts/characterize-ledgers.ts [--write-fixtures]
-//           bun run scripts/characterize-ledgers.ts --real [--data .alpha] [--out artifacts/ledger-characterization.json]
-// Real ledgers are only ever read: the probe runs on a copy in a scratch directory.
+// Regenerates or verifies the ledger characterization baseline, replays the same probe over copies of real task
+// ledgers, and checks that importing a pre-event-log ledger folds back to the original file. Run:
+//   bun run scripts/characterize-ledgers.ts [--write-fixtures]
+//   bun run scripts/characterize-ledgers.ts --real [--data .alpha] [--out artifacts/ledger-characterization.json]
+//   bun run scripts/characterize-ledgers.ts --verify-import [--data .alpha]
+// Real ledgers are only ever read: everything runs on a copy in a scratch directory.
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { foldTask, readEvents, taskLogDir } from "../src/runtime/task-events";
 import { characterizeLedger, characterizeScenario, loadLedgerCopy, scenarios, withScratch, type Characterization } from "../test/support/ledger-characterization";
 
 const args = process.argv.slice(2);
@@ -13,7 +16,26 @@ const dataRoot = resolve(dataFlag >= 0 ? args[dataFlag + 1] : ".alpha");
 const outFlag = args.indexOf("--out");
 const outFile = outFlag >= 0 ? args[outFlag + 1] : `artifacts/ledger-characterization-${new Date().toISOString().slice(0, 10)}.json`;
 
-if (args.includes("--real")) {
+if (args.includes("--verify-import")) {
+  const files = (await readdir(join(dataRoot, "tasks")).catch(() => [] as string[])).filter(name => /^[0-9a-f-]{36}\.json$/.test(name)).sort();
+  let mismatched = 0;
+  await withScratch("alpha-import-check-", async scratch => {
+    for (const name of files) {
+      const original = join(dataRoot, "tasks", name);
+      const before = await readFile(original, "utf8");
+      const ledger = await loadLedgerCopy(original, scratch);
+      const events = await readEvents(taskLogDir(ledger.file));
+      const folded = JSON.stringify(foldTask(events), null, 2);
+      const projection = await readFile(ledger.file, "utf8");
+      const imported = events.length === 1 && events[0].type === "task/imported";
+      const ok = imported && folded === before && projection === before;
+      if (!ok) mismatched++;
+      console.log(`${ok ? "一致" : "不一致"} ${name}：事件 ${events.length} 条（${events.map(event => event.type).join(", ") || "无"}），折叠${folded === before ? "等于" : "不等于"}原文件，投影${projection === before ? "等于" : "不等于"}原文件`);
+    }
+  });
+  if (mismatched) { console.error(`\n${mismatched} 个账本导入后与原文件不一致`); process.exit(1); }
+  console.log(`\n${files.length} 个真实账本副本：导入 → 折叠 → 投影与原文件逐字节一致`);
+} else if (args.includes("--real")) {
   const files = (await readdir(join(dataRoot, "tasks")).catch(() => [] as string[])).filter(name => /^[0-9a-f-]{36}\.json$/.test(name)).sort();
   const tasks = await withScratch("alpha-characterize-real-", async scratch => {
     const collected: Array<{ initial: Record<string, unknown>; characterization: Characterization }> = [];

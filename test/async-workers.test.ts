@@ -130,7 +130,10 @@ test("worker pool is bounded and cancelling one attempt keeps its sibling", asyn
     expect(started).toContain("third");
     expect((await supervisor.inspect(secondId)).instance.status).toBe("running");
     releases.get("second")?.(); releases.get("third")?.();
-    expect((await supervisor.wait([secondId, thirdId], 10_000, false)).map(item => item.instance.status)).toEqual(["returned", "returned"]);
+    // Both siblings must survive the cancelled attempt; they finish in either order, so wait for each on its own.
+    // presented=false matters: presenting inspects the result, and an inspected result is rejected on cancel.
+    expect((await supervisor.wait([secondId], 10_000, false))[0].instance.status).toBe("returned");
+    expect((await supervisor.wait([thirdId], 10_000, false))[0].instance.status).toBe("returned");
     await supervisor.cancel(secondId, "Discard uninspected result");
     expect(state.ledger.state.cognition?.instances?.find(item => item.id === secondId)?.integrationDecision).toBeUndefined();
   } finally { for (const release of releases.values()) release(); await supervisor.cancelAll(); await rm(state.root, { recursive: true, force: true }); }

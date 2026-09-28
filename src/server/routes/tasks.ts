@@ -5,6 +5,7 @@ import { WorkerSupervisor, inspectWorkerAttempt } from "../../runtime/worker-sup
 import { AgentMailbox } from "../../runtime/agent-mailbox";
 import { isModelAvailable } from "../../runtime/models";
 import { TaskLedger, fingerprintSource } from "../../runtime/task-ledger";
+import { EventConflictError } from "../../runtime/task-events";
 import { readSourceReviews } from "../../runtime/source-review";
 import { SettingsError, isModelSelector } from "../../runtime/settings";
 import { SkillPluginError } from "../../plugins/third-party";
@@ -234,7 +235,7 @@ export const taskRoutes: Route[] = [
         const installedSkillId = input.decision === "install" ? (await ctx.skillPluginStore.installSelectedSkill(proposal)).skillId : undefined;
         try { await ledger.decideSkillProposal(proposal.id, input.decision === "install" ? "installed" : "rejected", installedSkillId); }
         catch (error) {
-          if (!(error instanceof Error) || !error.message.includes("Task ledger changed in another operation") || running) throw error;
+          if (!(error instanceof EventConflictError) || running) throw error;
           const latest = await ctx.loadLedger(id);
           const pending = latest?.state.cognition?.skillProposals?.find(item => item.id === proposal.id && item.status === "pending");
           if (!latest || !pending || pending.source !== proposal.source || pending.revision !== proposal.revision || pending.path !== proposal.path) throw new SkillPluginError("任务或提案已变化；请刷新后重新决定");

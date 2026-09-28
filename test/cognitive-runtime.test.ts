@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskLedger, type CognitionStep } from "../src/runtime/task-ledger";
+import { taskLogDir } from "../src/runtime/task-events";
 import { cognitionSnapshot, workerSystemPrompt } from "../src/runtime/omp-runner";
 import { createWorkOrderTool } from "../src/runtime/work-order-tool";
 import { createBrowserTool } from "../src/runtime/browser-tool";
@@ -227,6 +228,8 @@ test("legacy ledgers use execute and single-run defaults", async () => {
     const saved = JSON.parse(await readFile(ledger.file, "utf8")) as Record<string, unknown>;
     delete saved.phase;
     delete saved.goal;
+    // Without a log directory the file reads as one written before events existed, so loading imports it as it is.
+    await rm(taskLogDir(ledger.file), { recursive: true, force: true });
     await writeFile(ledger.file, JSON.stringify(saved));
     const restored = await TaskLedger.load(ledger.file);
     expect(cognitionSnapshot(restored)).toContain("Phase: execute");

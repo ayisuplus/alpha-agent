@@ -18,4 +18,4 @@
 
 评测：`bun run eval` 通过工作台接口给 Alpha 派 `eval/` 中的任务，用 Alpha 看不到的隐藏测试和答案检查打分，并记录 Alpha 自己的验收结论，可用 `--app` 对比其他版本；用法见 [评测集说明](eval/README.md)，首轮结果与发现的问题见 [Harness 修复与评测](docs/harness-fixes-eval-2026-09-28.md)。运行会真实调用模型。测试（`bun test`）通过 `bunfig.toml` 预加载关闭真实 Windows 沙箱，不会弹出沙箱安装窗口。
 
-任务状态机：`bun run invariants` 只读扫描现有账本是否违反不变量并出报告，`bun run characterize` 校验账本 48 个修改方法的行为基线（`--write-fixtures` 重建），`bun run characterize:real` 对真实账本的副本回放同一探针（不写 `.alpha`）。重构计划见 [任务状态机重构计划](docs/cognitive-state-machine-plan-2026-09-28.md)，P0 的基线与已发现的存量违反见 [P0 基线与护栏](docs/task-state-machine-p0-baseline-2026-09-28.md)。
+任务状态机：任务账本的事实来源是 `.alpha/tasks/<id>/events.v1.jsonl` 只追加事件日志，`<id>.json` 是它的投影；追加用序号比较并交换，主进程与子代理进程可以并发写同一任务。`bun run invariants` 只读扫描现有账本是否违反不变量并出报告，`bun run characterize` 校验账本 48 个修改方法的行为基线（`--write-fixtures` 重建），`bun run characterize:real` 对真实账本的副本回放同一探针，`bun run characterize:import` 校验旧账本"导入 → 折叠 → 投影"与原文件一致（都不写 `.alpha`）。重构计划见 [任务状态机重构计划](docs/cognitive-state-machine-plan-2026-09-28.md)，基线与存量违反见 [P0 基线与护栏](docs/task-state-machine-p0-baseline-2026-09-28.md)，事件日志落地见 [P1 事件日志与折叠](docs/task-state-machine-p1-event-log-2026-09-28.md)。

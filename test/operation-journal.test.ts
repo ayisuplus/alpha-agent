@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent";
 import { OperationJournal } from "../src/runtime/operation-journal";
 import { TaskLedger, fingerprintSource } from "../src/runtime/task-ledger";
+import { taskLogDir } from "../src/runtime/task-events";
 
 test("task session journal is reopened from its task-specific file", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-session-persist-"));
@@ -38,7 +39,7 @@ test("an interrupted run reconciles source and stops before another model run", 
   expect(await journal.reconcile()).toEqual([]);
 });
 
-test("a legacy ledger is backed up before its first contract update", async () => {
+test("a ledger that predates the event log is backed up and imported unchanged", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-legacy-ledger-"));
   const project = join(root, "products", "work");
   await mkdir(project, { recursive: true });
@@ -47,9 +48,19 @@ test("a legacy ledger is backed up before its first contract update", async () =
   delete legacy.taskType;
   delete legacy.contractVersion;
   const original = JSON.stringify(legacy);
+  // Without a log directory the file reads as one written before events existed.
+  await rm(taskLogDir(created.file), { recursive: true, force: true });
   await writeFile(created.file, original);
+
   const loaded = await TaskLedger.load(created.file);
+  expect(loaded.state.taskType).toBeUndefined();
+  expect(loaded.state.contractVersion).toBeUndefined();
+  expect(await readFile(created.file, "utf8")).toBe(original);
+  expect(await readFile(`${created.file}.pre-events.bak`, "utf8")).toBe(original);
+
   await loaded.recordGuidance("Keep prior task data");
-  expect(await readFile(`${created.file}.pre-contract-extension.bak`, "utf8")).toBe(original);
-  expect((await TaskLedger.load(created.file)).state.guidanceHistory?.at(-1)?.instruction).toBe("Keep prior task data");
+  const reloaded = await TaskLedger.load(created.file);
+  expect(reloaded.state.guidanceHistory?.at(-1)?.instruction).toBe("Keep prior task data");
+  expect(reloaded.state.contractVersion).toBeUndefined();
+  expect(await readFile(`${created.file}.pre-events.bak`, "utf8")).toBe(original);
 });

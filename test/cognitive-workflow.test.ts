@@ -232,14 +232,17 @@ test("an installed Skill with an external service requirement does not hide the 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("stale ledger objects cannot overwrite another operation's guidance", async () => {
+test("a stale ledger handle re-folds instead of overwriting another operation's guidance", async () => {
   const { root, ledger } = await fixture();
   try {
     const first = await TaskLedger.load(ledger.file);
     const stale = await TaskLedger.load(ledger.file);
     await first.recordGuidance("first guidance");
-    await expect(stale.recordGuidance("stale guidance")).rejects.toThrow("changed in another operation");
-    expect((await TaskLedger.load(ledger.file)).state.guidanceHistory?.map(item => item.instruction)).toEqual(["first guidance"]);
+    // The sequence compare-and-swap fails, the stale handle re-folds the winner's event and retries its own append.
+    await stale.recordGuidance("stale guidance");
+    expect((await TaskLedger.load(ledger.file)).state.guidanceHistory?.map(item => item.instruction)).toEqual(["first guidance", "stale guidance"]);
+    expect(stale.state.guidanceHistory?.map(item => item.instruction)).toEqual(["first guidance", "stale guidance"]);
+    expect(stale.eventSeq).toBe(3);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
