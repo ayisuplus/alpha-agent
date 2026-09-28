@@ -6,4 +6,4 @@
 .task-menu-divider { display: block; height: 1px; margin: 5px 2px; background: var(--border-subtle); }
 .task-menu-rename { display: flex; gap: 4px; padding: 3px; }
 .task-menu-rename input { min-width: 0; flex: 1; padding: 6px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--bg-inset); color: var(--text); }
-.task-menu-rename button { border: 0; border-radius: 5px; background: var(--accent); color: white; cursor: pointer; }
+.task-menu-rename button { border: 0; border-radius: var(--radius-pill); background: var(--ink); color: var(--on-accent-soft); cursor: pointer; }

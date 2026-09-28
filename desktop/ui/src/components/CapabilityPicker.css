@@ -1,5 +1,5 @@
 .capability-picker { position: relative; display: contents; }
-.capability-plus { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-elevated); color: var(--text-secondary); }
+.capability-plus { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; border: 1px solid var(--border); border-radius: 50%; background: transparent; color: var(--text-secondary); }
 .capability-plus:hover { background: var(--bg-hover); color: var(--text); }
 .capability-popover { position: absolute; z-index: 30; left: 8px; bottom: calc(100% + 8px); width: min(340px, calc(100vw - 32px)); max-height: min(430px, 65vh); overflow-y: auto; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-elevated); box-shadow: var(--shadow-lg); }
 .capability-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: var(--text-sm); }

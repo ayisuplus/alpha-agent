@@ -1,20 +1,39 @@
 .automations-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.automations-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 24px; border-bottom: 1px solid var(--border); }
-.automations-header h1 { margin: 0; font-size: 20px; }
-.automations-header p { margin: 4px 0 0; color: var(--text-muted); font-size: 12px; }
+.automations-header { display: flex; align-items: center; gap: 12px; padding: 16px 16px 14px 24px; border-bottom: 1px solid var(--border-subtle); }
+.automations-header > div { flex: 1; min-width: 0; }
+.automations-header h1 { margin: 0; font-family: var(--font-display); font-size: 24px; font-weight: 400; letter-spacing: 0.02em; }
+.automations-header p { margin: 4px 0 0; color: var(--text-muted); font-size: var(--text-xs); }
 .automations-scroll { overflow: auto; padding: 20px 24px 40px; }
 .automations-card { max-width: 900px; margin: 0 auto 18px; padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-surface); }
-.automations-card h2 { margin: 0 0 14px; font-size: 16px; }
-.automations-card label { display: flex; flex-direction: column; gap: 5px; margin: 0 0 12px; font-size: 12px; }
-.automations-card input, .automations-card textarea, .automations-card select { box-sizing: border-box; width: 100%; padding: 8px; color: var(--text); background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; }
+.automations-form { border-color: var(--accent-border); box-shadow: 0 3px 15px rgb(44 63 54 / 6%); }
+.automations-card h2 { margin: 0 0 12px; font-size: var(--text-md); font-weight: 700; }
+.automations-card label { display: flex; flex-direction: column; gap: 5px; margin: 0 0 12px; color: var(--text-secondary); font-size: var(--text-xs); }
+.automations-card input, .automations-card textarea, .automations-card select { box-sizing: border-box; width: 100%; min-height: 32px; padding: 6px 8px; color: var(--text); background: var(--bg-inset); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; font-size: var(--text-sm); }
+.automations-card input:focus, .automations-card textarea:focus, .automations-card select:focus { border-color: var(--accent-border); }
 .automations-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 0 14px; }
-.automations-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-.automations-actions button, .automation-run button { padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-surface); color: var(--text); cursor: pointer; }
-.automations-actions button:first-child { background: var(--accent-bg); color: var(--accent-deep); }
-.automations-actions button:disabled { cursor: default; opacity: .5; }
-.automations-error { color: var(--danger, #bc3434); }
-.automation-item, .automation-run { display: flex; flex-direction: column; gap: 5px; padding: 14px 0; border-top: 1px solid var(--border-subtle); }
-.automation-item strong { display: block; }
-.automation-item span, .automation-run small { color: var(--text-muted); font-size: 12px; }
-.automation-item p { margin: 5px 0; overflow-wrap: anywhere; font-size: 13px; }
-.automation-run button { align-self: flex-start; }
+.automations-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.automations-error { margin: 8px 0 0; color: var(--danger); font-size: var(--text-sm); }
+.automations-note { margin: 0; color: var(--text-muted); font-size: var(--text-sm); }
+.automations-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.automations-empty p { margin: 0; color: var(--text-muted); font-size: var(--text-sm); }
+
+.automation-item { display: flex; flex-direction: column; gap: 4px; padding: 14px 0; border-top: 1px solid var(--border-subtle); }
+.automation-item-head { display: flex; align-items: center; gap: 8px; }
+.automation-item-head strong { font-size: var(--text-sm); }
+.automation-item-meta { color: var(--text-muted); font-size: var(--text-xs); }
+.automation-item-prompt {
+  display: -webkit-box;
+  margin: 4px 0 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.automation-run { display: flex; flex-direction: column; gap: 4px; padding: 10px 0; border-top: 1px solid var(--border-subtle); }
+.automation-run-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: var(--text-sm); }
+.automation-run-head > span:not(.badge) { flex: 1; min-width: 0; color: var(--text-secondary); }
+.automation-run small { color: var(--text-muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.automation-run[data-unread] .automation-run-head > span:not(.badge) { color: var(--text); font-weight: 600; }

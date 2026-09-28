@@ -1,51 +1,71 @@
+/*
+ * Paper and ink: warm off-white surfaces, near-black text and actions, and a quiet sage accent taken from the
+ * halftone botanicals. Colour is kept for meaning (status, selection); structure comes from spacing and hairlines.
+ */
 :root {
   color-scheme: light;
 
-  --bg-app: #faf9f6;
-  --bg-sidebar: #f2f0ec;
+  --bg-app: #fcfaf8;
+  --bg-sidebar: #f6f2ec;
   --bg-surface: #ffffff;
-  --bg-elevated: #f7f5f0;
-  --bg-hover: #eaece8;
-  --bg-active: #ddf2ee;
-  --bg-inset: #f5f5f1;
+  --bg-elevated: #faf7f3;
+  --bg-hover: #f1ece5;
+  --bg-active: #ece6dd;
+  --bg-inset: #f7f3ee;
+  /* Warm sand, used behind names and labels the way a highlighter marks a line. */
+  --bg-highlight: #ebe5dc;
 
-  --border-subtle: #e9e7e1;
-  --border: #deddd6;
-  --border-strong: #b6c2bd;
+  --border-subtle: #f0ebe5;
+  --border: #e6dfd5;
+  --border-strong: #cfc6b9;
 
-  --text: #252d2b;
-  --text-secondary: #46534f;
-  --text-muted: #66716d;
-  --text-faint: #78837e;
+  --text: #1a1a1a;
+  --text-secondary: #3f3b36;
+  --text-muted: #6e685f;
+  --text-faint: #736b61;
 
-  --accent: #256b64;
-  --accent-strong: #175850;
-  --accent-deep: #164f49;
-  --accent-soft: #80d1c8;
-  --accent-gold: #8b603c;
-  --accent-warm: #ffd4a9;
-  --accent-bg: #e1f3ef;
-  --accent-border: #80d1c8;
-  --on-accent: #183531;
+  /* Sage: links, running and selected states. */
+  --accent: #4b6a52;
+  --accent-strong: #3d5a44;
+  --accent-deep: #2f4735;
+  --accent-bg: #eef2ea;
+  --accent-border: #c5d3bf;
+  /* Primary actions are ink pills. */
+  --accent-soft: #1a1a1a;
+  --accent-soft-hover: #3a3733;
+  --accent-soft-border: #1a1a1a;
+  --accent-gold: #8a6a45;
+  --accent-warm: #ebe5dc;
+  /* Foregrounds: --on-accent sits on the sage --accent, --on-accent-soft on the ink primary. */
+  --on-accent: #ffffff;
+  --on-accent-soft: #ffffff;
+  --ink: #1a1a1a;
+  --halftone: #b4c3a6;
 
-  --success: #216947;
-  --success-bg: #e8f4e9;
-  --success-border: #add5b6;
-  --warning: #886019;
-  --warning-bg: #fff4dc;
-  --warning-border: #e5c987;
-  --danger: #a23d43;
-  --danger-bg: #fff0ed;
-  --danger-border: #e7aaa7;
+  --success: #3f6b47;
+  --success-bg: #eef3ea;
+  --success-border: #c3d4bd;
+  --warning: #8a6418;
+  --warning-bg: #fbf3e3;
+  --warning-border: #e8d3a3;
+  --danger: #a3443c;
+  --danger-bg: #fbefeb;
+  --danger-border: #e9bdb4;
 
-  --diff-add-bg: #e9f5eb;
-  --diff-add-gutter: #d9ecdd;
-  --diff-del-bg: #fff0ed;
-  --diff-del-gutter: #f5deda;
+  /* Warm paper, not the warning palette: the person's own words should read as calm, not flagged. */
+  --user-bubble-bg: #f3eee6;
+  --user-bubble-border: #e9e1d5;
 
-  --font-sans: "Noto Sans", "Noto Sans SC", "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
-  --font-display: Georgia, "Noto Serif SC", "Songti SC", serif;
-  --font-mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", Consolas, "Microsoft YaHei UI", monospace;
+  --diff-add-bg: #edf5ec;
+  --diff-add-gutter: #dcebd9;
+  --diff-del-bg: #fbefeb;
+  --diff-del-gutter: #f4ddd6;
+
+  /* Body text in the system UI face, greetings in a Kai face, numbers and code in a monospace face. */
+  --font-sans: Inter, "PingFang SC", MiSans, "HarmonyOS Sans SC", "Noto Sans SC", "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+  /* Georgia sits before the Kai faces so Latin letters get a serif rather than a Kai face's full-width Latin. */
+  --font-display: "LXGW WenKai", "LXGW WenKai TC", "LXGW WenKai Screen", "霞鹜文楷", Georgia, KaiTi, STKaiti, "Kaiti SC", serif;
+  --font-mono: "Geist Mono", "JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
 
   --text-xs: 12px;
   --text-sm: 13px;
@@ -60,12 +80,16 @@
   --space-5: 24px;
   --space-6: 32px;
 
-  --radius-sm: 2px;
-  --radius: 3px;
-  --radius-lg: 5px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
 
-  --shadow-pop: 0 12px 32px rgba(34, 53, 45, 0.14);
-  --focus-ring: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent-border);
+  --shadow-card: 0 1px 2px rgb(60 45 30 / 4%), 0 6px 20px rgb(60 45 30 / 5%);
+  --shadow-pop: 0 14px 36px rgb(60 45 30 / 12%);
+  --shadow-lg: var(--shadow-pop);
+  --focus-ring: 0 0 0 2px var(--bg-app), 0 0 0 3.5px var(--accent);
 
   --sidebar-width: 256px;
   --sidebar-rail: 56px;

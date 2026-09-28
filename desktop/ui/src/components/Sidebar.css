@@ -11,14 +11,14 @@
   gap: var(--space-2);
   padding: var(--space-3) 0;
 }
-.sidebar .icon-btn.active { background: var(--accent-bg); color: var(--accent-strong); }
+.sidebar .icon-btn.active { background: var(--bg-surface); color: var(--ink); box-shadow: inset 0 0 0 1px var(--border); }
 .rail-running {
   display: grid;
   place-items: center;
   width: 30px;
   height: 30px;
   border: 1px solid var(--accent-border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   background: transparent;
   color: var(--accent);
 }
@@ -29,21 +29,20 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 10px 10px 16px;
+  padding: 18px 10px 12px 18px;
 }
 .brand-mark {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
-  color: var(--accent);
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  color: var(--ink);
   font-family: Georgia, "Cambria Math", serif;
-  font-size: 30px;
+  font-size: 28px;
   font-style: italic;
   font-weight: 700;
   line-height: 1;
-  text-shadow: 1px 1px 0 var(--accent-deep);
 }
 .brand-name {
   display: flex;
@@ -51,34 +50,36 @@
   flex: 1;
   min-width: 0;
   font-size: var(--text-md);
-  font-weight: 700;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   line-height: 1.25;
 }
-.brand-name small { color: var(--accent-gold); font-size: var(--text-xs); font-weight: 500; }
+.brand-name small { color: var(--text-muted); font-size: var(--text-xs); font-weight: 400; letter-spacing: 0; }
 
+/* The workbench's one ink pill: starting new work. */
 .new-task-button {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 4px 12px 10px;
+  margin: 4px 12px 12px;
   height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-elevated);
+  padding: 0 14px;
+  border: 1px solid var(--ink);
+  border-radius: var(--radius-pill);
+  background: var(--ink);
+  color: var(--on-accent-soft);
   font-size: var(--text-sm);
-  font-weight: 600;
+  font-weight: 500;
   text-align: left;
   transition: background-color 0.12s ease, border-color 0.12s ease;
 }
-.new-task-button:hover { background: var(--bg-hover); border-color: var(--border-strong); }
-.new-task-button[aria-current="page"] { border-color: var(--accent-border); background: var(--accent-bg); }
+.new-task-button:hover { background: var(--accent-soft-hover); border-color: var(--accent-soft-hover); }
 .new-task-button kbd {
   margin-left: auto;
-  color: var(--text-faint);
-  font-family: var(--font-sans);
+  color: rgb(255 255 255 / 62%);
+  font-family: var(--font-mono);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .task-search {
@@ -87,13 +88,13 @@
   gap: 6px;
   margin: 0 12px 6px;
   height: 32px;
-  padding: 0 4px 0 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
-  background: var(--bg-inset);
+  padding: 0 4px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
   color: var(--text-muted);
 }
-.task-search:focus-within { border-color: var(--accent-border); }
+.task-search:focus-within { border-color: var(--border-strong); }
 .task-search input {
   flex: 1;
   min-width: 0;
@@ -111,11 +112,11 @@
   padding: 4px 8px 12px;
 }
 .task-group h2 {
-  margin: 12px 8px 4px;
+  margin: 14px 8px 4px;
   color: var(--text-faint);
   font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-weight: 500;
+  letter-spacing: 0.06em;
 }
 .task-row-wrap { position: relative; }
 
@@ -127,19 +128,21 @@
   width: 100%;
   padding: 7px 8px;
   border: 0;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: transparent;
   text-align: left;
-  transition: background-color 0.12s ease;
+  transition: background-color 0.12s ease, box-shadow 0.12s ease;
 }
 .task-row:hover { background: var(--bg-hover); }
-.task-row[aria-current="page"] { background: var(--bg-active); }
+/* The open task is lifted onto paper, like a card pulled from the stack. */
+.task-row[aria-current="page"] { background: var(--bg-surface); box-shadow: inset 0 0 0 1px var(--border), 0 1px 3px rgb(60 45 30 / 5%); }
+.task-row[aria-current="page"] .task-row-title { font-weight: 600; }
 .task-row-icon { display: grid; place-items: center; height: 21px; color: var(--accent); }
 .task-row-body { display: flex; flex-direction: column; min-width: 0; }
 .task-row-title {
   overflow: hidden;
   font-size: var(--text-sm);
-  font-weight: 600;
+  font-weight: 500;
   line-height: 21px;
   text-overflow: ellipsis;
   white-space: nowrap;

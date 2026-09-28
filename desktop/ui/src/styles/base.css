@@ -21,10 +21,12 @@ button:disabled { cursor: default; }
 :focus-visible { box-shadow: var(--focus-ring); border-radius: var(--radius-sm); }
 
 code, pre, kbd { font-family: var(--font-mono); }
+/* Figures line up in tables, counters and timestamps. */
+time, .numeric { font-variant-numeric: tabular-nums; }
 
 * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 
-::selection { background: rgba(0, 180, 255, 0.3); }
+::selection { background: var(--bg-highlight); color: var(--text); }
 
 .visually-hidden {
   position: absolute !important;

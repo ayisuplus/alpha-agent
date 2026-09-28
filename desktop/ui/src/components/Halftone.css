@@ -1,0 +1,5 @@
+.halftone {
+  display: block;
+  color: var(--halftone);
+  pointer-events: none;
+}
