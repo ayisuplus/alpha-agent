@@ -1,0 +1,2464 @@
+{
+  "scenario": "general-needs-input",
+  "steps": [
+    {
+      "name": "recordGuidance",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "guidanceHistory[0].id",
+          "before": "<absent>",
+          "after": "<id:2>"
+        },
+        {
+          "path": "guidanceHistory[0].instruction",
+          "before": "<absent>",
+          "after": "Keep the public API unchanged"
+        },
+        {
+          "path": "guidanceHistory[0].recordedAt",
+          "before": "<absent>",
+          "after": "<at:3>"
+        },
+        {
+          "path": "guidanceHistory[0].status",
+          "before": "<absent>",
+          "after": "recorded"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:2>",
+          "after": "<at:4>"
+        }
+      ]
+    },
+    {
+      "name": "recordGuidance:blank",
+      "outcome": "error",
+      "error": "Guidance is required",
+      "changed": []
+    },
+    {
+      "name": "setGuidanceStatus:delivered",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "guidanceHistory[0].status",
+          "before": "recorded",
+          "after": "delivered"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:4>",
+          "after": "<at:5>"
+        }
+      ]
+    },
+    {
+      "name": "setGuidanceStatus:processed",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "guidanceHistory[0].status",
+          "before": "delivered",
+          "after": "processed"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:5>",
+          "after": "<at:6>"
+        }
+      ]
+    },
+    {
+      "name": "setGuidanceStatus:unknown",
+      "outcome": "error",
+      "error": "Guidance not found",
+      "changed": []
+    },
+    {
+      "name": "setModel:null",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "updatedAt",
+          "before": "<at:6>",
+          "after": "<at:7>"
+        }
+      ]
+    },
+    {
+      "name": "setModel:unsupported",
+      "outcome": "error",
+      "error": "Model is not supported: bogus/model",
+      "changed": []
+    },
+    {
+      "name": "setGoal:enabled",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "goal.budget.maxToolCalls",
+          "before": "<absent>",
+          "after": 40
+        },
+        {
+          "path": "goal.budget.maxTotalToolCalls",
+          "before": "<absent>",
+          "after": 120
+        },
+        {
+          "path": "goal.budget.totalWallTimeMs",
+          "before": "<absent>",
+          "after": 1800000
+        },
+        {
+          "path": "goal.budget.wallTimeMs",
+          "before": "<absent>",
+          "after": 600000
+        },
+        {
+          "path": "goal.enabled",
+          "before": false,
+          "after": true
+        },
+        {
+          "path": "goal.noProgressRuns",
+          "before": "<absent>",
+          "after": 0
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:7>",
+          "after": "<at:8>"
+        }
+      ]
+    },
+    {
+      "name": "setGoalProgress",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "goal.noProgressRuns",
+          "before": 0,
+          "after": 1
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:8>",
+          "after": "<at:9>"
+        }
+      ]
+    },
+    {
+      "name": "enterPlan",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "blockedService",
+          "before": "approval",
+          "after": "<absent>"
+        },
+        {
+          "path": "goal.noProgressRuns",
+          "before": 1,
+          "after": 0
+        },
+        {
+          "path": "pendingQuestion",
+          "before": "Should the summary be a file or an answer?",
+          "after": "<absent>"
+        },
+        {
+          "path": "phase",
+          "before": "execute",
+          "after": "plan"
+        },
+        {
+          "path": "status",
+          "before": "needs-input",
+          "after": "active"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:9>",
+          "after": "<at:10>"
+        }
+      ]
+    },
+    {
+      "name": "reviseCognition",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.amendments[0].affectedSteps[0]",
+          "before": "<absent>",
+          "after": "s1"
+        },
+        {
+          "path": "cognition.amendments[0].affectedSteps[1]",
+          "before": "<absent>",
+          "after": "s2"
+        },
+        {
+          "path": "cognition.amendments[0].reason",
+          "before": "<absent>",
+          "after": "Initial plan"
+        },
+        {
+          "path": "cognition.amendments[0].recordedAt",
+          "before": "<absent>",
+          "after": "<at:11>"
+        },
+        {
+          "path": "cognition.amendments[0].revision",
+          "before": "<absent>",
+          "after": 2
+        },
+        {
+          "path": "cognition.basedOnRevision",
+          "before": "<absent>",
+          "after": "<rev:1>"
+        },
+        {
+          "path": "cognition.candidates[0]",
+          "before": "<absent>",
+          "after": "data-analyst"
+        },
+        {
+          "path": "cognition.candidates[1]",
+          "before": "<absent>",
+          "after": "backend"
+        },
+        {
+          "path": "cognition.constraints[0]",
+          "before": "<absent>",
+          "after": "No API change"
+        },
+        {
+          "path": "cognition.revision",
+          "before": 1,
+          "after": 2
+        },
+        {
+          "path": "cognition.scope[0]",
+          "before": "<absent>",
+          "after": "src/cart.ts"
+        },
+        {
+          "path": "cognition.steps[0].id",
+          "before": "<absent>",
+          "after": "s1"
+        },
+        {
+          "path": "cognition.steps[0].mode",
+          "before": "<absent>",
+          "after": "investigate"
+        },
+        {
+          "path": "cognition.steps[0].objective",
+          "before": "<absent>",
+          "after": "Read the cart code and list the rounding paths"
+        },
+        {
+          "path": "cognition.steps[0].status",
+          "before": "<absent>",
+          "after": "planned"
+        },
+        {
+          "path": "cognition.steps[1].dependsOn[0]",
+          "before": "<absent>",
+          "after": "s1"
+        },
+        {
+          "path": "cognition.steps[1].expertId",
+          "before": "<absent>",
+          "after": "data-analyst"
+        },
+        {
+          "path": "cognition.steps[1].id",
+          "before": "<absent>",
+          "after": "s2"
+        },
+        {
+          "path": "cognition.steps[1].mode",
+          "before": "<absent>",
+          "after": "implement"
+        },
+        {
+          "path": "cognition.steps[1].objective",
+          "before": "<absent>",
+          "after": "Fix the rounding and add a regression test"
+        },
+        {
+          "path": "cognition.steps[1].status",
+          "before": "<absent>",
+          "after": "planned"
+        },
+        {
+          "path": "cognition.summary",
+          "before": "Summarize the sales CSV",
+          "after": "Fix cart rounding in two steps"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:10>",
+          "after": "<at:12>"
+        }
+      ]
+    },
+    {
+      "name": "reviseCognition:invalid-step-id",
+      "outcome": "error",
+      "error": "认知步骤无效",
+      "changed": []
+    },
+    {
+      "name": "reviseCognition:cycle",
+      "outcome": "error",
+      "error": "认知步骤存在循环依赖",
+      "changed": []
+    },
+    {
+      "name": "updateStep:implement-during-plan",
+      "outcome": "error",
+      "error": "Planning can only finish investigation steps",
+      "changed": []
+    },
+    {
+      "name": "submitPlanForReview",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "phase",
+          "before": "plan",
+          "after": "plan-review"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:12>",
+          "after": "<at:13>"
+        }
+      ]
+    },
+    {
+      "name": "updateStep:during-plan-review",
+      "outcome": "error",
+      "error": "Plan is awaiting review",
+      "changed": []
+    },
+    {
+      "name": "approvePlan",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "phase",
+          "before": "plan-review",
+          "after": "execute"
+        },
+        {
+          "path": "planApproval.approvedAt",
+          "before": "<absent>",
+          "after": "<at:15>"
+        },
+        {
+          "path": "planApproval.cognitionRevision",
+          "before": "<absent>",
+          "after": 2
+        },
+        {
+          "path": "planApproval.contractVersion",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "planApproval.sourceRevision",
+          "before": "<absent>",
+          "after": "<rev:1>"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:13>",
+          "after": "<at:14>"
+        }
+      ]
+    },
+    {
+      "name": "approvePlan:stale",
+      "outcome": "error",
+      "error": "Task has no plan awaiting review",
+      "changed": []
+    },
+    {
+      "name": "updateStep:investigate-complete",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.steps[0].status",
+          "before": "planned",
+          "after": "complete"
+        },
+        {
+          "path": "cognition.steps[0].statusReason",
+          "before": "<absent>",
+          "after": "Read src/cart.ts and the existing tests"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:14>",
+          "after": "<at:16>"
+        }
+      ]
+    },
+    {
+      "name": "updateStep:finished-step",
+      "outcome": "error",
+      "error": "Finished step cannot be rewritten",
+      "changed": []
+    },
+    {
+      "name": "updateStep:unknown",
+      "outcome": "error",
+      "error": "Step and reason are required",
+      "changed": []
+    },
+    {
+      "name": "setInitialCandidates",
+      "outcome": "ok",
+      "changed": []
+    },
+    {
+      "name": "enableDevelopmentWorkflow",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "development.enabled",
+          "before": "<absent>",
+          "after": true
+        },
+        {
+          "path": "development.repairAttempts",
+          "before": "<absent>",
+          "after": 0
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:16>",
+          "after": "<at:17>"
+        }
+      ]
+    },
+    {
+      "name": "recordCapabilityGap",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.gaps[0].description",
+          "before": "<absent>",
+          "after": "No CSV fixture generator"
+        },
+        {
+          "path": "cognition.gaps[0].kind",
+          "before": "<absent>",
+          "after": "tool"
+        },
+        {
+          "path": "cognition.gaps[0].recordedAt",
+          "before": "<absent>",
+          "after": "<at:18>"
+        },
+        {
+          "path": "cognition.revision",
+          "before": 2,
+          "after": 3
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:17>",
+          "after": "<at:19>"
+        }
+      ]
+    },
+    {
+      "name": "recordCapabilityGap:duplicate",
+      "outcome": "ok",
+      "changed": []
+    },
+    {
+      "name": "recordSkillSearch",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.revision",
+          "before": 3,
+          "after": 4
+        },
+        {
+          "path": "cognition.skillProposals[0].description",
+          "before": "<absent>",
+          "after": "Build CSV fixtures"
+        },
+        {
+          "path": "cognition.skillProposals[0].id",
+          "before": "<absent>",
+          "after": "<id:3>"
+        },
+        {
+          "path": "cognition.skillProposals[0].installs",
+          "before": "<absent>",
+          "after": 3
+        },
+        {
+          "path": "cognition.skillProposals[0].key",
+          "before": "<absent>",
+          "after": "csv-fixtures"
+        },
+        {
+          "path": "cognition.skillProposals[0].name",
+          "before": "<absent>",
+          "after": "csv-fixtures"
+        },
+        {
+          "path": "cognition.skillProposals[0].path",
+          "before": "<absent>",
+          "after": "skills/csv-fixtures"
+        },
+        {
+          "path": "cognition.skillProposals[0].recordedAt",
+          "before": "<absent>",
+          "after": "<at:20>"
+        },
+        {
+          "path": "cognition.skillProposals[0].revision",
+          "before": "<absent>",
+          "after": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        {
+          "path": "cognition.skillProposals[0].source",
+          "before": "<absent>",
+          "after": "github.com/example/csv-fixtures"
+        },
+        {
+          "path": "cognition.skillProposals[0].status",
+          "before": "<absent>",
+          "after": "pending"
+        },
+        {
+          "path": "cognition.skillSearches[0].gapDescription",
+          "before": "<absent>",
+          "after": "No CSV fixture generator"
+        },
+        {
+          "path": "cognition.skillSearches[0].key",
+          "before": "<absent>",
+          "after": "csv-fixtures"
+        },
+        {
+          "path": "cognition.skillSearches[0].query",
+          "before": "<absent>",
+          "after": "csv fixture"
+        },
+        {
+          "path": "cognition.skillSearches[0].recordedAt",
+          "before": "<absent>",
+          "after": "<at:20>"
+        },
+        {
+          "path": "cognition.skillSearches[0].resultCount",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:19>",
+          "after": "<at:21>"
+        }
+      ]
+    },
+    {
+      "name": "recordSkillSearch:repeat",
+      "outcome": "ok",
+      "changed": []
+    },
+    {
+      "name": "decideSkillProposal:installed",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.revision",
+          "before": 4,
+          "after": 5
+        },
+        {
+          "path": "cognition.skillProposals[0].installedSkillId",
+          "before": "<absent>",
+          "after": "csv-fixtures"
+        },
+        {
+          "path": "cognition.skillProposals[0].status",
+          "before": "pending",
+          "after": "installed"
+        },
+        {
+          "path": "cognition.taskSkillIds[0]",
+          "before": "<absent>",
+          "after": "csv-fixtures"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:21>",
+          "after": "<at:22>"
+        }
+      ]
+    },
+    {
+      "name": "decideSkillProposal:again",
+      "outcome": "error",
+      "error": "Skill 提案不存在或已处理",
+      "changed": []
+    },
+    {
+      "name": "resolveCapabilityGap",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.gaps[0].resolution",
+          "before": "<absent>",
+          "after": "Wrote the fixture by hand"
+        },
+        {
+          "path": "cognition.gaps[0].resolvedAt",
+          "before": "<absent>",
+          "after": "<at:23>"
+        },
+        {
+          "path": "cognition.revision",
+          "before": 5,
+          "after": 6
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:22>",
+          "after": "<at:24>"
+        }
+      ]
+    },
+    {
+      "name": "resolveCapabilityGap:missing",
+      "outcome": "error",
+      "error": "待解决的能力缺口不存在",
+      "changed": []
+    },
+    {
+      "name": "recordDispatch",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.instances[0].baseRevision",
+          "before": "<absent>",
+          "after": "<rev:1>"
+        },
+        {
+          "path": "cognition.instances[0].cognitionRevision",
+          "before": "<absent>",
+          "after": 6
+        },
+        {
+          "path": "cognition.instances[0].contractVersion",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "cognition.instances[0].decisionReason",
+          "before": "<absent>",
+          "after": "Coordinator inspects first"
+        },
+        {
+          "path": "cognition.instances[0].id",
+          "before": "<absent>",
+          "after": "attempt-coordinator"
+        },
+        {
+          "path": "cognition.instances[0].mode",
+          "before": "<absent>",
+          "after": "investigate"
+        },
+        {
+          "path": "cognition.instances[0].orderId",
+          "before": "<absent>",
+          "after": "coordinator"
+        },
+        {
+          "path": "cognition.instances[0].startedAt",
+          "before": "<absent>",
+          "after": "<at:25>"
+        },
+        {
+          "path": "cognition.instances[0].status",
+          "before": "<absent>",
+          "after": "running"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:24>",
+          "after": "<at:26>"
+        }
+      ]
+    },
+    {
+      "name": "queueWorker",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.agents[0].contextRevision",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "cognition.agents[0].id",
+          "before": "<absent>",
+          "after": "agent-1"
+        },
+        {
+          "path": "cognition.agents[0].lastAttemptId",
+          "before": "<absent>",
+          "after": "attempt-worker"
+        },
+        {
+          "path": "cognition.agents[0].mode",
+          "before": "<absent>",
+          "after": "implement"
+        },
+        {
+          "path": "cognition.agents[0].orderId",
+          "before": "<absent>",
+          "after": "s2"
+        },
+        {
+          "path": "cognition.agents[0].status",
+          "before": "<absent>",
+          "after": "queued"
+        },
+        {
+          "path": "cognition.instances[1].agentId",
+          "before": "<absent>",
+          "after": "agent-1"
+        },
+        {
+          "path": "cognition.instances[1].baseRevision",
+          "before": "<absent>",
+          "after": "<rev:1>"
+        },
+        {
+          "path": "cognition.instances[1].cognitionRevision",
+          "before": "<absent>",
+          "after": 6
+        },
+        {
+          "path": "cognition.instances[1].contractVersion",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "cognition.instances[1].decisionReason",
+          "before": "<absent>",
+          "after": "Probe dispatch for characterization"
+        },
+        {
+          "path": "cognition.instances[1].expert.hash",
+          "before": "<absent>",
+          "after": "<rev:2>"
+        },
+        {
+          "path": "cognition.instances[1].expert.id",
+          "before": "<absent>",
+          "after": "backend"
+        },
+        {
+          "path": "cognition.instances[1].expert.name",
+          "before": "<absent>",
+          "after": "后端工程师"
+        },
+        {
+          "path": "cognition.instances[1].id",
+          "before": "<absent>",
+          "after": "attempt-worker"
+        },
+        {
+          "path": "cognition.instances[1].mode",
+          "before": "<absent>",
+          "after": "implement"
+        },
+        {
+          "path": "cognition.instances[1].order.acceptance[0]",
+          "before": "<absent>",
+          "after": "Configured checks pass"
+        },
+        {
+          "path": "cognition.instances[1].order.agentId",
+          "before": "<absent>",
+          "after": "agent-1"
+        },
+        {
+          "path": "cognition.instances[1].order.contextRevision",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "cognition.instances[1].order.decisionReason",
+          "before": "<absent>",
+          "after": "Probe dispatch for characterization"
+        },
+        {
+          "path": "cognition.instances[1].order.id",
+          "before": "<absent>",
+          "after": "s2"
+        },
+        {
+          "path": "cognition.instances[1].order.mode",
+          "before": "<absent>",
+          "after": "implement"
+        },
+        {
+          "path": "cognition.instances[1].order.objective",
+          "before": "<absent>",
+          "after": "Fix the rounding and add a regression test"
+        },
+        {
+          "path": "cognition.instances[1].order.ownedPaths[0]",
+          "before": "<absent>",
+          "after": "src"
+        },
+        {
+          "path": "cognition.instances[1].orderId",
+          "before": "<absent>",
+          "after": "s2"
+        },
+        {
+          "path": "cognition.instances[1].startedAt",
+          "before": "<absent>",
+          "after": "<at:27>"
+        },
+        {
+          "path": "cognition.instances[1].status",
+          "before": "<absent>",
+          "after": "queued"
+        },
+        {
+          "path": "cognition.steps[1].status",
+          "before": "planned",
+          "after": "running"
+        },
+        {
+          "path": "cognition.steps[1].statusReason",
+          "before": "<absent>",
+          "after": "工单 attempt-worker 排队中"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:26>",
+          "after": "<at:28>"
+        }
+      ]
+    },
+    {
+      "name": "queueWorker:duplicate",
+      "outcome": "error",
+      "error": "Worker attempt already exists",
+      "changed": []
+    },
+    {
+      "name": "recordWorkerCheckReceipt",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "updatedAt",
+          "before": "<at:28>",
+          "after": "<at:29>"
+        },
+        {
+          "path": "workerReceipts[0].attemptId",
+          "before": "<absent>",
+          "after": "attempt-worker"
+        },
+        {
+          "path": "workerReceipts[0].id",
+          "before": "<absent>",
+          "after": "<id:4>"
+        },
+        {
+          "path": "workerReceipts[0].kind",
+          "before": "<absent>",
+          "after": "check"
+        },
+        {
+          "path": "workerReceipts[0].passed",
+          "before": "<absent>",
+          "after": true
+        },
+        {
+          "path": "workerReceipts[0].path",
+          "before": "<absent>",
+          "after": "check-logs/test.log"
+        },
+        {
+          "path": "workerReceipts[0].recordedAt",
+          "before": "<absent>",
+          "after": "<at:30>"
+        },
+        {
+          "path": "workerReceipts[0].sourceRevision",
+          "before": "<absent>",
+          "after": "<rev:1>"
+        }
+      ]
+    },
+    {
+      "name": "updateWorkerCognition",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "updatedAt",
+          "before": "<at:29>",
+          "after": "<at:31>"
+        },
+        {
+          "path": "workerCognition.attemptId",
+          "before": "<absent>",
+          "after": "attempt-worker"
+        },
+        {
+          "path": "workerCognition.findings[0].evidence[0]",
+          "before": "<absent>",
+          "after": "<id:4>"
+        },
+        {
+          "path": "workerCognition.findings[0].text",
+          "before": "<absent>",
+          "after": "alpha_check test passes"
+        },
+        {
+          "path": "workerCognition.nextActions[0]",
+          "before": "<absent>",
+          "after": "Add a regression test"
+        },
+        {
+          "path": "workerCognition.revision",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "workerCognition.sourceRevision",
+          "before": "<absent>",
+          "after": "<rev:1>"
+        },
+        {
+          "path": "workerCognition.understanding",
+          "before": "<absent>",
+          "after": "Rounding happens in two places"
+        },
+        {
+          "path": "workerCognition.updatedAt",
+          "before": "<absent>",
+          "after": "<at:32>"
+        }
+      ]
+    },
+    {
+      "name": "updateWorkerCognition:unknown-receipt",
+      "outcome": "error",
+      "error": "Worker finding cites an unknown evidence receipt",
+      "changed": []
+    },
+    {
+      "name": "updateWorker:running",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.agents[0].status",
+          "before": "queued",
+          "after": "running"
+        },
+        {
+          "path": "cognition.instances[1].status",
+          "before": "queued",
+          "after": "running"
+        },
+        {
+          "path": "cognition.instances[1].workRoot",
+          "before": "<absent>",
+          "after": "workers/attempt-worker"
+        },
+        {
+          "path": "cognition.steps[1].statusReason",
+          "before": "工单 attempt-worker 排队中",
+          "after": "工单 attempt-worker running"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:31>",
+          "after": "<at:33>"
+        }
+      ]
+    },
+    {
+      "name": "recordWorkerRequest",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "updatedAt",
+          "before": "<at:33>",
+          "after": "<at:34>"
+        },
+        {
+          "path": "workerRequests[0].agentId",
+          "before": "<absent>",
+          "after": "agent-1"
+        },
+        {
+          "path": "workerRequests[0].blockedStep",
+          "before": "<absent>",
+          "after": "s2"
+        },
+        {
+          "path": "workerRequests[0].capabilityIds[0]",
+          "before": "<absent>",
+          "after": "csv-fixtures"
+        },
+        {
+          "path": "workerRequests[0].contractVersion",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "workerRequests[0].id",
+          "before": "<absent>",
+          "after": "request-1"
+        },
+        {
+          "path": "workerRequests[0].kind",
+          "before": "<absent>",
+          "after": "capability"
+        },
+        {
+          "path": "workerRequests[0].orderId",
+          "before": "<absent>",
+          "after": "s2"
+        },
+        {
+          "path": "workerRequests[0].recordedAt",
+          "before": "<absent>",
+          "after": "<at:35>"
+        },
+        {
+          "path": "workerRequests[0].runId",
+          "before": "<absent>",
+          "after": "attempt-worker"
+        },
+        {
+          "path": "workerRequests[0].sourceRevision",
+          "before": "<absent>",
+          "after": "<rev:1>"
+        },
+        {
+          "path": "workerRequests[0].status",
+          "before": "<absent>",
+          "after": "open"
+        }
+      ]
+    },
+    {
+      "name": "recordWorkerRequest:reused-id",
+      "outcome": "error",
+      "error": "Worker request ID was reused",
+      "changed": []
+    },
+    {
+      "name": "updateWorkerRequest:awaiting-approval",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "updatedAt",
+          "before": "<at:34>",
+          "after": "<at:36>"
+        },
+        {
+          "path": "workerRequests[0].status",
+          "before": "open",
+          "after": "awaiting-approval"
+        }
+      ]
+    },
+    {
+      "name": "updateWorkerRequest:applied",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "updatedAt",
+          "before": "<at:36>",
+          "after": "<at:37>"
+        },
+        {
+          "path": "workerRequests[0].reason",
+          "before": "<absent>",
+          "after": "Installed csv-fixtures"
+        },
+        {
+          "path": "workerRequests[0].resolvedAt",
+          "before": "<absent>",
+          "after": "<at:38>"
+        },
+        {
+          "path": "workerRequests[0].status",
+          "before": "awaiting-approval",
+          "after": "applied"
+        }
+      ]
+    },
+    {
+      "name": "updateWorkerRequest:resolved",
+      "outcome": "error",
+      "error": "Worker request is already resolved",
+      "changed": []
+    },
+    {
+      "name": "updateWorker:returned",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.agents[0].status",
+          "before": "running",
+          "after": "returned"
+        },
+        {
+          "path": "cognition.instances[1].endedAt",
+          "before": "<absent>",
+          "after": "<at:39>"
+        },
+        {
+          "path": "cognition.instances[1].findings[0]",
+          "before": "<absent>",
+          "after": "Rounding fixed"
+        },
+        {
+          "path": "cognition.instances[1].integration",
+          "before": "<absent>",
+          "after": "pending"
+        },
+        {
+          "path": "cognition.instances[1].status",
+          "before": "running",
+          "after": "returned"
+        },
+        {
+          "path": "cognition.steps[1].statusReason",
+          "before": "工单 attempt-worker running",
+          "after": "工单 attempt-worker returned / pending"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:37>",
+          "after": "<at:40>"
+        }
+      ]
+    },
+    {
+      "name": "updateWorker:completed",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.agents[0].status",
+          "before": "returned",
+          "after": "completed"
+        },
+        {
+          "path": "cognition.instances[1].endedAt",
+          "before": "<at:39>",
+          "after": "<at:41>"
+        },
+        {
+          "path": "cognition.instances[1].integration",
+          "before": "pending",
+          "after": "merged"
+        },
+        {
+          "path": "cognition.instances[1].integrationDecision.action",
+          "before": "<absent>",
+          "after": "integrate"
+        },
+        {
+          "path": "cognition.instances[1].integrationDecision.contractVersion",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "cognition.instances[1].integrationDecision.reason",
+          "before": "<absent>",
+          "after": "Patch matches the plan"
+        },
+        {
+          "path": "cognition.instances[1].integrationDecision.recordedAt",
+          "before": "<absent>",
+          "after": "<at:1>"
+        },
+        {
+          "path": "cognition.instances[1].integrationDecision.runId",
+          "before": "<absent>",
+          "after": "run-integrate"
+        },
+        {
+          "path": "cognition.instances[1].integrationDecision.sourceRevision",
+          "before": "<absent>",
+          "after": "<rev:1>"
+        },
+        {
+          "path": "cognition.instances[1].status",
+          "before": "returned",
+          "after": "completed"
+        },
+        {
+          "path": "cognition.steps[1].status",
+          "before": "running",
+          "after": "complete"
+        },
+        {
+          "path": "cognition.steps[1].statusReason",
+          "before": "工单 attempt-worker returned / pending",
+          "after": "工单 attempt-worker completed / merged"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:40>",
+          "after": "<at:42>"
+        }
+      ]
+    },
+    {
+      "name": "updateWorker:missing",
+      "outcome": "error",
+      "error": "Worker attempt not found",
+      "changed": []
+    },
+    {
+      "name": "finishDispatch",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.instances[0].endedAt",
+          "before": "<absent>",
+          "after": "<at:43>"
+        },
+        {
+          "path": "cognition.instances[0].findings[0]",
+          "before": "<absent>",
+          "after": "Coordinator inspection recorded"
+        },
+        {
+          "path": "cognition.instances[0].status",
+          "before": "running",
+          "after": "completed"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:42>",
+          "after": "<at:44>"
+        }
+      ]
+    },
+    {
+      "name": "finishDispatch:finished",
+      "outcome": "ok",
+      "changed": []
+    },
+    {
+      "name": "recordWorkerOutcome",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "updatedAt",
+          "before": "<at:44>",
+          "after": "<at:45>"
+        },
+        {
+          "path": "workerOutcome.findings[0]",
+          "before": "<absent>",
+          "after": "Cart total rounds to cents"
+        },
+        {
+          "path": "workerOutcome.reviewVerdict",
+          "before": "<absent>",
+          "after": "pass"
+        },
+        {
+          "path": "workerOutcome.status",
+          "before": "<absent>",
+          "after": "completed"
+        }
+      ]
+    },
+    {
+      "name": "recordDevelopmentReview:changes-requested",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "development.review.contractVersion",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "development.review.findings[0]",
+          "before": "<absent>",
+          "after": "Missing edge case test"
+        },
+        {
+          "path": "development.review.instanceId",
+          "before": "<absent>",
+          "after": "attempt-worker"
+        },
+        {
+          "path": "development.review.recordedAt",
+          "before": "<absent>",
+          "after": "<at:47>"
+        },
+        {
+          "path": "development.review.revision",
+          "before": "<absent>",
+          "after": "<rev:1>"
+        },
+        {
+          "path": "development.review.verdict",
+          "before": "<absent>",
+          "after": "changes-requested"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:45>",
+          "after": "<at:46>"
+        }
+      ]
+    },
+    {
+      "name": "recordRepairAttempt",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "development.repairAttempts",
+          "before": 0,
+          "after": 1
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:46>",
+          "after": "<at:48>"
+        }
+      ]
+    },
+    {
+      "name": "recordDevelopmentReview:pass",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "development.review.findings[0]",
+          "before": "Missing edge case test",
+          "after": "<absent>"
+        },
+        {
+          "path": "development.review.recordedAt",
+          "before": "<at:47>",
+          "after": "<at:50>"
+        },
+        {
+          "path": "development.review.verdict",
+          "before": "changes-requested",
+          "after": "pass"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:48>",
+          "after": "<at:49>"
+        }
+      ]
+    },
+    {
+      "name": "refreshRevision",
+      "outcome": "ok",
+      "changed": []
+    },
+    {
+      "name": "recordPreview:remote-url",
+      "outcome": "error",
+      "error": "Preview must use an absolute local path and loopback URL",
+      "changed": []
+    },
+    {
+      "name": "recordPreview",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "preview",
+          "before": null,
+          "after": "<absent>"
+        },
+        {
+          "path": "preview.id",
+          "before": "<absent>",
+          "after": "preview-1"
+        },
+        {
+          "path": "preview.path",
+          "before": "<absent>",
+          "after": "<root:2>\\preview-1"
+        },
+        {
+          "path": "preview.recordedAt",
+          "before": "<absent>",
+          "after": "<at:51>"
+        },
+        {
+          "path": "preview.revision",
+          "before": "<absent>",
+          "after": "<rev:1>"
+        },
+        {
+          "path": "preview.url",
+          "before": "<absent>",
+          "after": "http://127.0.0.1:8123/"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:49>",
+          "after": "<at:52>"
+        }
+      ]
+    },
+    {
+      "name": "setCriteria",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "criteria[0].description",
+          "before": "<absent>",
+          "after": "Answers the question"
+        },
+        {
+          "path": "criteria[0].id",
+          "before": "<absent>",
+          "after": "answer"
+        },
+        {
+          "path": "criteria[0].kind",
+          "before": "<absent>",
+          "after": "artifact"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:52>",
+          "after": "<at:53>"
+        }
+      ]
+    },
+    {
+      "name": "recordEvidence:stale-revision",
+      "outcome": "error",
+      "error": "Evidence revision is stale",
+      "changed": []
+    },
+    {
+      "name": "recordEvidence:unknown-criterion",
+      "outcome": "error",
+      "error": "Evidence does not match a criterion",
+      "changed": []
+    },
+    {
+      "name": "recordEvidence:every-criterion",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "evidence[0].contentHash",
+          "before": "<absent>",
+          "after": "<rev:3>"
+        },
+        {
+          "path": "evidence[0].contractVersion",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "evidence[0].criterionId",
+          "before": "<absent>",
+          "after": "answer"
+        },
+        {
+          "path": "evidence[0].id",
+          "before": "<absent>",
+          "after": "<id:5>"
+        },
+        {
+          "path": "evidence[0].kind",
+          "before": "<absent>",
+          "after": "artifact"
+        },
+        {
+          "path": "evidence[0].passed",
+          "before": "<absent>",
+          "after": true
+        },
+        {
+          "path": "evidence[0].recordedAt",
+          "before": "<absent>",
+          "after": "<at:54>"
+        },
+        {
+          "path": "evidence[0].revision",
+          "before": "<absent>",
+          "after": "<rev:1>"
+        },
+        {
+          "path": "evidence[0].source",
+          "before": "<absent>",
+          "after": "evidence/answer.log"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:53>",
+          "after": "<at:55>"
+        }
+      ]
+    },
+    {
+      "name": "addInputs",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "inputs[0].id",
+          "before": "<absent>",
+          "after": "input-1"
+        },
+        {
+          "path": "inputs[0].mimeType",
+          "before": "<absent>",
+          "after": "text/plain"
+        },
+        {
+          "path": "inputs[0].name",
+          "before": "<absent>",
+          "after": "notes.txt"
+        },
+        {
+          "path": "inputs[0].path",
+          "before": "<absent>",
+          "after": "<root:2>\\inputs\\notes.txt"
+        },
+        {
+          "path": "inputs[0].sha256",
+          "before": "<absent>",
+          "after": "<rev:4>"
+        },
+        {
+          "path": "inputs[0].size",
+          "before": "<absent>",
+          "after": 12
+        },
+        {
+          "path": "inputs[0].uploadedAt",
+          "before": "<absent>",
+          "after": "<at:1>"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:55>",
+          "after": "<at:56>"
+        }
+      ]
+    },
+    {
+      "name": "setCapabilities",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "capabilities.plugins[0].id",
+          "before": "<absent>",
+          "after": "comfyui"
+        },
+        {
+          "path": "capabilities.plugins[0].revision",
+          "before": "<absent>",
+          "after": "<rev:5>"
+        },
+        {
+          "path": "capabilities.skills[0].hash",
+          "before": "<absent>",
+          "after": "<rev:6>"
+        },
+        {
+          "path": "capabilities.skills[0].id",
+          "before": "<absent>",
+          "after": "csv-fixtures"
+        },
+        {
+          "path": "capabilities.skills[0].revision",
+          "before": "<absent>",
+          "after": "ffffffffffffffffffffffffffffffffffffffff"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:56>",
+          "after": "<at:57>"
+        }
+      ]
+    },
+    {
+      "name": "confirmProjectVersion",
+      "outcome": "error",
+      "error": "Task is not waiting for a project recheck",
+      "changed": []
+    },
+    {
+      "name": "recordRun",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "runs[0].contractVersion",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "runs[0].elapsedMs",
+          "before": "<absent>",
+          "after": 5000
+        },
+        {
+          "path": "runs[0].maxToolCalls",
+          "before": "<absent>",
+          "after": 40
+        },
+        {
+          "path": "runs[0].model",
+          "before": "<absent>",
+          "after": "test/model"
+        },
+        {
+          "path": "runs[0].outcome",
+          "before": "<absent>",
+          "after": "returned"
+        },
+        {
+          "path": "runs[0].recordedAt",
+          "before": "<absent>",
+          "after": "<at:58>"
+        },
+        {
+          "path": "runs[0].stage",
+          "before": "<absent>",
+          "after": "coordinator"
+        },
+        {
+          "path": "runs[0].toolCalls",
+          "before": "<absent>",
+          "after": 4
+        },
+        {
+          "path": "runs[0].wallTimeMs",
+          "before": "<absent>",
+          "after": 60000
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:57>",
+          "after": "<at:59>"
+        }
+      ]
+    },
+    {
+      "name": "recordFailure",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "lastFailure",
+          "before": "<absent>",
+          "after": "Browser verification stopped at step 3"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:59>",
+          "after": "<at:60>"
+        }
+      ]
+    },
+    {
+      "name": "recordFailure:blank",
+      "outcome": "error",
+      "error": "Failure reason is required",
+      "changed": []
+    },
+    {
+      "name": "clearFailure",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "lastFailure",
+          "before": "Browser verification stopped at step 3",
+          "after": "<absent>"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:60>",
+          "after": "<at:61>"
+        }
+      ]
+    },
+    {
+      "name": "recordCheckpointStart",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "checkpointStatus",
+          "before": "<absent>",
+          "after": "pending"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:61>",
+          "after": "<at:62>"
+        }
+      ]
+    },
+    {
+      "name": "recordCheckpoint",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "checkpoint.codeCommits[0].commit",
+          "before": "<absent>",
+          "after": "0000000000000000000000000000000000000000"
+        },
+        {
+          "path": "checkpoint.codeCommits[0].root",
+          "before": "<absent>",
+          "after": "project"
+        },
+        {
+          "path": "checkpoint.memoryCommit",
+          "before": "<absent>",
+          "after": "1111111111111111111111111111111111111111"
+        },
+        {
+          "path": "checkpoint.recordedAt",
+          "before": "<absent>",
+          "after": "<at:1>"
+        },
+        {
+          "path": "checkpoint.runId",
+          "before": "<absent>",
+          "after": "run-checkpoint"
+        },
+        {
+          "path": "checkpointStatus",
+          "before": "pending",
+          "after": "committed"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:62>",
+          "after": "<at:63>"
+        }
+      ]
+    },
+    {
+      "name": "recordCheckpointFailure",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "checkpointError",
+          "before": "<absent>",
+          "after": "git commit rejected: nothing staged"
+        },
+        {
+          "path": "checkpointStatus",
+          "before": "committed",
+          "after": "failed"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:63>",
+          "after": "<at:64>"
+        }
+      ]
+    },
+    {
+      "name": "reconcileRunningInstances",
+      "outcome": "ok",
+      "changed": []
+    },
+    {
+      "name": "prepareWorkerRun",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "updatedAt",
+          "before": "<at:64>",
+          "after": "<at:65>"
+        },
+        {
+          "path": "workerOutcome.findings[0]",
+          "before": "Cart total rounds to cents",
+          "after": "<absent>"
+        },
+        {
+          "path": "workerOutcome.reviewVerdict",
+          "before": "pass",
+          "after": "<absent>"
+        },
+        {
+          "path": "workerOutcome.status",
+          "before": "completed",
+          "after": "<absent>"
+        }
+      ]
+    },
+    {
+      "name": "complete",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "status",
+          "before": "active",
+          "after": "complete"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:65>",
+          "after": "<at:66>"
+        }
+      ]
+    },
+    {
+      "name": "complete:again",
+      "outcome": "error",
+      "error": "Task is complete",
+      "changed": []
+    },
+    {
+      "name": "reopen",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "reopenReason",
+          "before": "<absent>",
+          "after": "Preview republished and needs verification"
+        },
+        {
+          "path": "status",
+          "before": "complete",
+          "after": "active"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:66>",
+          "after": "<at:67>"
+        }
+      ]
+    },
+    {
+      "name": "reopen:not-complete",
+      "outcome": "error",
+      "error": "Only a completed task can be reopened",
+      "changed": []
+    },
+    {
+      "name": "needInput",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "blockedService",
+          "before": "<absent>",
+          "after": "approval"
+        },
+        {
+          "path": "pendingQuestion",
+          "before": "<absent>",
+          "after": "Approve `bun test src/cart.test.ts`?"
+        },
+        {
+          "path": "status",
+          "before": "active",
+          "after": "needs-input"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:67>",
+          "after": "<at:68>"
+        }
+      ]
+    },
+    {
+      "name": "needInput:blank",
+      "outcome": "error",
+      "error": "Task is needs-input",
+      "changed": []
+    },
+    {
+      "name": "resume",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "blockedService",
+          "before": "approval",
+          "after": "<absent>"
+        },
+        {
+          "path": "guidanceHistory[1].instruction",
+          "before": "<absent>",
+          "after": "Approved; continue with the regression test"
+        },
+        {
+          "path": "guidanceHistory[1].recordedAt",
+          "before": "<absent>",
+          "after": "<at:69>"
+        },
+        {
+          "path": "pendingQuestion",
+          "before": "Approve `bun test src/cart.test.ts`?",
+          "after": "<absent>"
+        },
+        {
+          "path": "reopenReason",
+          "before": "Preview republished and needs verification",
+          "after": "Approved; continue with the regression test"
+        },
+        {
+          "path": "status",
+          "before": "needs-input",
+          "after": "active"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:68>",
+          "after": "<at:70>"
+        }
+      ]
+    },
+    {
+      "name": "resume:active",
+      "outcome": "error",
+      "error": "Only a stopped or waiting task can be resumed",
+      "changed": []
+    },
+    {
+      "name": "stop",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "status",
+          "before": "active",
+          "after": "stopped"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:70>",
+          "after": "<at:71>"
+        }
+      ]
+    },
+    {
+      "name": "stop:again",
+      "outcome": "error",
+      "error": "Task is stopped",
+      "changed": []
+    },
+    {
+      "name": "reviseObjective",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "contractHistory[0].objective",
+          "before": "<absent>",
+          "after": "Summarize the sales CSV"
+        },
+        {
+          "path": "contractHistory[0].revisedAt",
+          "before": "<absent>",
+          "after": "<at:72>"
+        },
+        {
+          "path": "contractHistory[0].version",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "contractVersion",
+          "before": 1,
+          "after": 2
+        },
+        {
+          "path": "objective",
+          "before": "Summarize the sales CSV",
+          "after": "Fix cart rounding and handle empty carts"
+        },
+        {
+          "path": "phase",
+          "before": "execute",
+          "after": "plan"
+        },
+        {
+          "path": "planApproval.approvedAt",
+          "before": "<at:15>",
+          "after": "<absent>"
+        },
+        {
+          "path": "planApproval.cognitionRevision",
+          "before": 2,
+          "after": "<absent>"
+        },
+        {
+          "path": "planApproval.contractVersion",
+          "before": 1,
+          "after": "<absent>"
+        },
+        {
+          "path": "planApproval.sourceRevision",
+          "before": "<rev:1>",
+          "after": "<absent>"
+        },
+        {
+          "path": "preview",
+          "before": "<absent>",
+          "after": null
+        },
+        {
+          "path": "preview.id",
+          "before": "preview-1",
+          "after": "<absent>"
+        },
+        {
+          "path": "preview.path",
+          "before": "<root:2>\\preview-1",
+          "after": "<absent>"
+        },
+        {
+          "path": "preview.recordedAt",
+          "before": "<at:51>",
+          "after": "<absent>"
+        },
+        {
+          "path": "preview.revision",
+          "before": "<rev:1>",
+          "after": "<absent>"
+        },
+        {
+          "path": "preview.url",
+          "before": "http://127.0.0.1:8123/",
+          "after": "<absent>"
+        },
+        {
+          "path": "reopenReason",
+          "before": "Approved; continue with the regression test",
+          "after": "User revised the task objective"
+        },
+        {
+          "path": "status",
+          "before": "stopped",
+          "after": "active"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:71>",
+          "after": "<at:73>"
+        }
+      ]
+    },
+    {
+      "name": "reviseObjective:unchanged",
+      "outcome": "error",
+      "error": "A changed task objective is required",
+      "changed": []
+    },
+    {
+      "name": "setGoal:disabled",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "goal.enabled",
+          "before": true,
+          "after": false
+        },
+        {
+          "path": "goal.stopReason",
+          "before": "<absent>",
+          "after": "user-disabled"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:73>",
+          "after": "<at:74>"
+        }
+      ]
+    },
+    {
+      "name": "setGoalProgress:stop",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "goal.noProgressRuns",
+          "before": 0,
+          "after": 3
+        },
+        {
+          "path": "goal.stopReason",
+          "before": "user-disabled",
+          "after": "no-progress"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:74>",
+          "after": "<at:75>"
+        }
+      ]
+    }
+  ],
+  "finalState": {
+    "id": "<id:1>",
+    "taskType": "general",
+    "workspaceOrigin": {
+      "kind": "generated"
+    },
+    "objective": "Fix cart rounding and handle empty carts",
+    "designatedExpertId": "data-analyst",
+    "contractVersion": 2,
+    "contractHistory": [
+      {
+        "version": 1,
+        "objective": "Summarize the sales CSV",
+        "revisedAt": "<at:72>"
+      }
+    ],
+    "guidanceHistory": [
+      {
+        "id": "<id:2>",
+        "instruction": "Keep the public API unchanged",
+        "recordedAt": "<at:3>",
+        "status": "processed"
+      },
+      {
+        "instruction": "Approved; continue with the regression test",
+        "recordedAt": "<at:69>"
+      }
+    ],
+    "cognition": {
+      "revision": 6,
+      "recipeVersion": 1,
+      "summary": "Fix cart rounding in two steps",
+      "candidates": [
+        "data-analyst",
+        "backend"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "objective": "Read the cart code and list the rounding paths",
+          "mode": "investigate",
+          "dependsOn": [],
+          "skillIds": [],
+          "status": "complete",
+          "statusReason": "Read src/cart.ts and the existing tests"
+        },
+        {
+          "id": "s2",
+          "objective": "Fix the rounding and add a regression test",
+          "mode": "implement",
+          "dependsOn": [
+            "s1"
+          ],
+          "skillIds": [],
+          "expertId": "data-analyst",
+          "status": "complete",
+          "statusReason": "工单 attempt-worker completed / merged"
+        }
+      ],
+      "gaps": [
+        {
+          "kind": "tool",
+          "description": "No CSV fixture generator",
+          "recordedAt": "<at:18>",
+          "resolvedAt": "<at:23>",
+          "resolution": "Wrote the fixture by hand"
+        }
+      ],
+      "amendments": [
+        {
+          "revision": 2,
+          "reason": "Initial plan",
+          "affectedSteps": [
+            "s1",
+            "s2"
+          ],
+          "recordedAt": "<at:11>"
+        }
+      ],
+      "basedOnRevision": "<rev:1>",
+      "scope": [
+        "src/cart.ts"
+      ],
+      "constraints": [
+        "No API change"
+      ],
+      "skillSearches": [
+        {
+          "key": "csv-fixtures",
+          "gapDescription": "No CSV fixture generator",
+          "query": "csv fixture",
+          "resultCount": 1,
+          "recordedAt": "<at:20>"
+        }
+      ],
+      "skillProposals": [
+        {
+          "name": "csv-fixtures",
+          "description": "Build CSV fixtures",
+          "source": "github.com/example/csv-fixtures",
+          "revision": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "path": "skills/csv-fixtures",
+          "installs": 3,
+          "key": "csv-fixtures",
+          "id": "<id:3>",
+          "status": "installed",
+          "recordedAt": "<at:20>",
+          "installedSkillId": "csv-fixtures"
+        }
+      ],
+      "taskSkillIds": [
+        "csv-fixtures"
+      ],
+      "instances": [
+        {
+          "id": "attempt-coordinator",
+          "orderId": "coordinator",
+          "mode": "investigate",
+          "skills": [],
+          "decisionReason": "Coordinator inspects first",
+          "contractVersion": 1,
+          "cognitionRevision": 6,
+          "baseRevision": "<rev:1>",
+          "status": "completed",
+          "startedAt": "<at:25>",
+          "findings": [
+            "Coordinator inspection recorded"
+          ],
+          "endedAt": "<at:43>"
+        },
+        {
+          "id": "attempt-worker",
+          "agentId": "agent-1",
+          "orderId": "s2",
+          "order": {
+            "id": "s2",
+            "objective": "Fix the rounding and add a regression test",
+            "ownedPaths": [
+              "src"
+            ],
+            "resources": [],
+            "mode": "implement",
+            "agentId": "agent-1",
+            "acceptance": [
+              "Configured checks pass"
+            ],
+            "skillIds": [],
+            "contextRevision": 1,
+            "decisionReason": "Probe dispatch for characterization"
+          },
+          "decisionReason": "Probe dispatch for characterization",
+          "mode": "implement",
+          "expert": {
+            "id": "backend",
+            "name": "后端工程师",
+            "hash": "<rev:2>"
+          },
+          "skills": [],
+          "contractVersion": 1,
+          "cognitionRevision": 6,
+          "baseRevision": "<rev:1>",
+          "status": "completed",
+          "startedAt": "<at:27>",
+          "workRoot": "workers/attempt-worker",
+          "findings": [
+            "Rounding fixed"
+          ],
+          "integration": "merged",
+          "endedAt": "<at:41>",
+          "integrationDecision": {
+            "action": "integrate",
+            "reason": "Patch matches the plan",
+            "runId": "run-integrate",
+            "contractVersion": 1,
+            "sourceRevision": "<rev:1>",
+            "recordedAt": "<at:1>"
+          }
+        }
+      ],
+      "agents": [
+        {
+          "id": "agent-1",
+          "skillIds": [],
+          "capabilityIds": [],
+          "contextRevision": 1,
+          "mode": "implement",
+          "orderId": "s2",
+          "lastAttemptId": "attempt-worker",
+          "status": "completed"
+        }
+      ]
+    },
+    "projectRoot": "<root:1>",
+    "criteria": [
+      {
+        "id": "answer",
+        "description": "Answers the question",
+        "kind": "artifact"
+      }
+    ],
+    "status": "active",
+    "phase": "plan",
+    "goal": {
+      "enabled": false,
+      "budget": {
+        "maxToolCalls": 40,
+        "wallTimeMs": 600000,
+        "maxTotalToolCalls": 120,
+        "totalWallTimeMs": 1800000
+      },
+      "noProgressRuns": 3,
+      "stopReason": "no-progress"
+    },
+    "revision": "<rev:1>",
+    "evidence": [
+      {
+        "criterionId": "answer",
+        "kind": "artifact",
+        "passed": true,
+        "revision": "<rev:1>",
+        "contentHash": "<rev:3>",
+        "source": "evidence/answer.log",
+        "contractVersion": 1,
+        "id": "<id:5>",
+        "recordedAt": "<at:54>"
+      }
+    ],
+    "runs": [
+      {
+        "model": "test/model",
+        "stage": "coordinator",
+        "toolCalls": 4,
+        "maxToolCalls": 40,
+        "wallTimeMs": 60000,
+        "elapsedMs": 5000,
+        "outcome": "returned",
+        "contractVersion": 1,
+        "recordedAt": "<at:58>"
+      }
+    ],
+    "preview": null,
+    "createdAt": "<at:1>",
+    "updatedAt": "<at:75>",
+    "development": {
+      "enabled": true,
+      "repairAttempts": 1,
+      "review": {
+        "verdict": "pass",
+        "findings": [],
+        "instanceId": "attempt-worker",
+        "revision": "<rev:1>",
+        "contractVersion": 1,
+        "recordedAt": "<at:50>"
+      }
+    },
+    "workerReceipts": [
+      {
+        "id": "<id:4>",
+        "attemptId": "attempt-worker",
+        "sourceRevision": "<rev:1>",
+        "passed": true,
+        "path": "check-logs/test.log",
+        "kind": "check",
+        "recordedAt": "<at:30>"
+      }
+    ],
+    "workerCognition": {
+      "understanding": "Rounding happens in two places",
+      "findings": [
+        {
+          "text": "alpha_check test passes",
+          "evidence": [
+            "<id:4>"
+          ]
+        }
+      ],
+      "openQuestions": [],
+      "nextActions": [
+        "Add a regression test"
+      ],
+      "attemptId": "attempt-worker",
+      "revision": 1,
+      "sourceRevision": "<rev:1>",
+      "updatedAt": "<at:32>"
+    },
+    "workerRequests": [
+      {
+        "id": "request-1",
+        "agentId": "agent-1",
+        "runId": "attempt-worker",
+        "orderId": "s2",
+        "kind": "capability",
+        "blockedStep": "s2",
+        "capabilityIds": [
+          "csv-fixtures"
+        ],
+        "contractVersion": 1,
+        "sourceRevision": "<rev:1>",
+        "status": "applied",
+        "recordedAt": "<at:35>",
+        "reason": "Installed csv-fixtures",
+        "resolvedAt": "<at:38>"
+      }
+    ],
+    "inputs": [
+      {
+        "id": "input-1",
+        "name": "notes.txt",
+        "path": "<root:2>\\inputs\\notes.txt",
+        "mimeType": "text/plain",
+        "size": 12,
+        "sha256": "<rev:4>",
+        "uploadedAt": "<at:1>"
+      }
+    ],
+    "capabilities": {
+      "plugins": [
+        {
+          "id": "comfyui",
+          "revision": "<rev:5>"
+        }
+      ],
+      "skills": [
+        {
+          "id": "csv-fixtures",
+          "hash": "<rev:6>",
+          "revision": "ffffffffffffffffffffffffffffffffffffffff"
+        }
+      ]
+    },
+    "checkpointStatus": "failed",
+    "checkpoint": {
+      "runId": "run-checkpoint",
+      "codeCommits": [
+        {
+          "root": "project",
+          "commit": "0000000000000000000000000000000000000000"
+        }
+      ],
+      "memoryCommit": "1111111111111111111111111111111111111111",
+      "recordedAt": "<at:1>"
+    },
+    "checkpointError": "git commit rejected: nothing staged",
+    "reopenReason": "User revised the task objective"
+  }
+}

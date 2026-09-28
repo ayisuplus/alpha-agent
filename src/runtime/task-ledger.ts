@@ -257,6 +257,23 @@ export async function fingerprintSource(projectRoot: string): Promise<string> {
   return hash.digest("hex");
 }
 
+/** Acceptance gaps for a task state, independent of any ledger instance; the runtime and the invariant checks share it. */
+export function computeCompletionGaps(state: TaskState): string[] {
+  const gaps = state.criteria.filter(criterion => {
+    const latest = state.evidence.findLast(item => item.criterionId === criterion.id && (item.contractVersion ?? 1) === (state.contractVersion ?? 1) && item.revision === state.revision && (criterion.kind !== "browser" || item.previewId === state.preview?.id));
+    return !latest?.passed;
+  }).map(criterion => criterion.id);
+  if (taskProfile(state.taskType).acceptance === "web-preview" && (!state.preview || state.preview.revision !== state.revision)) gaps.push("local-preview");
+  if (state.development?.enabled && (state.development.review?.verdict !== "pass" || state.development.review.revision !== state.revision || state.development.review.contractVersion !== (state.contractVersion ?? 1))) gaps.push("development-review");
+  if (state.cognition?.gaps.some(item => !item.resolvedAt)) gaps.push("capability-gap");
+  if (state.workerRequests?.some(item => ["open", "awaiting-approval", "uncertain"].includes(item.status))) gaps.push("worker-request");
+  // Without subagents to dispatch, the coordinator itself works from the designated expert's persona and Skills.
+  if (state.designatedExpertId && taskProfile(state.taskType).dispatch && !state.cognition?.instances?.some(item => item.expert?.id === state.designatedExpertId && item.status === "completed" && item.contractVersion === (state.contractVersion ?? 1))) gaps.push("designated-expert");
+  if (state.planApproval && state.phase === "execute" && state.cognition?.steps.some(step => step.status !== "complete" && step.status !== "cancelled")) gaps.push("plan-steps");
+  if (state.cognition?.instances?.some(item => item.order && ["queued", "running", "returned"].includes(item.status))) gaps.push("worker-integration");
+  return gaps;
+}
+
 export class TaskLedger {
   private static readonly fileQueues = new Map<string, Promise<void>>();
   private savedHash: string | null = null;
@@ -395,19 +412,7 @@ export class TaskLedger {
   }
 
   completionGaps(): string[] {
-    const gaps = this.state.criteria.filter(criterion => {
-      const latest = this.state.evidence.findLast(item => item.criterionId === criterion.id && (item.contractVersion ?? 1) === (this.state.contractVersion ?? 1) && item.revision === this.state.revision && (criterion.kind !== "browser" || item.previewId === this.state.preview?.id));
-      return !latest?.passed;
-    }).map(criterion => criterion.id);
-    if (taskProfile(this.state.taskType).acceptance === "web-preview" && (!this.state.preview || this.state.preview.revision !== this.state.revision)) gaps.push("local-preview");
-    if (this.state.development?.enabled && (this.state.development.review?.verdict !== "pass" || this.state.development.review.revision !== this.state.revision || this.state.development.review.contractVersion !== (this.state.contractVersion ?? 1))) gaps.push("development-review");
-    if (this.state.cognition?.gaps.some(item => !item.resolvedAt)) gaps.push("capability-gap");
-    if (this.state.workerRequests?.some(item => ["open", "awaiting-approval", "uncertain"].includes(item.status))) gaps.push("worker-request");
-    // Without subagents to dispatch, the coordinator itself works from the designated expert's persona and Skills.
-    if (this.state.designatedExpertId && taskProfile(this.state.taskType).dispatch && !this.state.cognition?.instances?.some(item => item.expert?.id === this.state.designatedExpertId && item.status === "completed" && item.contractVersion === (this.state.contractVersion ?? 1))) gaps.push("designated-expert");
-    if (this.state.planApproval && this.state.phase === "execute" && this.state.cognition?.steps.some(step => step.status !== "complete" && step.status !== "cancelled")) gaps.push("plan-steps");
-    if (this.state.cognition?.instances?.some(item => item.order && ["queued", "running", "returned"].includes(item.status))) gaps.push("worker-integration");
-    return gaps;
+    return computeCompletionGaps(this.state);
   }
 
   async setGoal(enabled: boolean, budget?: GoalBudget): Promise<void> {

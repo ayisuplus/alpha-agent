@@ -17,3 +17,5 @@
 详细施工与失败记录见 [验收记录](docs/implementation-status.md)；本轮评审修复与待决定事项见 [评审修复记录](docs/review-fixes-2026-09-27.md)；工作台重构见 [三栏工作台](docs/workbench-redesign-2026-09-24.md)，上一轮见 [任务审阅迭代](docs/workbench-iteration-2026-09-24.md)，此前对照见 [Codex 工作台对照记录](docs/codex-workbench-benchmark-2026-09-24.md)；参考框架分析和原施工计划见 [设计基线](docs/alpha-analysis-and-build-plan.md)。
 
 评测：`bun run eval` 通过工作台接口给 Alpha 派 `eval/` 中的任务，用 Alpha 看不到的隐藏测试和答案检查打分，并记录 Alpha 自己的验收结论，可用 `--app` 对比其他版本；用法见 [评测集说明](eval/README.md)，首轮结果与发现的问题见 [Harness 修复与评测](docs/harness-fixes-eval-2026-09-28.md)。运行会真实调用模型。测试（`bun test`）通过 `bunfig.toml` 预加载关闭真实 Windows 沙箱，不会弹出沙箱安装窗口。
+
+任务状态机：`bun run invariants` 只读扫描现有账本是否违反不变量并出报告，`bun run characterize` 校验账本 48 个修改方法的行为基线（`--write-fixtures` 重建），`bun run characterize:real` 对真实账本的副本回放同一探针（不写 `.alpha`）。重构计划见 [任务状态机重构计划](docs/cognitive-state-machine-plan-2026-09-28.md)，P0 的基线与已发现的存量违反见 [P0 基线与护栏](docs/task-state-machine-p0-baseline-2026-09-28.md)。
