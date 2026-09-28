@@ -113,6 +113,28 @@ test("each turn lists the models whose runs finished inside it", () => {
   expect(two.models).toEqual(["openrouter/anthropic/claude"]);
 });
 
+test("a follow-up question reads as the user's message followed by its answer turn", () => {
+  clock = Date.parse("2026-09-24T03:00:00.000Z");
+  const activity = [
+    entry("run-1", "status", "任务已创建"),
+    entry("run-1", "text", "Built it."),
+    entry("run-1", "status", "已验收"),
+    entry("ask-1", "question", "按钮的颜色在哪里定义？"),
+    entry("ask-1", "status", "回答追问"),
+    entry("ask-1", "tool", "grep · 开始", { callId: "g" }),
+    entry("ask-1", "tool", "grep · 结束", { callId: "g" }),
+    entry("ask-1", "text", "在 styles.css 的 .primary 里。"),
+    entry("ask-1", "status", "已回答"),
+  ];
+  const items = buildTimeline({ task: baseTask, activity, reviews: [], busy: false });
+  expect(items.map(item => item.type)).toEqual(["objective", "turn", "question", "turn"]);
+  expect(items[2]).toMatchObject({ type: "question", text: "按钮的颜色在哪里定义？" });
+  const answer = turns(items)[1];
+  expect(answer).toMatchObject({ index: 2, kind: "ask", outcome: "已回答", toolCount: 1, modelRun: true });
+  // The question and the starting phase are shown by the message and the turn title, not repeated inside the turn.
+  expect(answer.blocks.some(block => block.type === "phase" && block.phase === "回答追问")).toBe(false);
+});
+
 test("timeline explains tasks recorded before activity history existed", () => {
   const items = buildTimeline({ task: baseTask, activity: [], reviews: [], busy: false });
   expect(items.map(item => item.type)).toEqual(["objective", "legacy"]);

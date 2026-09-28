@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-export type ActivityKind = "status" | "tool" | "text" | "error" | "guidance";
+/** "question" is a follow-up question the person asked about the task; the answer follows as text. */
+export type ActivityKind = "status" | "tool" | "text" | "error" | "guidance" | "question";
 
 export interface ActivityEntry {
   id: string;

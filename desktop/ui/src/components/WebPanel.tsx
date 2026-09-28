@@ -5,7 +5,8 @@ import { notify, resumeTask, selectBrowserTab, syncSelected } from "../state/wor
 import { Button } from "./ui";
 import "./WebPanel.css";
 
-export function WebPanel({ task }: { task: TaskView }) {
+/** `compact` hides the panel until the task has web pages, sources or approvals; the full panel lives in task details. */
+export function WebPanel({ task, compact = false }: { task: TaskView; compact?: boolean }) {
   const [approvals, setApprovals] = useState<WebApproval[]>([]);
   const [tabs, setTabs] = useState<WebTab[]>([]);
   const [sources, setSources] = useState<WebSource[]>([]);
@@ -29,6 +30,7 @@ export function WebPanel({ task }: { task: TaskView }) {
     if (approved && task.status === "needs-input") await resumeTask("", task.id);
   });
 
+  if (compact && !approvals.length && !tabs.length && !sources.length && !jobs.length) return null;
   return <details className="web-panel" data-pending={approvals.some(item => item.status === "pending") || undefined}>
     <summary>网页工作 · {tabs.length} 个页面 · {sources.length} 个来源{approvals.some(item => item.status === "pending") ? " · 待授权" : ""}</summary>
     <div className="web-panel-body">

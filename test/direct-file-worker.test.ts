@@ -6,9 +6,9 @@ import { join, resolve } from "node:path";
 const folders: string[] = [];
 afterEach(async () => { for (const folder of folders.splice(0)) await rm(folder, { recursive: true, force: true }); });
 
-async function call(cwd: string, roots: string[], action: string, args: Record<string, unknown>) {
+async function call(cwd: string, roots: string[], action: string, args: Record<string, unknown>, editMode?: string) {
   const child = Bun.spawn([process.execPath, resolve(import.meta.dir, "../src/runtime/sandbox-file-worker.ts")], { cwd, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-  child.stdin.write(JSON.stringify({ cwd, roots, action, args, nativePath: resolve(import.meta.dir, "../node_modules/@oh-my-pi/pi-natives/native/index.js") }));
+  child.stdin.write(JSON.stringify({ cwd, roots, action, args, editMode, nativePath: resolve(import.meta.dir, "../node_modules/@oh-my-pi/pi-natives/native/index.js") }));
   child.stdin.end();
   const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
   const line = stdout.split(/\r?\n/).find(item => item.startsWith("__ALPHA_FILE_RESULT__"));
@@ -28,6 +28,24 @@ test("worker reads Hashline text and applies an exact-tag edit", async () => {
   const edit = await call(folder, [folder], "edit", { input: `*** Begin Patch\n${header}\nPUT 2.=2:\n+changed\n*** End Patch` });
   expect(edit.error).toBeUndefined();
   expect(await readFile(file, "utf8")).toBe("first\nchanged\n");
+});
+
+test("worker follows the session's edit format when it is not Hashline", async () => {
+  const folder = await mkdtemp(join(tmpdir(), "alpha-file-worker-"));
+  folders.push(folder);
+  const file = join(folder, "note.md");
+  await writeFile(file, "# Title\nold line\n");
+  const read = await call(folder, [folder], "read", { path: file }, "replace");
+  // Plain text to quote from: no Hashline header or line anchors.
+  expect(read.text).toBe("# Title\nold line");
+  const edit = await call(folder, [folder], "edit", { path: file, old_string: "old line", new_string: "new line" }, "replace");
+  expect(edit.error).toBeUndefined();
+  expect(await readFile(file, "utf8")).toBe("# Title\nnew line\n");
+  const outside = await mkdtemp(join(tmpdir(), "alpha-file-outside-"));
+  folders.push(outside);
+  await writeFile(join(outside, "x.md"), "keep\n");
+  const denied = await call(folder, [folder], "edit", { path: join(outside, "x.md"), old_string: "keep", new_string: "gone" }, "replace");
+  expect(denied.error).toContain("outside mounted folders");
 });
 
 test("worker rejects writes outside mounts and known credential reads", async () => {

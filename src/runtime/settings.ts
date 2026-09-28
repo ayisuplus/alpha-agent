@@ -1,16 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { isAllowedModelSelector } from "./model-policy";
+import { DEFAULT_MODEL_PROVIDERS, isAllowedModelSelector, isProviderId } from "./model-policy";
 
 export type FontSize = "sm" | "md" | "lg";
 
 export interface AlphaSettings {
   version: 1;
   revision?: number;
-  model: { default: string | null; translation: string | null };
+  /** `providers` lists the model services Alpha may use; model choices outside it are dropped. */
+  model: { default: string | null; translation: string | null; providers: string[] };
   workerModels: { investigate: string | null; implement: string | null; review: string | null };
-  budget: { maxToolCalls: number; wallTimeMinutes: number; maxTotalToolCalls: number; totalWallTimeMinutes: number };
+  /** maxParallelTasks bounds how many tasks run their models at the same time. */
+  budget: { maxToolCalls: number; wallTimeMinutes: number; maxTotalToolCalls: number; totalWallTimeMinutes: number; maxParallelTasks: number };
   generation: { comfyUrl: string; image: boolean; voice: boolean; video: boolean };
   plugins: { comfyui: boolean };
   notifications: { enabled: boolean };
@@ -20,9 +22,9 @@ export interface AlphaSettings {
 export const DEFAULT_SETTINGS: AlphaSettings = {
   version: 1,
   revision: 0,
-  model: { default: null, translation: null },
+  model: { default: null, translation: null, providers: [...DEFAULT_MODEL_PROVIDERS] },
   workerModels: { investigate: null, implement: null, review: null },
-  budget: { maxToolCalls: 120, wallTimeMinutes: 30, maxTotalToolCalls: 1200, totalWallTimeMinutes: 120 },
+  budget: { maxToolCalls: 120, wallTimeMinutes: 30, maxTotalToolCalls: 1200, totalWallTimeMinutes: 120, maxParallelTasks: 3 },
   generation: { comfyUrl: "http://127.0.0.1:8188", image: true, voice: true, video: true },
   plugins: { comfyui: true },
   notifications: { enabled: true },
@@ -34,6 +36,7 @@ export const LIMITS = {
   wallTimeMinutes: [1, 60],
   maxTotalToolCalls: [20, 10000],
   totalWallTimeMinutes: [1, 1440],
+  maxParallelTasks: [1, 8],
   scale: [0.8, 1.5],
   previewRatio: [0.2, 0.8],
 } as const;
@@ -42,8 +45,8 @@ export class SettingsError extends Error {}
 
 const MODEL_SELECTOR = /^[^\s/]+\/\S+$/;
 
-export function isModelSelector(value: unknown): value is string {
-  return typeof value === "string" && MODEL_SELECTOR.test(value) && isAllowedModelSelector(value);
+export function isModelSelector(value: unknown, providers?: Iterable<string>): value is string {
+  return typeof value === "string" && MODEL_SELECTOR.test(value) && isAllowedModelSelector(value, providers);
 }
 
 /** ComfyUI must stay on this machine; a remote generation service is never configured from the workbench. */
@@ -95,23 +98,32 @@ export function mergeSettings(current: AlphaSettings, input: unknown, strict = t
   const plugins = section(patch.plugins, "plugins", strict);
   const notifications = section(patch.notifications, "notifications", strict);
   const ui = section(patch.ui, "ui", strict);
+  // Providers first: every model choice below is checked against the list this update produces.
+  const providers = pick(model, "providers", current.model.providers ?? [...DEFAULT_MODEL_PROVIDERS],
+    value => Array.isArray(value) && value.length > 0 && value.length <= 40 && value.every(isProviderId) && new Set(value).size === value.length ? [...value] : undefined,
+    strict, "允许的模型服务商");
+  const selector = (value: unknown) => value === null ? null : isModelSelector(value, providers) ? value : undefined;
+  // A choice whose provider was just disallowed falls back to its default instead of pointing at an unusable model.
+  const kept = (value: string | null) => value !== null && !isAllowedModelSelector(value, providers) ? null : value;
   return {
     version: 1,
     revision: current.revision ?? 0,
     model: {
-      default: pick(model, "default", current.model.default, value => value === null ? null : isModelSelector(value) ? value : undefined, strict, "默认模型"),
-      translation: pick(model, "translation", current.model.translation, value => value === null ? null : isModelSelector(value) ? value : undefined, strict, "翻译模型"),
+      default: kept(pick(model, "default", current.model.default, selector, strict, "默认模型")),
+      translation: kept(pick(model, "translation", current.model.translation, selector, strict, "翻译模型")),
+      providers,
     },
     workerModels: {
-      investigate: pick(workerModels, "investigate", current.workerModels.investigate, value => value === null ? null : isModelSelector(value) ? value : undefined, strict, "调查子代理模型"),
-      implement: pick(workerModels, "implement", current.workerModels.implement, value => value === null ? null : isModelSelector(value) ? value : undefined, strict, "实现子代理模型"),
-      review: pick(workerModels, "review", current.workerModels.review, value => value === null ? null : isModelSelector(value) ? value : undefined, strict, "审查子代理模型"),
+      investigate: kept(pick(workerModels, "investigate", current.workerModels.investigate, selector, strict, "调查子代理模型")),
+      implement: kept(pick(workerModels, "implement", current.workerModels.implement, selector, strict, "实现子代理模型")),
+      review: kept(pick(workerModels, "review", current.workerModels.review, selector, strict, "审查子代理模型")),
     },
     budget: {
       maxToolCalls: pick(budget, "maxToolCalls", current.budget.maxToolCalls, number(...LIMITS.maxToolCalls, true), strict, "工具调用上限"),
       wallTimeMinutes: pick(budget, "wallTimeMinutes", current.budget.wallTimeMinutes, number(...LIMITS.wallTimeMinutes, true), strict, "单轮时长上限"),
       maxTotalToolCalls: pick(budget, "maxTotalToolCalls", current.budget.maxTotalToolCalls, number(...LIMITS.maxTotalToolCalls, true), strict, "任务总工具调用上限"),
       totalWallTimeMinutes: pick(budget, "totalWallTimeMinutes", current.budget.totalWallTimeMinutes, number(...LIMITS.totalWallTimeMinutes, true), strict, "任务总时长上限"),
+      maxParallelTasks: pick(budget, "maxParallelTasks", current.budget.maxParallelTasks ?? DEFAULT_SETTINGS.budget.maxParallelTasks, number(...LIMITS.maxParallelTasks, true), strict, "同时运行的任务数"),
     },
     generation: {
       comfyUrl: pick(generation, "comfyUrl", current.generation.comfyUrl, value => {
@@ -199,6 +211,8 @@ export class SettingsStore {
 
 export interface TaskMeta {
   title?: string;
+  /** Short name generated from the objective at creation; a title the person sets always wins. */
+  autoTitle?: string;
   pinned?: boolean;
   archived?: boolean;
 }
@@ -227,6 +241,19 @@ export class WorkbenchMeta {
 
   async update(taskId: string, input: unknown): Promise<TaskMeta> {
     const run = this.updates.then(() => this.applyUpdate(taskId, input));
+    this.updates = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  /** Runtime-only: people rename through `update`, which never touches the generated title. */
+  async setAutoTitle(taskId: string, autoTitle: string): Promise<TaskMeta> {
+    const run = this.updates.then(async () => {
+      const next: TaskMeta = { ...await this.get(taskId), autoTitle: autoTitle.trim().replace(/\s+/g, " ").slice(0, 80) };
+      const tasks = { ...await this.all(), [taskId]: next };
+      await this.json.write({ tasks });
+      this.cached = tasks;
+      return next;
+    });
     this.updates = run.then(() => undefined, () => undefined);
     return run;
   }

@@ -152,7 +152,7 @@ export class WorkerSupervisor {
   }
   assertParentTool(name: string): void {
     if (!this.unsettled) return;
-    if (!["read", "grep", "edit", "write", "alpha_spawn", "alpha_continue", "alpha_worker_resolve", "alpha_capability_search", "alpha_capability_mcp", "alpha_inspect", "alpha_wait", "alpha_cancel", "alpha_integrate", "alpha_send", "alpha_inbox", "alpha_browser", "alpha_plan", "alpha_step", "alpha_gap", "alpha_gap_resolve", "alpha_expert_search", "alpha_search", "alpha_crawl", "alpha_site", "alpha_source"].includes(name)) throw new Error(`Wait for worker integration before using ${name}`);
+    if (!["read", "grep", "ast_grep", "lsp", "edit", "write", "alpha_spawn", "alpha_continue", "alpha_worker_resolve", "alpha_capability_search", "alpha_capability_mcp", "alpha_inspect", "alpha_wait", "alpha_cancel", "alpha_integrate", "alpha_send", "alpha_inbox", "alpha_browser", "alpha_plan", "alpha_step", "alpha_gap", "alpha_gap_resolve", "alpha_expert_search", "alpha_search", "alpha_crawl", "alpha_site", "alpha_source"].includes(name)) throw new Error(`Wait for worker integration before using ${name}`);
   }
 
   async spawn(orders: WorkOrder[], maxParallel = this.maxParallel): Promise<string[]> {

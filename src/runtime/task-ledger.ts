@@ -4,9 +4,12 @@ import { constants } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isAllowedModelSelector } from "./model-policy";
 import { excludedSourceDirectory } from "./source-review";
+import { taskProfile } from "./task-profile";
 
 export type EvidenceKind = "build" | "test" | "browser" | "asset" | "preview" | "source" | "artifact";
 export type TaskType = "web-product" | "code-change" | "research" | "file-work" | "general";
+
+/** Task types whose coordinator works alone instead of dispatching subagents. */
 export type PermissionMode = "ask" | "auto" | "full";
 export type TaskPhase = "plan" | "plan-review" | "execute";
 export interface GoalBudget { maxToolCalls: number; wallTimeMs: number; maxTotalToolCalls: number; totalWallTimeMs: number }
@@ -53,7 +56,7 @@ export interface LocalPreview {
 
 export interface RunRecord {
   model: string;
-  stage?: "coordinator" | "implementation" | "review" | "worker";
+  stage?: "coordinator" | "implementation" | "review" | "worker" | "answer";
   instanceId?: string;
   thinkingPolicyVersion?: number;
   contractVersion?: number;
@@ -66,9 +69,23 @@ export interface RunRecord {
   childElapsedMs?: number;
   usageIncomplete?: boolean;
   usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number };
+  /** Size of the fixed prompt and tool definitions this run's session sent with every request. */
+  prompt?: { systemTokens: number; toolTokens: number; tools: number; contextShare: number | null; exact: boolean };
   outcome: "returned" | "cancelled" | "budget" | "error" | "needs-input";
   failureReason?: string;
   recordedAt: string;
+}
+
+/** Tool calls and time the task's own work has used; answering follow-up questions does not count against it. */
+export function taskBudgetUsed(runs: readonly RunRecord[] | undefined): { toolCalls: number; elapsedMs: number } {
+  let toolCalls = 0;
+  let elapsedMs = 0;
+  for (const run of runs ?? []) {
+    if (run.stage === "answer") continue;
+    toolCalls += run.toolCalls;
+    elapsedMs += run.elapsedMs;
+  }
+  return { toolCalls, elapsedMs };
 }
 
 export interface GuidanceRecord {
@@ -382,11 +399,12 @@ export class TaskLedger {
       const latest = this.state.evidence.findLast(item => item.criterionId === criterion.id && (item.contractVersion ?? 1) === (this.state.contractVersion ?? 1) && item.revision === this.state.revision && (criterion.kind !== "browser" || item.previewId === this.state.preview?.id));
       return !latest?.passed;
     }).map(criterion => criterion.id);
-    if ((this.state.taskType ?? "web-product") === "web-product" && (!this.state.preview || this.state.preview.revision !== this.state.revision)) gaps.push("local-preview");
+    if (taskProfile(this.state.taskType).acceptance === "web-preview" && (!this.state.preview || this.state.preview.revision !== this.state.revision)) gaps.push("local-preview");
     if (this.state.development?.enabled && (this.state.development.review?.verdict !== "pass" || this.state.development.review.revision !== this.state.revision || this.state.development.review.contractVersion !== (this.state.contractVersion ?? 1))) gaps.push("development-review");
     if (this.state.cognition?.gaps.some(item => !item.resolvedAt)) gaps.push("capability-gap");
     if (this.state.workerRequests?.some(item => ["open", "awaiting-approval", "uncertain"].includes(item.status))) gaps.push("worker-request");
-    if (this.state.designatedExpertId && !this.state.cognition?.instances?.some(item => item.expert?.id === this.state.designatedExpertId && item.status === "completed" && item.contractVersion === (this.state.contractVersion ?? 1))) gaps.push("designated-expert");
+    // Without subagents to dispatch, the coordinator itself works from the designated expert's persona and Skills.
+    if (this.state.designatedExpertId && taskProfile(this.state.taskType).dispatch && !this.state.cognition?.instances?.some(item => item.expert?.id === this.state.designatedExpertId && item.status === "completed" && item.contractVersion === (this.state.contractVersion ?? 1))) gaps.push("designated-expert");
     if (this.state.planApproval && this.state.phase === "execute" && this.state.cognition?.steps.some(step => step.status !== "complete" && step.status !== "cancelled")) gaps.push("plan-steps");
     if (this.state.cognition?.instances?.some(item => item.order && ["queued", "running", "returned"].includes(item.status))) gaps.push("worker-integration");
     return gaps;

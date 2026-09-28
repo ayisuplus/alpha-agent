@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AgentPresetStore, presetSnapshot, verifyPresetSnapshot } from "../src/runtime/agent-presets";
@@ -36,6 +36,7 @@ test("every core specialty is discoverable and dispatches a readable immutable S
       "paper-writer": "论文写作 审稿意见 scientific writing manuscript",
       "content-strategist": "内容策划 平台改编 content strategy copywriting",
       "story-writer": "故事人物 剧本 对白 story screenplay narrative",
+      "article-writer": "长文 改稿润色 评论观点 科普解读 演讲稿 随笔 essay nonfiction",
       "visual-director": "分镜 音画 视频生成包 visual storyboard video audio",
       "short-video-operator": "抖音起号 流量池 发布优化 完播率 快手 douyin short video growth",
       "bilibili-operator": "B站分区 中长视频 选题系列化 弹幕 三连 投稿 bilibili danmaku",
@@ -65,6 +66,12 @@ test("every core specialty is discoverable and dispatches a readable immutable S
       const read = await createSkillResourceTool(skills).execute("probe", { id: skills[0].name, path: "SKILL.md" }, undefined as never, undefined as never, undefined as never);
       expect(read.isError).not.toBe(true);
       expect(read.content).toEqual([{ type: "text", text: await readFile(skills[0].filePath, "utf8") }]);
+      // Every reference a Skill or persona points to travels with the dispatched snapshot.
+      const skillText = await readFile(skills[0].filePath, "utf8");
+      for (const path of new Set([...`${skillText}\n${expert.instructions}`.matchAll(/references\/[a-z0-9-]+\.md/g)].map(match => match[0]))) {
+        const resource = await createSkillResourceTool(skills).execute("probe", { id: skills[0].name, path }, undefined as never, undefined as never, undefined as never);
+        expect(resource.isError, `${templateId}: ${path}`).not.toBe(true);
+      }
       expect(workerSystemPrompt(order, expert).join("\n")).toContain(expert.instructions);
     }
     expect(await new SkillPluginStore(root).loadSkills()).toEqual([]);
@@ -87,9 +94,38 @@ test("curation retires selected legacy experts without deleting snapshots or ove
     await store.setEnabled(edited.id, false);
     await store.installCoreExperts([]);
     expect(await store.get(edited.id)).toMatchObject({ name: edited.name, hash: edited.hash, enabled: false });
-    expect(await store.list()).toHaveLength(31);
+    expect(await store.list()).toHaveLength(32);
     await store.delete(legacy.id);
     expect(await store.loadBundledSkills(frozen)).toHaveLength(1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("syncing core experts adopts the current template, keeps enabled state and leaves frozen snapshots readable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-core-sync-"));
+  try {
+    const templates = join(root, "templates");
+    await cp(join(import.meta.dir, "..", "presets", "agents"), templates, { recursive: true });
+    const dataRoot = join(root, "data");
+    const before = new AgentPresetStore(dataRoot, templates);
+    await before.syncCoreExperts(["paper-writer", "data-analyst"]);
+    await before.setEnabled("core-data-analyst", false);
+    const frozen = presetSnapshot(await before.get("core-paper-writer"));
+    await writeFile(join(templates, "paper-writer.md"), `${frozen.instructions}
+
+新增的写作规则。`);
+    const after = new AgentPresetStore(dataRoot, templates);
+    await expect(after.syncCoreExperts(["paper-writer", "missing-template"])).rejects.toThrow("模板不存在");
+    expect(presetSnapshot(await after.get("core-paper-writer"))).toEqual(frozen);
+    const [synced] = await after.syncCoreExperts(["paper-writer"]);
+    expect(synced.instructions).toContain("新增的写作规则");
+    expect(synced.hash).not.toBe(frozen.hash);
+    verifyPresetSnapshot(presetSnapshot(synced));
+    expect(await after.loadBundledSkills(frozen)).toHaveLength(1);
+    await after.syncCoreExperts(["data-analyst"]);
+    expect((await after.get("core-data-analyst")).enabled).toBe(false);
+    await after.importLocalBatch([{ id: "core-frontend", name: "Mine", description: "Keep", instructions: "Keep me", skills: [], source: { url: "local", revision: "1", path: "mine" } }]);
+    await expect(after.syncCoreExperts(["frontend"])).rejects.toThrow("ID 冲突");
+    expect((await after.get("core-frontend")).instructions).toBe("Keep me");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -112,7 +148,7 @@ test("templates are optional, user experts persist, and deleted experts leave fr
     const store = new AgentPresetStore(root);
     const initial = await store.list();
     expect(initial).toEqual([]);
-    expect(await store.templates()).toHaveLength(29);
+    expect(await store.templates()).toHaveLength(30);
     expect((await store.get("frontend")).skillIds).toEqual(["alpha-core:implement-frontend"]);
     const original = await store.get("frontend");
     const copy = await store.copy("frontend");
@@ -290,4 +326,25 @@ test("workbench API lists, copies and edits roles while rejecting another origin
     if (child) await child.exited;
     await rm(root, { recursive: true, force: true });
   }
+}, 60_000);
+
+test("the library groups experts by the business line of the core template they derive from", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-expert-lines-"));
+  try {
+    const store = new AgentPresetStore(root);
+    const templates = await store.templates();
+    expect(templates.every(item => item.line)).toBe(true);
+    expect(templates.find(item => item.id === "xiaohongshu-planner")?.line).toBe("content");
+    expect(templates.find(item => item.id === "gameplay-engineer")?.line).toBe("game");
+    await store.installCoreExperts([]);
+    const copy = await store.copy("core-frontend");
+    const own = await store.create({ name: "自写专家", description: "只做一件事", instructions: "按用户说明工作。" });
+    const catalog = await store.catalog();
+    expect(catalog.find(item => item.id === "core-frontend")?.line).toBe("development");
+    expect(catalog.find(item => item.id === copy.id)?.line).toBe("development");
+    expect(catalog.find(item => item.id === own.id)?.line).toBeUndefined();
+    // Lines are display-only: stored experts and dispatch snapshots never carry them.
+    expect((await store.list()).some(item => item.line)).toBe(false);
+    expect(presetSnapshot(catalog.find(item => item.id === "core-frontend")!)).not.toHaveProperty("line");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

@@ -262,13 +262,15 @@ test("model endpoints work against an isolated OMP store and never return keys",
     child = server.child;
     const { base } = server;
     const json = { "content-type": "application/json", origin: base };
-    type Catalog = { models: Array<{ selector: string; provider: string; available: boolean }>; providers: Array<{ id: string; origin: string | null; storedKey: boolean; models: number }>; builtin: string };
+    type Catalog = { models: Array<{ selector: string; provider: string; available: boolean }>; providers: Array<{ id: string; origin: string | null; storedKey: boolean; allowed: boolean; models: number }>; builtin: string };
 
     const catalog = await fetch(`${base}/api/models`).then(response => response.json()) as Catalog;
     expect(catalog.builtin).toBe("xiaomi-token-plan-cn/mimo-v2.6-flash");
-    expect(catalog.providers.map(item => item.id).sort()).toEqual(["deepseek", "xiaomi-token-plan-cn"]);
+    // Every OMP provider is listed so it can be allowed; only allowed ones contribute selectable models.
+    expect(catalog.providers.filter(item => item.allowed).map(item => item.id).sort()).toEqual(["deepseek", "xiaomi-token-plan-cn"]);
+    expect(catalog.providers.some(item => item.id === "alibaba-token-plan" && !item.allowed)).toBe(true);
     expect(catalog.models.every(item => ["deepseek", "xiaomi-token-plan-cn"].includes(item.provider))).toBe(true);
-    const provider = catalog.providers.find(item => item.origin === null && item.models > 0);
+    const provider = catalog.providers.find(item => item.allowed && item.origin === null && item.models > 0);
     expect(provider).toBeDefined();
     const key = "sk-alpha-test-0123456789";
     const saved = await fetch(`${base}/api/providers/${provider!.id}/key`, { method: "PUT", headers: json, body: JSON.stringify({ apiKey: key }) });
@@ -349,4 +351,29 @@ test("storage API preserves current previews and reports local diagnostics", asy
     if (child) await child.exited;
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
+}, 60_000);
+
+test("follow-up questions are validated and the task list reports every run in progress", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-ask-api-"));
+  let child: ReturnType<typeof Bun.spawn> | null = null;
+  try {
+    const product = join(root, "products", "sample");
+    await mkdir(product, { recursive: true });
+    const ledger = await TaskLedger.create(join(root, ".alpha"), { objective: "Explain the sample", projectRoot: product, criteria: [{ id: "build", description: "Build", kind: "build" }] });
+    const env: Record<string, string | undefined> = { ...process.env, ALPHA_WORKSPACE_ROOT: root, ALPHA_OMP_AGENT_DIR: join(root, "omp-agent") };
+    delete env.OMP_AUTH_BROKER_URL;
+    delete env.OMP_AUTH_BROKER_TOKEN;
+    const server = await startServer(root, env);
+    child = server.child;
+    const { base } = server;
+    const ask = (id: string, question: unknown) => fetch(`${base}/api/tasks/${id}/ask`, { method: "POST", headers: { "content-type": "application/json", origin: base }, body: JSON.stringify({ question }) });
+    expect((await ask(ledger.state.id, "  ")).status).toBe(400);
+    expect((await ask(ledger.state.id, "x".repeat(8_001))).status).toBe(400);
+    expect((await ask("11111111-1111-4111-8111-111111111111", "What changed?")).status).toBe(404);
+    expect((await fetch(`${base}/api/tasks/${ledger.state.id}/ask`, { method: "POST", headers: { origin: "http://untrusted.example", "content-type": "text/plain" }, body: JSON.stringify({ question: "ignored" }) })).status).toBe(403);
+    const list = await fetch(`${base}/api/tasks`).then(response => response.json()) as { tasks: Array<{ id: string; running: boolean; runKind: string | null }>; runs: unknown[]; operations: unknown[] };
+    expect(list.runs).toEqual([]);
+    expect(list.operations).toEqual([]);
+    expect(list.tasks.find(task => task.id === ledger.state.id)).toMatchObject({ running: false, runKind: null });
+  } finally { child?.kill(); if (child) await child.exited; await rm(root, { recursive: true, force: true }); }
 }, 60_000);

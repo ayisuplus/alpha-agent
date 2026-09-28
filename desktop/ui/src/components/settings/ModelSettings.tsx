@@ -6,7 +6,7 @@ import { useStore } from "../../state/store";
 import { deleteApiKey, loadModels, saveApiKey, store, updateSettings } from "../../state/workbench";
 import { ModelPicker, modelName } from "../ModelPicker";
 import { Badge, Button, IconButton, Spinner } from "../ui";
-import { Field, SectionTitle } from "./controls";
+import { Field, SectionTitle, Toggle } from "./controls";
 
 function originText(provider: ProviderInfo): { text: string; tone: "success" | "neutral" } {
   switch (provider.origin) {
@@ -20,7 +20,7 @@ function originText(provider: ProviderInfo): { text: string; tone: "success" | "
   }
 }
 
-function ProviderRow({ provider }: { provider: ProviderInfo }) {
+function ProviderRow({ provider, allowedIds }: { provider: ProviderInfo; allowedIds: string[] }) {
   const [editing, setEditing] = useState(false);
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
@@ -33,6 +33,13 @@ function ProviderRow({ provider }: { provider: ProviderInfo }) {
     const saved = await saveApiKey(provider.id, key);
     setBusy(false);
     if (saved) { setKey(""); setEditing(false); }
+  };
+  const setAllowed = async (allowed: boolean) => {
+    const next = allowed ? [...allowedIds, provider.id] : allowedIds.filter(id => id !== provider.id);
+    if (!next.length) return;
+    setBusy(true);
+    if (await updateSettings({ model: { providers: next } })) await loadModels(true);
+    setBusy(false);
   };
   const remove = async () => {
     if (!window.confirm(`删除 ${provider.id} 的 API Key？\n它保存在 OMP 共享凭据库，删除后 OMP 命令行也无法再使用。`)) return;
@@ -49,6 +56,10 @@ function ProviderRow({ provider }: { provider: ProviderInfo }) {
         <span>{provider.available}/{provider.models} 个模型可用</span>
       </span>
     </div>
+    <label className="provider-allow" title={provider.allowed && allowedIds.length === 1 ? "至少保留一个服务商" : undefined}>
+      <span>Alpha 可用</span>
+      <Toggle label={`允许 Alpha 使用 ${provider.id}`} checked={provider.allowed} disabled={busy || (provider.allowed && allowedIds.length === 1)} onChange={value => void setAllowed(value)} />
+    </label>
     {editing
       ? <form className="provider-key-form" onSubmit={event => { event.preventDefault(); void save(); }}>
         <input type="password" autoFocus autoComplete="off" spellCheck={false} value={key} onChange={event => setKey(event.target.value)}
@@ -57,8 +68,9 @@ function ProviderRow({ provider }: { provider: ProviderInfo }) {
         <Button size="sm" variant="ghost" type="button" onClick={() => { setEditing(false); setKey(""); }}>取消</Button>
       </form>
       : <span className="provider-actions">
-        {managed && <Button size="sm" icon={KeyRound} onClick={() => setEditing(true)} disabled={busy}>{provider.storedKey ? "更换 Key" : "添加 Key"}</Button>}
-        {managed && provider.storedKey && <Button size="sm" variant="danger" onClick={() => void remove()} busy={busy}>删除</Button>}
+        {managed && provider.allowed && <Button size="sm" icon={KeyRound} onClick={() => setEditing(true)} disabled={busy}>{provider.storedKey ? "更换 Key" : "添加 Key"}</Button>}
+        {managed && provider.allowed && provider.storedKey && <Button size="sm" variant="danger" onClick={() => void remove()} busy={busy}>删除</Button>}
+        {managed && !provider.allowed && <span className="provider-hint">允许后可添加 Key</span>}
         {!managed && <span className="provider-hint">在 OMP 中管理</span>}
       </span>}
   </div>;
@@ -79,9 +91,9 @@ export function ModelSettings() {
   const providers = useMemo(() => {
     const needle = filter.trim().toLocaleLowerCase();
     const list = (catalog?.providers ?? []).filter(provider => !needle || provider.id.toLocaleLowerCase().includes(needle));
-    return needle || showAll ? list : list.filter(provider => provider.origin !== null);
+    return needle || showAll ? list : list.filter(provider => provider.allowed || provider.origin !== null);
   }, [catalog, filter, showAll]);
-  const hidden = (catalog?.providers.length ?? 0) - (catalog?.providers.filter(provider => provider.origin !== null).length ?? 0);
+  const hidden = (catalog?.providers.length ?? 0) - (catalog?.providers.filter(provider => provider.allowed || provider.origin !== null).length ?? 0);
 
   const runTest = async () => {
     if (!effective) return;
@@ -130,11 +142,12 @@ export function ModelSettings() {
       <IconButton icon={RefreshCw} label="重新读取" onClick={() => void refresh()} disabled={refreshing} />
     </div>
     <p className="settings-note warning">API Key 保存在 OMP 的共享凭据库中，OMP 命令行也会使用它；Alpha 不会显示已保存的 Key。通过 OAuth、环境变量或配置文件认证的服务商请在 OMP 中管理。</p>
+    <p className="settings-note">打开「Alpha 可用」后，该服务商的模型才会出现在模型选择中；关闭时，已选中的该服务商模型会恢复为默认。</p>
     <input className="settings-text settings-filter" value={filter} onChange={event => setFilter(event.target.value)} placeholder="筛选服务商" aria-label="筛选服务商" />
     {!catalog
       ? <p className="settings-loading"><Spinner size={14} />正在读取模型与认证…</p>
       : <div className="provider-list">
-        {providers.map(provider => <ProviderRow key={provider.id} provider={provider} />)}
+        {providers.map(provider => <ProviderRow key={provider.id} provider={provider} allowedIds={settings.model.providers} />)}
         {!providers.length && <p className="settings-note">{filter ? "没有匹配的服务商" : "还没有已认证的服务商。展开全部服务商来添加 API Key。"}</p>}
       </div>}
     {catalog && !filter && hidden > 0 && <button className="link-button settings-more" onClick={() => setShowAll(value => !value)}>

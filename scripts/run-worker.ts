@@ -1,6 +1,7 @@
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { NeedsInputError, runTask } from "../src/runtime/omp-runner";
+import { shutdownLanguageServers } from "../src/runtime/omp-settings";
 import { hashSkillDirectory } from "../src/plugins/third-party";
 import type { WorkOrder, WorkerResult } from "../src/runtime/work-orders";
 import type { AgentPresetSnapshot } from "../src/runtime/agent-presets";
@@ -89,3 +90,6 @@ try {
     process.exitCode = 1;
   }
 }
+// Language servers started by this worker's session (and their pipes) would otherwise keep the process alive.
+await shutdownLanguageServers();
+process.exit(process.exitCode ?? 0);

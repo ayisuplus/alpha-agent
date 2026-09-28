@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TaskLedger } from "../src/runtime/task-ledger";
+import { TaskLedger, taskBudgetUsed, type RunRecord } from "../src/runtime/task-ledger";
 import type { WorkOrder } from "../src/runtime/work-orders";
 import { taskPrompt } from "../src/runtime/omp-runner";
 
@@ -213,4 +213,10 @@ test("an uncertain worker request is re-resolvable instead of blocking completio
     expect(ledger.completionGaps()).not.toContain("worker-request");
     await expect(ledger.updateWorkerRequest(request.id, { status: "rejected" })).rejects.toThrow("already resolved");
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("answers to follow-up questions do not use up the task's own budget", () => {
+  const run = (stage: RunRecord["stage"], toolCalls: number, elapsedMs: number): RunRecord => ({ model: "deepseek/deepseek-v4-pro", stage, toolCalls, elapsedMs, maxToolCalls: 120, wallTimeMs: 1_800_000, outcome: "returned", recordedAt: "2026-09-27T10:00:00.000Z" });
+  expect(taskBudgetUsed([run("coordinator", 30, 60_000), run("answer", 12, 20_000), run(undefined, 5, 1_000)])).toEqual({ toolCalls: 35, elapsedMs: 61_000 });
+  expect(taskBudgetUsed(undefined)).toEqual({ toolCalls: 0, elapsedMs: 0 });
 });

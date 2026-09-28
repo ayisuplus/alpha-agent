@@ -10,6 +10,8 @@ const SERVER_MESSAGES: Record<string, string> = {
   "Guidance is required": "补充要求不能为空",
   "Task not found": "找不到这个任务",
   "Task is not running": "任务已经不在运行",
+  "Operation is not cancellable": "这个操作已经结束或不能停止",
+  "Task workspace is unavailable": "任务目录不可用",
   "Task is outside products": "任务目录不在当前工作区的 products 内",
   "Task is stopped": "任务已停止，请先继续修复",
   "Build failed": "构建失败",
@@ -126,12 +128,13 @@ export const api = {
     files.forEach(file => form.append("files", file));
     return request<{ taskId: string; runId: string }>("/api/workflows", { method: "POST", body: form });
   },
-  startGeneral: (input: { objective: string; projectId: string; mountId: string; files: File[]; skillIds: string[]; pluginIds: string[]; model: string | null; startMode: "plan" | "execute"; continueUntilAccepted: boolean }) => {
+  startGeneral: (input: { objective: string; projectId: string; mountId: string; files: File[]; skillIds: string[]; pluginIds: string[]; model: string | null; expertId?: string; startMode: "plan" | "execute"; continueUntilAccepted: boolean }) => {
     const form = new FormData();
     form.set("objective", input.objective);
     if (input.projectId) form.set("projectId", input.projectId);
     if (input.mountId) form.set("mountId", input.mountId);
     if (input.model) form.set("model", input.model);
+    if (input.expertId) form.set("expertId", input.expertId);
     form.set("startMode", input.startMode);
     form.set("continueUntilAccepted", String(input.continueUntilAccepted));
     form.set("skillIds", JSON.stringify(input.skillIds));
@@ -169,6 +172,8 @@ export const api = {
   approvePlan: (id: string, expected: { contractVersion: number; cognitionRevision: number; sourceRevision: string }) => post<{ runId: string }>(`${taskPath(id)}/plan/approve`, expected),
   setGoal: (id: string, enabled: boolean) => send<{ task: TaskView }>("PATCH", `${taskPath(id)}/goal`, { enabled }).then(result => result.task),
   guidance: (id: string, text: string) => post<{ id: string; status?: string }>(`${taskPath(id)}/guidance`, { text }),
+  /** Asks a question about the task; the answer reads the workspace but never changes the task or its files. */
+  ask: (id: string, question: string) => post<{ taskId: string; runId: string }>(`${taskPath(id)}/ask`, { question }),
   cancel: (runId: string) => post<{ stopping: boolean }>(`/api/tasks/${encodeURIComponent(runId)}/cancel`),
   cancelOperation: (id: string) => post<{ stopping: boolean }>(`/api/operations/${encodeURIComponent(id)}/cancel`),
   verify: (id: string) => post<{ task?: TaskView; paused?: boolean }>(`${taskPath(id)}/verify`),

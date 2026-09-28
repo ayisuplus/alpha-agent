@@ -105,6 +105,17 @@ test("a user-designated expert stays in the plan and must actually participate",
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("general work takes the designated expert's perspective without waiting for a subagent", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-general-expert-"));
+  try {
+    const projectRoot = join(root, "project");
+    await mkdir(projectRoot);
+    const ledger = await TaskLedger.create(join(root, "state"), { objective: "Write notes", projectRoot, taskType: "general", designatedExpertId: "expert-chosen", criteria: [] });
+    expect(ledger.state.designatedExpertId).toBe("expert-chosen");
+    expect(ledger.completionGaps()).not.toContain("designated-expert");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("neutral read-only work succeeds without edits; reviewer file access is limited", async () => {
   const { root, projectRoot, ledger } = await fixture();
   try {

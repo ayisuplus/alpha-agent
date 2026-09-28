@@ -40,6 +40,7 @@ export function App() {
   const locked = useStore(store, previewLocked);
   const workspaceView = useStore(store, state => state.workspaceView);
   const selectedId = useStore(store, state => state.selectedId);
+  const panelOpen = useStore(store, state => state.panel !== null);
   const [innerWidth, setInnerWidth] = useState(() => window.innerWidth);
   // On a narrow window the task list folds away; expanding it by hand holds for this session only.
   const [expandedWhileNarrow, setExpandedWhileNarrow] = useState(false);
@@ -78,8 +79,11 @@ export function App() {
       notify("浏览器正在使用预览，操作结束后才能收起", "info");
       return;
     }
-    if (workspaceView === "preview") closeWorkspace();
-    else showPreview();
+    if (workspaceView === "preview" && (!panelOpen || locked)) closeWorkspace();
+    else {
+      if (panelOpen) closePanel();
+      showPreview();
+    }
   };
 
   const setScale = (next: number) => {
@@ -118,8 +122,10 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const expanded = workspaceView !== "closed";
-  const showingPreview = workspaceView === "preview";
+  // Settings and automations are not about the selected task, so its review panel steps aside for them
+  // (it stays only while the browser is operating the preview) and returns unchanged when they close.
+  const expanded = workspaceView !== "closed" && (!panelOpen || locked);
+  const showingPreview = expanded && workspaceView === "preview";
 
   const setRatio = (ratio: number) => void updateSettings({ ui: { previewRatio: Math.min(0.8, Math.max(0.2, ratio)) } }, { debounce: true });
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {

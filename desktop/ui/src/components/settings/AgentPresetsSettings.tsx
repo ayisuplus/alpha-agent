@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { Plus, Search } from "lucide-react";
 import { api } from "../../api/client";
-import type { AgentPreset, AgentPresetSummary } from "../../api/types";
+import type { AgentPreset, AgentPresetSummary, ExpertLine } from "../../api/types";
+import { EXPERT_LINES, expertLineLabel } from "../../state/labels";
 import { notify } from "../../state/workbench";
 import { Markdown } from "../Markdown";
 import { Button } from "../ui";
@@ -8,8 +10,11 @@ import { SectionTitle, Toggle } from "./controls";
 import "./agent-presets.css";
 
 type Draft = Pick<AgentPreset, "name" | "description" | "instructions"> & { skillIds: string };
+type LineFilter = ExpertLine | "all" | "custom";
 
 export function AgentPresetsSettings() {
+  const [query, setQuery] = useState("");
+  const [line, setLine] = useState<LineFilter>("all");
   const [presets, setPresets] = useState<AgentPresetSummary[]>([]);
   const [templates, setTemplates] = useState<AgentPresetSummary[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -104,30 +109,52 @@ export function AgentPresetsSettings() {
     finally { setBusy(false); }
   };
 
-  const enabled = presets.filter(item => item.enabled);
-  const disabled = presets.filter(item => !item.enabled);
-  const presetRow = (item: AgentPresetSummary) => <div className="agent-preset-row" key={item.id}>
+  const needle = query.trim().toLocaleLowerCase();
+  const matchesQuery = (item: AgentPresetSummary) => !needle || `${item.name} ${item.description}`.toLocaleLowerCase().includes(needle);
+  const inLine = (item: AgentPresetSummary) => line === "all" || (line === "custom" ? !item.line : item.line === line);
+  const visible = (item: AgentPresetSummary) => matchesQuery(item) && inLine(item);
+  const enabled = presets.filter(item => item.enabled && visible(item));
+  const disabled = presets.filter(item => !item.enabled && visible(item));
+  const shownTemplates = templates.filter(visible);
+  const lineCount = (id: LineFilter) => presets.filter(item => matchesQuery(item) && (id === "all" || (id === "custom" ? !item.line : item.line === id))).length;
+  const lineFilters: Array<{ id: LineFilter; label: string }> = [
+    { id: "all", label: "全部" },
+    ...EXPERT_LINES.filter(item => item.id !== "general").map(item => ({ id: item.id, label: item.label })),
+    { id: "custom", label: expertLineLabel(undefined) },
+  ];
+  const skillSummary = (item: AgentPresetSummary) => item.package?.skills.length ? `人设 + ${item.package.skills.length} 个 Skill` : item.builtin ? "核心模板" : "待补齐 Skill";
+  const presetRow = (item: AgentPresetSummary) => <div className="agent-preset-row" key={item.id} data-selected={selectedId === item.id || undefined}>
     <button className="agent-preset-select" aria-current={selectedId === item.id ? "true" : undefined} onClick={() => setSelectedId(item.id)}>
-      <strong>{item.name}</strong><small>{item.description}</small>
-      <small>{item.package?.skills.length ? `人设 + ${item.package.skills.length} 个 Skill` : "待补齐 Skill"}</small>
+      <span className="agent-preset-name"><strong>{item.name}</strong>{line === "all" && <span className="agent-preset-line">{expertLineLabel(item.line)}</span>}</span>
+      <small className="agent-preset-description">{item.description}</small>
+      <small className="agent-preset-meta">{skillSummary(item)}</small>
     </button>
-    <Toggle label={`启用 ${item.name}`} checked={item.enabled} disabled={busy} onChange={value => void updateEnabled(item, value)} />
+    {!item.builtin && <Toggle label={`启用 ${item.name}`} checked={item.enabled} disabled={busy} onChange={value => void updateEnabled(item, value)} />}
   </div>;
+  const empty = !enabled.length && !disabled.length && !shownTemplates.length;
 
   return <section className="agent-presets-settings">
-    <SectionTitle title="专家库" description="专家由人设和可执行方法 Skill 组成。只启用当前需要的专家；停用保留原内容与历史任务快照。核心模板覆盖全栈开发、AI 科研、内容创作、平面游戏开发与文档办公。" />
-    <Button size="sm" disabled={busy} onClick={() => { setSelectedId(""); setSelected(null); setDraft({ name: "", description: "", instructions: "", skillIds: "" }); }}>创建专家</Button>
+    <SectionTitle title="专家库" description="专家由人设和可执行方法 Skill 组成。启用的专家会进入任务派发的候选名单；停用保留原内容与历史任务快照。" />
+    <div className="expert-toolbar">
+      <label className="expert-search">
+        <Search size={14} aria-hidden />
+        <input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索专家名称或擅长领域" aria-label="搜索专家" />
+      </label>
+      <Button size="sm" icon={Plus} disabled={busy} onClick={() => { setSelectedId(""); setSelected(null); setDraft({ name: "", description: "", instructions: "", skillIds: "" }); }}>创建专家</Button>
+    </div>
+    <div className="expert-lines" role="radiogroup" aria-label="按业务线筛选">
+      {lineFilters.map(item => <button key={item.id} role="radio" aria-checked={line === item.id} onClick={() => setLine(item.id)}>
+        {item.label}{lineCount(item.id) > 0 && <small>{lineCount(item.id)}</small>}
+      </button>)}
+    </div>
     <div className="agent-presets-layout">
       <div className="agent-presets-list" aria-label="专家库">
-        <h3>已启用 · {enabled.length}</h3>
+        {!!enabled.length && <h3>已启用 · {enabled.length}</h3>}
         {enabled.map(presetRow)}
-        {!enabled.length && <p>暂无启用的专家。可以创建专家，也可以从下面的模板添加。</p>}
-        {!!disabled.length && <details><summary>已停用 · {disabled.length}</summary>{disabled.map(presetRow)}</details>}
-        <details><summary>核心模板 · {templates.length}</summary>
-        {templates.map(item => <div className="agent-preset-row" key={item.id}>
-          <button className="agent-preset-select" aria-current={selectedId === item.id ? "true" : undefined} onClick={() => setSelectedId(item.id)}><strong>{item.name}</strong><small>{item.description}</small></button>
-        </div>)}
-        </details>
+        {!presets.some(item => item.enabled) && <p className="agent-presets-empty">暂无启用的专家。可以创建专家，也可以从下面的核心模板添加。</p>}
+        {!!disabled.length && <details open={!!needle || line !== "all"}><summary>已停用 · {disabled.length}</summary>{disabled.map(presetRow)}</details>}
+        {!!shownTemplates.length && <details open={!!needle}><summary>核心模板 · {shownTemplates.length}</summary>{shownTemplates.map(presetRow)}</details>}
+        {empty && <p className="agent-presets-empty">{needle ? "没有匹配的专家。" : "这个分类下还没有专家。"}</p>}
       </div>
       {selected && draft && <div className="agent-preset-detail">
         <div className="agent-preset-title"><h3>{selected.name}</h3><span>{selected.builtin ? "可选模板" : "专家"} · {selected.hash.slice(0, 8)}</span></div>
@@ -155,6 +182,7 @@ export function AgentPresetsSettings() {
         <label>随专家打包的已安装 Skill（逗号分隔）<input value={draft.skillIds} onChange={event => setDraft({ ...draft, skillIds: event.target.value })} placeholder="plugin:skill" /></label>
         <Button size="sm" busy={busy} disabled={busy} onClick={() => void create()}>添加专家</Button>
       </div>}
+      {!selected && !draft && <p className="agent-preset-detail agent-preset-placeholder">选择一位专家，查看人设、随包 Skill 与来源。</p>}
     </div>
   </section>;
 }

@@ -7,7 +7,6 @@ import { useStore } from "../../state/store";
 import { closeWorkspace, notify, previewLocked, showPreview, store, updateSettings } from "../../state/workbench";
 import { Badge, Button } from "../ui";
 import { Field, NumberInput, SectionTitle, Segmented, Toggle } from "./controls";
-import { WebSettings } from "./WebSettings";
 
 function useSettings(): Settings {
   return useStore(store, state => state.settings)!;
@@ -17,6 +16,10 @@ export function RunSettings() {
   const settings = useSettings();
   return <section>
     <SectionTitle title="运行" description="限制每一轮模型运行的规模。超出上限时本轮会停止并记录为「达到预算」，之后可以继续修复。" />
+    <Field label="同时运行的任务数" description="不同任务可以并行；同一任务、同一文件夹的操作仍会依次进行，浏览器验收排队使用预览。默认 3。">
+      <NumberInput label="同时运行的任务数" value={settings.budget.maxParallelTasks} min={1} max={8} unit="个"
+        onCommit={value => void updateSettings({ budget: { maxParallelTasks: value } })} />
+    </Field>
     <Field label="单轮工具调用上限" description="读取、编辑、构建、生成等每次工具调用都计入。默认 120。">
       <NumberInput label="单轮工具调用上限" value={settings.budget.maxToolCalls} min={20} max={400} step={10} unit="次"
         onCommit={value => void updateSettings({ budget: { maxToolCalls: value } })} />
@@ -33,7 +36,6 @@ export function RunSettings() {
       <NumberInput label="任务总模型时长上限" value={settings.budget.totalWallTimeMinutes} min={1} max={1440} step={10} unit="分钟"
         onCommit={value => void updateSettings({ budget: { totalWallTimeMinutes: value } })} />
     </Field>
-    <WebSettings />
   </section>;
 }
 
@@ -109,11 +111,31 @@ export function GenerationSettings() {
   };
 
   return <section>
-    <SectionTitle title="插件" description="内置插件在下一轮任务开始时装载。" />
-    <Field stacked label="ComfyUI" description="内置插件，提供本机图片、配音和视频生成。关闭后模型不会得到它的工具。">
+    <SectionTitle title="插件" description="插件在下一轮任务开始时装载。" />
+    <h3 className="settings-subheading">ComfyUI · 本机图片、配音与视频</h3>
+    <Field label="ComfyUI" description="内置插件，提供本机图片、配音和视频生成。关闭后模型不会得到它的工具。">
       <Toggle label="启用 ComfyUI 插件" checked={enabled} onChange={value => void updateSettings({ plugins: { comfyui: value } })} />
     </Field>
-    <Field stacked label="第三方插件" description="从 GitHub 仓库导入 Skills、Pi Hook 和 .mcp.json。Hook 与 MCP 独立启用；启用后会运行插件代码或连接它声明的服务，请只对信任的插件使用。变更在下一轮任务生效。">
+    <Field stacked label="ComfyUI 地址" description="只能是本机地址。服务需要你自己保持运行；Alpha 不会换用其他生成服务。" disabled={!enabled}>
+      <span className="settings-inline">
+        <input className="settings-text" value={url} aria-label="ComfyUI 地址" spellCheck={false} disabled={!enabled}
+          onChange={event => setUrl(event.target.value)} onBlur={() => void commitUrl()} onKeyDown={event => { if (event.key === "Enter") void commitUrl(); }} />
+        <Button size="sm" onClick={() => void runCheck()} busy={check.state === "checking"} disabled={!enabled}>检测</Button>
+        {check.state === "online" && <Badge tone="success">在线</Badge>}
+        {check.state === "offline" && <Badge tone="warning">未连接</Badge>}
+      </span>
+    </Field>
+    <Field label="图片生成" description="插画、封面、背景等。视频的参考图也依赖它。" disabled={!enabled}>
+      <Toggle label="图片生成" checked={generation.image} disabled={!enabled} onChange={value => void updateSettings({ generation: { image: value } })} />
+    </Field>
+    <Field label="语音生成" description="旁白、欢迎语等配音。" disabled={!enabled}>
+      <Toggle label="语音生成" checked={generation.voice} disabled={!enabled} onChange={value => void updateSettings({ generation: { voice: value } })} />
+    </Field>
+    <Field label="视频生成" description={generation.image ? "从生成的横版参考图制作短视频，耗时较长。" : "视频需要先生成参考图；图片生成关闭时不可用。"} disabled={!enabled || !generation.image}>
+      <Toggle label="视频生成" checked={generation.video && generation.image} disabled={!enabled || !generation.image} onChange={value => void updateSettings({ generation: { video: value } })} />
+    </Field>
+    <h3 className="settings-subheading">第三方插件</h3>
+    <Field stacked label="从 GitHub 安装" description="导入仓库中的 Skills、Pi Hook 和 .mcp.json。Hook 与 MCP 独立启用；启用后会运行插件代码或连接它声明的服务，请只对信任的插件使用。变更在下一轮任务生效。">
       <div className="settings-inline">
         <input className="settings-text" aria-label="插件 GitHub 地址" placeholder="https://github.com/owner/repo.git" value={pluginSource} spellCheck={false}
           onChange={event => setPluginSource(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void installPlugin(); }} />
@@ -136,24 +158,6 @@ export function GenerationSettings() {
           </select>
         </label>)}
       </div>)}
-    </Field>
-    <Field stacked label="ComfyUI 地址" description="只能是本机地址。服务需要你自己保持运行；Alpha 不会换用其他生成服务。" disabled={!enabled}>
-      <span className="settings-inline">
-        <input className="settings-text" value={url} aria-label="ComfyUI 地址" spellCheck={false} disabled={!enabled}
-          onChange={event => setUrl(event.target.value)} onBlur={() => void commitUrl()} onKeyDown={event => { if (event.key === "Enter") void commitUrl(); }} />
-        <Button size="sm" onClick={() => void runCheck()} busy={check.state === "checking"} disabled={!enabled}>检测</Button>
-        {check.state === "online" && <Badge tone="success">在线</Badge>}
-        {check.state === "offline" && <Badge tone="warning">未连接</Badge>}
-      </span>
-    </Field>
-    <Field stacked label="图片生成" description="插画、封面、背景等。视频的参考图也依赖它。" disabled={!enabled}>
-      <Toggle label="图片生成" checked={generation.image} disabled={!enabled} onChange={value => void updateSettings({ generation: { image: value } })} />
-    </Field>
-    <Field stacked label="语音生成" description="旁白、欢迎语等配音。" disabled={!enabled}>
-      <Toggle label="语音生成" checked={generation.voice} disabled={!enabled} onChange={value => void updateSettings({ generation: { voice: value } })} />
-    </Field>
-    <Field stacked label="视频生成" description={generation.image ? "从生成的横版参考图制作短视频，耗时较长。" : "视频需要先生成参考图；图片生成关闭时不可用。"} disabled={!enabled || !generation.image}>
-      <Toggle label="视频生成" checked={generation.video && generation.image} disabled={!enabled || !generation.image} onChange={value => void updateSettings({ generation: { video: value } })} />
     </Field>
   </section>;
 }

@@ -4,8 +4,9 @@ import { api } from "../api/client";
 import type { EvidenceItem, TaskView } from "../api/types";
 import { TaskDetail } from "../app/Thread";
 import { BrowserPane } from "./BrowserPane";
+import { criterionLabel } from "../state/labels";
 import { useStore } from "../state/store";
-import { closeWorkspace, openDetail, showPreview, showReview, showTerminal, store } from "../state/workbench";
+import { closePanel, closeWorkspace, openDetail, showPreview, showReview, showTerminal, store } from "../state/workbench";
 import "./WorkspacePanel.css";
 
 const tabs = [
@@ -15,8 +16,10 @@ const tabs = [
 ] as const;
 
 export function WorkspaceRail() {
+  // Opening a workspace view from settings or automations returns to the task it belongs to.
+  const open = (action: () => void) => { if (store.get().panel) closePanel(); action(); };
   return <aside className="workspace-rail" aria-label="右侧工作区">
-    {tabs.map(({ id, label, icon: Icon, action }) => <button key={id} aria-label={`打开${label}栏`} title={label} onClick={action}>
+    {tabs.map(({ id, label, icon: Icon, action }) => <button key={id} aria-label={`打开${label}栏`} title={label} onClick={() => open(action)}>
       <Icon size={17} aria-hidden /><span>{label}</span>
     </button>)}
   </aside>;
@@ -27,7 +30,6 @@ function ReviewHome({ task }: { task: TaskView | null }) {
   if (!task) return <p className="workspace-empty">选择任务后，可以在这里审查改动和验收证据。</p>;
   const latest = reviews.at(-1);
   return <div className="review-home">
-    <h2>审查</h2>
     <button className="review-link" onClick={() => openDetail({ kind: "info" })}>任务详情 <span>目标、状态和计划 →</span></button>
     <h3>源码改动</h3>
     {latest ? <button className="review-link" onClick={() => openDetail({ kind: "diff", operationId: latest.operationId })}>
@@ -37,7 +39,7 @@ function ReviewHome({ task }: { task: TaskView | null }) {
     {task.criteria.length ? task.criteria.map(criterion => {
       const evidence = task.evidence.findLast(item => item.criterionId === criterion.id && item.current);
       return <button className="review-link" key={criterion.id} onClick={() => openDetail({ kind: "evidence", criterionId: criterion.id, evidenceId: evidence?.id })}>
-        {criterion.description}<span>{evidence ? evidence.passed ? "已通过" : "未通过" : "待验收"} →</span>
+        {criterionLabel(criterion.id, task.criteria)}<span>{evidence ? evidence.passed ? "已通过" : "未通过" : "待验收"} →</span>
       </button>;
     }) : <p className="review-muted">这个任务没有单列的验收项。</p>}
   </div>;

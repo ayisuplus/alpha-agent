@@ -20,9 +20,14 @@ export interface AgentPresetSnapshot {
   basedOn?: string;
 }
 
+export const EXPERT_LINES = ["development", "research", "content", "game", "office", "general"] as const;
+export type ExpertLine = typeof EXPERT_LINES[number];
+
 export interface AgentPreset extends AgentPresetSnapshot {
   enabled: boolean;
   builtin: boolean;
+  /** Business line of the core template the expert derives from; display grouping only, never hashed or snapshotted. */
+  line?: ExpertLine;
 }
 
 export interface LocalExpertImport {
@@ -35,7 +40,7 @@ export interface LocalExpertImport {
 }
 
 type Stored = { enabled: Record<string, boolean>; custom: AgentPresetSnapshot[] };
-type BuiltinIndex = { revision: string; presets: Array<{ id: string; name: string; description: string; file: string; sourcePath?: string; skill?: string }> };
+type BuiltinIndex = { revision: string; presets: Array<{ id: string; name: string; description: string; line?: ExpertLine; file: string; sourcePath?: string; skill?: string }> };
 
 function hash(name: string, description: string, instructions: string, skillIds?: string[], bundle?: ExpertPackage): string {
   return createHash("sha256").update(JSON.stringify(bundle ? [name, description, instructions, skillIds ?? [], bundle] : skillIds ? [name, description, instructions, skillIds] : [name, description, instructions])).digest("hex");
@@ -85,8 +90,30 @@ export class AgentPresetStore {
     return parsed;
   }
 
-  private async builtins(): Promise<AgentPresetSnapshot[]> {
+  private async index(): Promise<BuiltinIndex> {
     const index = JSON.parse(await readFile(join(this.root, "index.json"), "utf8")) as BuiltinIndex;
+    if (index.presets.some(item => item.line !== undefined && !EXPERT_LINES.includes(item.line))) throw new Error("内置角色清单业务线无效");
+    return index;
+  }
+
+  /** Resolves each expert's line through its basedOn chain; imported or hand-written experts have none. */
+  private async withLines(presets: AgentPreset[]): Promise<AgentPreset[]> {
+    const lines = new Map((await this.index()).presets.flatMap(item => item.line ? [[item.id, item.line] as const] : []));
+    const byId = new Map(presets.map(item => [item.id, item]));
+    const lineOf = (preset: AgentPreset): ExpertLine | undefined => {
+      let current: AgentPreset | undefined = preset;
+      for (let depth = 0; current && depth < 8; depth++) {
+        const found = lines.get(current.id) ?? (current.basedOn ? lines.get(current.basedOn) : undefined);
+        if (found) return found;
+        current = current.basedOn ? byId.get(current.basedOn) : undefined;
+      }
+      return undefined;
+    };
+    return presets.map(item => { const line = lineOf(item); return line ? { ...item, line } : item; });
+  }
+
+  private async builtins(): Promise<AgentPresetSnapshot[]> {
+    const index = await this.index();
     return Promise.all(index.presets.map(async item => {
       if (!idPattern.test(item.id) || !/^[a-z0-9-]+\.md$/.test(item.file)) throw new Error("内置角色清单格式无效");
       const instructions = (await readFile(join(this.root, item.file), "utf8")).trim();
@@ -105,7 +132,7 @@ export class AgentPresetStore {
   }
 
   async templates(): Promise<AgentPreset[]> {
-    return (await this.builtins()).filter(item => item.id !== "general").map(item => ({ ...item, builtin: true, enabled: false }));
+    return this.withLines((await this.builtins()).filter(item => item.id !== "general").map(item => ({ ...item, builtin: true, enabled: false })));
   }
 
   /** Explicit curation only; opening the library never changes the user's roster. */
@@ -134,9 +161,43 @@ export class AgentPresetStore {
     });
   }
 
+  /**
+   * Brings the named core experts to the current template version, adding any that are not installed yet. Explicit
+   * only: the caller decides which installed copies are unedited. Enabled state is kept, and earlier package
+   * revisions stay on disk for the tasks that froze them.
+   */
+  syncCoreExperts(templateIds: string[]): Promise<AgentPreset[]> {
+    return this.mutate(async (stored, all) => {
+      const templates = await this.templates();
+      const targets = await Promise.all([...new Set(templateIds)].map(async templateId => {
+        const template = templates.find(item => item.id === templateId);
+        if (!template?.package?.skills.length) throw new Error(`核心专家模板不存在：${templateId}`);
+        verifyPresetSnapshot(template);
+        await this.loadBundledSkills(template);
+        const existing = all.find(item => item.id === `core-${templateId}`);
+        if (existing && existing.basedOn !== templateId) throw new Error(`核心专家 ID 冲突：${existing.id}`);
+        return template;
+      }));
+      for (const template of targets) {
+        const id = `core-${template.id}`;
+        const bundle = await createExpertPackage(this.dataRoot, id, template.name, template.description, template.instructions, template.skillIds!, template);
+        const next: AgentPresetSnapshot = { ...presetSnapshot(template), id, basedOn: template.id, package: bundle, hash: hash(template.name, template.description, template.instructions, template.skillIds, bundle) };
+        const index = stored.custom.findIndex(item => item.id === id);
+        if (index < 0) stored.custom.push(next);
+        else stored.custom[index] = next;
+      }
+      return this.from(stored).filter(item => targets.some(template => item.id === `core-${template.id}`));
+    });
+  }
+
   async list(): Promise<AgentPreset[]> {
     await this.pending;
     return this.from(await this.stored());
+  }
+
+  /** The library as shown in the workbench: every stored expert with its display line. */
+  async catalog(): Promise<AgentPreset[]> {
+    return this.withLines(await this.list());
   }
 
   async get(id: string): Promise<AgentPreset> {

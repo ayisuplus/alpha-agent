@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
-import { CalendarClock, Check, ChevronDown, FolderClosed, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, SlidersHorizontal, Square, X } from "lucide-react";
+import { CalendarClock, Check, ChevronDown, CirclePause, FolderClosed, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings, X } from "lucide-react";
 import type { TaskSummary } from "../api/types";
 import { dayGroup, relativeTime, taskStatus, taskTitle } from "../state/labels";
 import { useStore } from "../state/store";
@@ -8,13 +8,12 @@ import { newTask, openAutomations, openPalette, openSettings, openTask, store } 
 import { IconButton, Spinner, StatusDot } from "./ui";
 import { TaskMenu } from "./TaskMenu";
 import { selectNewTaskProject } from "../state/new-task-draft";
-import { NewTaskSetup } from "./NewTaskSetup";
 import "./Sidebar.css";
 
 function TaskIcon({ task }: { task: TaskSummary }) {
   if (task.running) return <Spinner size={14} />;
   if (task.status === "complete") return <Check className="tone-text-success" size={14} aria-hidden />;
-  if (task.status === "stopped") return <Square className="tone-text-muted" size={12} aria-hidden />;
+  if (task.status === "stopped") return <CirclePause className="tone-text-muted" size={14} aria-hidden />;
   return <StatusDot tone="warning" />;
 }
 
@@ -98,17 +97,16 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
 
   const connectionLabel = connection === "open" ? "已连接本机服务" : connection === "connecting" ? "正在连接…" : "连接中断，正在重连";
 
-  const running = tasks.find(task => task.running);
+  const running = tasks.filter(task => task.running && !task.meta?.archived);
 
   if (collapsed) {
     return <nav className="sidebar collapsed" aria-label="任务">
       <IconButton icon={PanelLeftOpen} label="展开任务栏 (Ctrl+B)" onClick={onToggle} />
       <IconButton icon={Plus} label="新建任务 (Ctrl+N)" onClick={newTask} className={selectedId === null && !settingsOpen && !automationsOpen ? "active" : undefined} />
-      <IconButton icon={SlidersHorizontal} label="展开项目设置" onClick={onToggle} />
       <IconButton icon={Search} label="搜索任务和命令 (Ctrl+K)" onClick={openPalette} />
-      {running && <button className={`rail-running ${running.id === selectedId && !settingsOpen ? "active" : ""}`} onClick={() => void openTask(running.id)} title={`正在运行：${taskTitle(running)}`} aria-label={`打开正在运行的任务：${taskTitle(running)}`}>
+      {running.map(task => <button key={task.id} className={`rail-running ${task.id === selectedId && !settingsOpen ? "active" : ""}`} onClick={() => void openTask(task.id)} title={`正在运行：${taskTitle(task)}`} aria-label={`打开正在运行的任务：${taskTitle(task)}`}>
         <Spinner size={16} />
-      </button>}
+      </button>)}
       <span className="sidebar-rail-spacer" />
       <IconButton icon={CalendarClock} label={`自动化${unreadAutomations ? `，${unreadAutomations} 条未读` : ""}`} onClick={openAutomations} className={automationsOpen ? "active" : undefined} />
       <IconButton icon={Settings} label="设置 (Ctrl+,)" onClick={() => openSettings()} className={settingsOpen ? "active" : undefined} />
@@ -131,7 +129,6 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
       {query && <IconButton icon={X} label="清除搜索" size={14} onClick={() => setQuery("")} />}
     </label>
     <div className="task-groups">
-      <NewTaskSetup />
       {grouped.shortcuts.map(([label, items]) => <section key={label} className="task-group">
         <h2>{label}</h2>
         {items.map(task => <TaskRow key={task.id} task={task} selected={task.id === selectedId && !settingsOpen} />)}

@@ -3,13 +3,14 @@ import { createTwoFilesPatch } from "diff";
 import { AgentPresetStore } from "./agent-presets";
 import { runTask, type RunOptions } from "./omp-runner";
 import { snapshotSource, sourceChanges } from "./source-review";
-import type { TaskLedger } from "./task-ledger";
+import { taskBudgetUsed, type TaskLedger } from "./task-ledger";
 import { WorkerSupervisor, inspectWorkerAttempt } from "./worker-supervisor";
 import { validateReviewEvidence } from "./development-review-tool";
+import { taskProfile } from "./task-profile";
 import type { WorkOrder } from "./work-orders";
 
 function isDevelopment(ledger: TaskLedger): boolean {
-  return ledger.state.taskType === "web-product" || ledger.state.taskType === "code-change";
+  return taskProfile(ledger.state.taskType).developmentReview;
 }
 
 function currentReviewPassed(ledger: TaskLedger): boolean {
@@ -73,8 +74,8 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
         await created.recordDispatch({ id: coordinatorId, orderId: "coordinator", mode: "implement", expert: coordinatorExpert ? { id: coordinatorExpert.id, name: coordinatorExpert.name, hash: coordinatorExpert.hash } : undefined, skills: coordinatorExpert?.package?.skills.map(item => ({ id: item.id, hash: item.hash, revision: coordinatorExpert.package!.revision })) ?? [] });
       }
       supervisor = new WorkerSupervisor({ ledger: created, dataRoot: options.dataRoot, parentId: coordinatorId, modelSelector: options.modelSelector, signal: options.signal, browser: options.browser, browserUrl: options.browserUrl, browserAccess: options.browserAccess, plugins: options.plugins, generation: options.generation, comfyUrl: options.comfyUrl,
-        remainingCalls: () => (options.maxTotalToolCalls ?? 1200) - (created.state.runs ?? []).reduce((sum, run) => sum + run.toolCalls, 0) - currentToolCalls,
-        remainingTimeMs: () => (options.totalWallTimeMs ?? 7_200_000) - (created.state.runs ?? []).reduce((sum, run) => sum + run.elapsedMs, 0) - (Date.now() - currentRunStartedAt),
+        remainingCalls: () => (options.maxTotalToolCalls ?? 1200) - taskBudgetUsed(created.state.runs).toolCalls - currentToolCalls,
+        remainingTimeMs: () => (options.totalWallTimeMs ?? 7_200_000) - taskBudgetUsed(created.state.runs).elapsedMs - (Date.now() - currentRunStartedAt),
         onStatus: value => options.onEvent?.({ type: "status", value }), onChange: () => options.onWorkerState?.(created) });
       await options.onLedger?.(created);
     } });

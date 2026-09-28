@@ -5,6 +5,7 @@ import { acceptCodeChange } from "./runtime/code-acceptance";
 import { AgentPresetStore } from "./runtime/agent-presets";
 import { runDevelopmentWorkflow } from "./runtime/development-workflow";
 import { TaskLedger } from "./runtime/task-ledger";
+import { taskProfile } from "./runtime/task-profile";
 import { importCodeWorkspace } from "./runtime/workspace-import";
 import { bindProjectTurn, finalizeProjectTurn, mayWriteProject, prepareProjectTurn } from "./runtime/project-state";
 import { ProjectStore } from "./runtime/projects";
@@ -123,7 +124,7 @@ if (command === "run") {
       else process.stdout.write(`\n[${event.type}: ${event.value}${event.error ? " ERROR" : ""}]\n`);
     },
     });
-    if (current.state.taskType === "code-change" && current.state.status === "active" && !controller.signal.aborted) await acceptCodeChange({ ledger: current, dataRoot: dirname(dirname(current.file)), runId: randomUUID(), signal: controller.signal, complete: false, onCheck: name => process.stdout.write(`\n[check: ${name}]\n`) });
+    if (taskProfile(current.state.taskType).acceptance === "code-checks" && current.state.status === "active" && !controller.signal.aborted) await acceptCodeChange({ ledger: current, dataRoot: dirname(dirname(current.file)), runId: randomUUID(), signal: controller.signal, complete: false, onCheck: name => process.stdout.write(`\n[check: ${name}]\n`) });
     return current;
   });
   process.stdout.write(`\nTask ${ledger.state.id}: ${ledger.state.status}; pending ${ledger.completionGaps().join(", ")}\n`);

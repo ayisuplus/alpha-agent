@@ -3,7 +3,10 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
+import { resolveEditToolDescription } from "@oh-my-pi/pi-coding-agent/edit";
+import { applyPatchSchema, hashlineEditParamsSchema, patchEditSchema, replaceEditSchema, sloppyEditSchema } from "@oh-my-pi/pi-coding-agent/edit/schemas";
 import { editInspect } from "@oh-my-pi/pi-natives";
+import type { EditMode } from "./omp-settings";
 import { commandApprovalStore } from "./command-approval";
 import { ProjectStore } from "./projects";
 import { protectedSandboxHome, runFullAccessCommand, runSandboxCommand, SandboxUnavailableError } from "./sandbox-exec";
@@ -12,7 +15,6 @@ import { fingerprintSource, type PermissionMode } from "./task-ledger";
 const workerSource = await readFile(new URL("./sandbox-file-worker.ts", import.meta.url), "utf8");
 const readParams = type({ path: "string", "offset?": "number", "limit?": "number" });
 const grepParams = type({ pattern: "string", "path?": "string", "case?": "boolean" });
-const editParams = type({ input: "string" });
 const writeParams = type({ path: "string", content: "string" });
 type Action = "read" | "grep" | "edit" | "write";
 
@@ -23,7 +25,19 @@ export interface DirectFileContext {
   projectRoot: string;
   dataRoot: string;
   mode: PermissionMode;
+  /** The session's edit format; the proxy exposes OMP's schema and description for it. Defaults to Hashline. */
+  editMode?: EditMode;
   onNeedsInput: (reason: string) => Promise<void>;
+}
+
+function editSchema(mode: EditMode) {
+  switch (mode) {
+    case "replace": return replaceEditSchema;
+    case "patch": return patchEditSchema;
+    case "apply_patch": return applyPatchSchema;
+    case "sloppy": return sloppyEditSchema;
+    default: return hashlineEditParamsSchema;
+  }
 }
 
 function inside(root: string, path: string): boolean {
@@ -44,11 +58,13 @@ export async function createDirectFileTools(context: DirectFileContext): Promise
   await writeFile(worker, workerSource);
   const nativePath = resolve(import.meta.dir, "../..", "node_modules", "@oh-my-pi", "pi-natives", "native", "index.js");
   const approvals = commandApprovalStore(context.dataRoot);
+  const editMode: EditMode = context.editMode ?? "hashline";
+  const editParams = editSchema(editMode);
 
   const invoke = async (action: Action, args: Record<string, unknown>, signal?: AbortSignal) => {
     signal?.throwIfAborted();
     const roots = await store.roots(context.projectId, context.projectVersion);
-    const inspection = action === "edit" ? editInspect("hashline", JSON.stringify(args)) : null;
+    const inspection = action === "edit" ? editInspect(editMode, JSON.stringify(args)) : null;
     const rawTargets = action === "edit"
       ? [...(inspection?.paths ?? []), ...(inspection?.fileOps.flatMap(item => item.to ? [item.to] : []) ?? [])]
       : [typeof args.path === "string" ? args.path : "."];
@@ -78,7 +94,7 @@ export async function createDirectFileTools(context: DirectFileContext): Promise
       approvalId = approval.id;
     }
     const approvedHostAction = !!approvalId && (outside || protectedRead);
-    const request = JSON.stringify({ action, args, cwd: context.projectRoot, roots, full: context.mode === "full" || approvedHostAction, allowCredential: protectedRead && !!approvalId, allowMetadata: metadataTarget && !!approvalId, nativePath });
+    const request = JSON.stringify({ action, args, editMode, cwd: context.projectRoot, roots, full: context.mode === "full" || approvedHostAction, allowCredential: protectedRead && !!approvalId, allowMetadata: metadataTarget && !!approvalId, nativePath });
     const command = { cwd: context.projectRoot, roots, dataRoot: context.dataRoot, argv: [process.execPath, worker], stdin: request, signal, timeoutMs: 45_000 };
     try {
       const result = context.mode === "full" || approvedHostAction ? await runFullAccessCommand(command) : await runSandboxCommand(command);
@@ -95,7 +111,7 @@ export async function createDirectFileTools(context: DirectFileContext): Promise
       throw error;
     }
   };
-  const wrapped = <T extends typeof readParams | typeof grepParams | typeof editParams | typeof writeParams>(name: Action, parameters: T, description: string): CustomTool<T> => ({
+  const wrapped = <T extends typeof readParams | typeof grepParams | ReturnType<typeof editSchema> | typeof writeParams>(name: Action, parameters: T, description: string): CustomTool<T> => ({
     name, label: name, description: `Alpha sandbox proxy. ${description}`, parameters, loadMode: "essential",
     async execute(_id, args, _update, _ctx, signal) {
       try { return await invoke(name, args as Record<string, unknown>, signal); }
@@ -107,9 +123,11 @@ export async function createDirectFileTools(context: DirectFileContext): Promise
     },
   });
   return [
-    wrapped("read", readParams, "Read a local text file with Hashline line numbers. Known credential locations need separate user approval."),
+    wrapped("read", readParams, editMode === "hashline"
+      ? "Read a local text file with Hashline line numbers. Known credential locations need separate user approval."
+      : "Read a local text file (offset/limit select lines). Known credential locations need separate user approval."),
     wrapped("grep", grepParams, "Search files in mounted folders, or one explicit file outside them."),
-    wrapped("edit", editParams, "Apply an OMP Hashline patch to mounted files. Use current read tags."),
-    wrapped("write", writeParams, "Create a new file in a mounted folder. Existing files require Hashline edit."),
+    wrapped("edit", editParams, `Edits files in mounted folders; the rules below apply unchanged.\n\n${resolveEditToolDescription(editMode, undefined)}`),
+    wrapped("write", writeParams, "Create a new file in a mounted folder. Change existing files with edit."),
   ];
 }

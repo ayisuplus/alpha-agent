@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent";
+import { ompAgentId } from "./omp-settings";
 import { ompRegistry } from "./models";
 import { isAllowedModelSelector } from "./model-policy";
 import type { CommandRequest, IndependentReview } from "./command-approval";
@@ -13,7 +14,7 @@ export function independentCommandReviewer(dataRoot: string, modelSelector: stri
       const model = modelRegistry.getAvailable().find(item => `${item.provider}/${item.id}` === modelSelector);
       if (!model) throw new Error(`Reviewer model unavailable: ${modelSelector}`);
       const { session } = await createAgentSession({
-      cwd: dataRoot, agentDir: join(dataRoot, "omp"), authStorage, modelRegistry, model,
+      cwd: dataRoot, agentDir: join(dataRoot, "omp"), authStorage, modelRegistry, model, agentId: ompAgentId("command-review"),
       sessionManager: SessionManager.inMemory(dataRoot),
       systemPrompt: "You are Alpha's independent command approval reviewer. You have no tools. Review only the exact requested command. Approve only when the action is clearly bounded, reversible and needed for the stated check. If destructive, credential-related, privilege-changing, persistent, external-publishing or uncertain, return user. If unsafe, return deny. Respond with one JSON object only: {\"decision\":\"approve|deny|user\",\"reason\":\"brief reason\"}.",
       toolNames: [], restrictToolNames: true, disableExtensionDiscovery: true,

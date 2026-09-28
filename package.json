@@ -13,15 +13,19 @@
     "probe:model": "bun run scripts/probe-model.ts",
     "probe:comfy-plugin": "bun run scripts/probe-comfy-plugin.ts",
     "probe:agent": "bun run scripts/probe-agent.ts",
+    "probe:code-intel": "bun run scripts/probe-code-intelligence.ts",
+    "probe:session-prompt": "bun run scripts/probe-session-prompt.ts",
     "probe:browser": "bun run scripts/probe-browser.ts",
     "probe:web-desktop": "bun run scripts/probe-web-desktop.ts",
     "probe:preview-browser": "bun run scripts/probe-preview-browser.ts",
     "check": "tsc --noEmit",
+    "eval": "bun run eval/run.ts",
     "test:web": "bun test ./test/web-kernel.test.ts",
-    "test": "bun test ./test/read-only-code-check.test.ts ./test/agent-mailbox.test.ts ./test/async-workers.test.ts ./test/capability-runtime.test.ts ./test/project-state.test.ts ./test/web-kernel.test.ts ./test/cognitive-runtime.test.ts ./test/cognitive-workflow.test.ts ./test/task-ledger.test.ts ./test/local-preview.test.ts ./test/comfy-client.test.ts ./test/builtin-plugins.test.ts ./test/third-party-plugins.test.ts ./test/prompt-refinement.test.ts ./test/browser-verifier.test.ts ./test/work-orders.test.ts ./test/agent-presets.test.ts ./test/workspace-preflight.test.ts ./test/task-workbench.test.ts ./test/workbench-state.test.ts ./test/workbench-timeline.test.ts ./test/settings.test.ts ./test/report.test.ts ./test/storage.test.ts ./test/reliability-boundaries.test.ts ./test/workspace-import.test.ts ./test/command-approval.test.ts ./test/command-permissions.test.ts ./test/projects.test.ts ./test/project-api.test.ts ./test/direct-file-worker.test.ts ./test/direct-file-tools.test.ts ./test/direct-git-project.test.ts ./test/direct-omp-boundary.test.ts ./test/document-tool.test.ts ./test/general-work.test.ts ./test/office-runtime.test.ts ./test/task-inputs.test.ts ./test/mcp-permissions.test.ts ./test/task-queue.test.ts ./test/operation-journal.test.ts"
+    "test": "bun test ./test/read-only-code-check.test.ts ./test/agent-mailbox.test.ts ./test/async-workers.test.ts ./test/capability-runtime.test.ts ./test/project-state.test.ts ./test/web-kernel.test.ts ./test/cognitive-runtime.test.ts ./test/cognitive-workflow.test.ts ./test/task-ledger.test.ts ./test/local-preview.test.ts ./test/comfy-client.test.ts ./test/builtin-plugins.test.ts ./test/third-party-plugins.test.ts ./test/prompt-refinement.test.ts ./test/browser-verifier.test.ts ./test/work-orders.test.ts ./test/agent-presets.test.ts ./test/workspace-preflight.test.ts ./test/task-workbench.test.ts ./test/workbench-state.test.ts ./test/workbench-timeline.test.ts ./test/settings.test.ts ./test/report.test.ts ./test/storage.test.ts ./test/reliability-boundaries.test.ts ./test/workspace-import.test.ts ./test/command-approval.test.ts ./test/command-permissions.test.ts ./test/projects.test.ts ./test/project-api.test.ts ./test/direct-file-worker.test.ts ./test/direct-file-tools.test.ts ./test/direct-git-project.test.ts ./test/direct-omp-boundary.test.ts ./test/document-tool.test.ts ./test/general-work.test.ts ./test/office-runtime.test.ts ./test/task-inputs.test.ts ./test/mcp-permissions.test.ts ./test/task-queue.test.ts ./test/operation-journal.test.ts ./test/task-title.test.ts ./test/context-files.test.ts ./test/session-profile.test.ts ./test/file-tool-guard.test.ts ./test/automations.test.ts ./test/automation-api.test.ts ./test/scoped-git-backup.test.ts"
   },
   "dependencies": {
     "@oh-my-pi/omptype": "18.2.11",
+    "@oh-my-pi/pi-agent-core": "18.2.11",
     "@oh-my-pi/pi-coding-agent": "18.2.11",
     "@oh-my-pi/pi-natives": "18.2.11",
     "@openai/codex": "0.156.1",

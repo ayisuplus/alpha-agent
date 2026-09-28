@@ -72,10 +72,22 @@ export function protectedSandboxHome(input: Pick<SandboxCommand, "roots" | "data
     .find(path => path && !roots.some(root => isInside(root, path)));
   if (!base) throw new SandboxUnavailableError("No protected location for the sandbox configuration");
   const digest = createHash("sha256").update(JSON.stringify([roots.map(root => root.toLowerCase()).sort(), !!input.network])).digest("hex").slice(0, 16);
+  // Tests keep profiles in their own temporary folder instead of the machine-wide one.
+  const override = process.env.ALPHA_SANDBOX_PROFILES;
+  if (override && !roots.some(root => isInside(root, resolve(override)))) return join(resolve(override), digest);
   return join(base, "Alpha", "sandbox-profiles", digest);
 }
 
+/**
+ * ALPHA_WINDOWS_SANDBOX=off makes every sandboxed command fail closed without touching the real Windows sandbox, whose
+ * first setup per profile asks for administrator approval. Tests set it; it never runs anything unsandboxed.
+ */
+function sandboxDisabled(): boolean {
+  return process.env.ALPHA_WINDOWS_SANDBOX === "off";
+}
+
 async function rawSandboxCommand(input: SandboxCommand): Promise<CommandResult> {
+  if (sandboxDisabled()) throw new SandboxUnavailableError("Windows sandbox is turned off in this environment");
   if (process.platform !== "win32" || !await Bun.file(bundledCodex()).exists()) throw new SandboxUnavailableError("Bundled Windows sandbox runner is unavailable");
   const roots = [...new Set(input.roots.map(root => resolve(root)))];
   const home = protectedSandboxHome(input);
@@ -112,7 +124,8 @@ export async function verifySandbox(input: Pick<SandboxCommand, "cwd" | "roots" 
   let check = verified.get(key);
   if (!check) {
     check = (async () => {
-      const outsideBase = [resolve(input.dataRoot), process.env.USERPROFILE].find(path => path && !input.roots.some(root => isInside(root, path)));
+      if (sandboxDisabled()) throw new SandboxUnavailableError("Windows sandbox is turned off in this environment");
+      const outsideBase =[resolve(input.dataRoot), process.env.USERPROFILE].find(path => path && !input.roots.some(root => isInside(root, path)));
       if (!outsideBase) throw new SandboxUnavailableError("No independent directory is available to verify sandbox isolation");
       const scratch = await mkdtemp(join(outsideBase, "alpha-sandbox-check-"));
       const inside = join(input.cwd, `.alpha-sandbox-check-${randomUUID()}`);

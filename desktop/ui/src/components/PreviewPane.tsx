@@ -2,23 +2,22 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Copy, Hand, MonitorOff, MonitorPlay, PanelRightClose, PanelRightOpen, RotateCw, Undo2 } from "lucide-react";
 import { taskTitle } from "../state/labels";
 import { useStore } from "../state/store";
-import { isOccupied, notify, republish, store, toggleControl, verifyTask } from "../state/workbench";
+import { browserOwner, isOccupied, notify, republish, store, toggleControl, verifyTask } from "../state/workbench";
 import { Button, IconButton, Spinner, StatusDot } from "./ui";
 import "./PreviewPane.css";
 
 type Shown = { taskId: string; url: string } | null;
 
 /**
- * Which page the single visible preview should hold. While a task runs, the view stays reserved for it and
- * selecting another task never switches it ("keep"), so browser verification is never interrupted.
+ * Which page the single visible preview should hold. While a task works in the browser, the view stays reserved for
+ * it and selecting another task never switches it ("keep"), so browser verification is never interrupted. Tasks that
+ * run without the browser leave the view to the selected task.
  */
 function usePreviewTarget(): Shown | "keep" {
-  const activeTaskId = useStore(store, state => state.activeTaskId);
-  const operation = useStore(store, state => state.serverOperation);
+  const owner = useStore(store, browserOwner);
   const selectedId = useStore(store, state => state.selectedId);
   const task = useStore(store, state => state.task);
   const running = useStore(store, state => state.runningPreview);
-  const owner = operation?.browserTaskId ?? operation?.taskId ?? activeTaskId;
   if (owner) {
     const fromRun = running?.taskId === owner ? running : null;
     if (task?.id === owner) return task.preview?.live ? { taskId: task.id, url: task.preview.url } : fromRun;
@@ -36,10 +35,10 @@ export function PreviewPane({ layoutKey, collapsed, locked, onToggle, showClose 
 
   const task = useStore(store, state => state.task);
   const selectedId = useStore(store, state => state.selectedId);
-  const activeTaskId = useStore(store, state => state.activeTaskId);
+  const browserTask = useStore(store, browserOwner);
   const controlHolder = useStore(store, state => state.controlHolder);
   const pending = useStore(store, state => state.pending);
-  const occupied = useStore(store, isOccupied);
+  const occupied = useStore(store, state => isOccupied(state, state.selectedId));
   const tasks = useStore(store, state => state.tasks);
   const titleOf = (id: string | null | undefined) => {
     const item = tasks.find(candidate => candidate.id === id);
@@ -111,9 +110,9 @@ export function PreviewPane({ layoutKey, collapsed, locked, onToggle, showClose 
 
   let emptyTitle = "选择或新建任务后，产品预览会显示在这里";
   let emptyDetail: string | null = null;
-  if (activeTaskId && activeTaskId !== selectedId) {
-    emptyTitle = "预览窗口正由运行中的任务使用";
-    emptyDetail = `「${titleOf(activeTaskId) ?? "运行中的任务"}」发布预览后会显示在这里，运行结束后切回当前任务。`;
+  if (browserTask && browserTask !== selectedId) {
+    emptyTitle = "预览窗口正由另一个任务使用";
+    emptyDetail = `「${titleOf(browserTask) ?? "另一个任务"}」正在浏览器里验收，结束后切回当前任务。`;
   } else if (task?.running) {
     emptyTitle = "构建完成后，预览会在这里打开";
     emptyDetail = "Alpha 会先构建产品，再发布本机预览并用这个浏览器逐步验收。";

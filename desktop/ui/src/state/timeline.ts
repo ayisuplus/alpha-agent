@@ -18,8 +18,11 @@ export type Block =
   | { type: "error"; id: string; at: string; message: string }
   | { type: "guidance"; id: string; at: string; text: string; status?: GuidanceStatus };
 
-/** What started an operation: a new task, an objective revision, a repair run, or a runtime-only publish/verify. */
-export type TurnKind = "create" | "revise" | "resume" | "publish" | "verify" | "other";
+/**
+ * What started an operation: a new task, an objective revision, a repair run, a follow-up question, or a runtime-only
+ * publish/verify.
+ */
+export type TurnKind = "create" | "revise" | "resume" | "ask" | "publish" | "verify" | "other";
 
 export interface Turn {
   type: "turn";
@@ -43,6 +46,8 @@ export interface Turn {
 export type TimelineItem =
   | { type: "objective"; id: string; version: number; text: string; at: string | null; current: boolean }
   | { type: "guidance"; id: string; text: string; status?: GuidanceStatus; at: string }
+  /** A follow-up question; its answer is the turn that follows. */
+  | { type: "question"; id: string; text: string; at: string }
   | { type: "review"; id: string; review: ReviewSummary; at: string }
   | { type: "legacy"; id: string; at: string | null }
   | Turn;
@@ -86,7 +91,9 @@ function buildTurn(id: string, entries: ActivityEntry[]): Turn {
   const last = () => blocks.at(-1);
 
   for (const entry of entries) {
-    if (entry.kind === "text") {
+    if (entry.kind === "question") {
+      kind = "ask";
+    } else if (entry.kind === "text") {
       modelRun = true;
       const previous = last();
       if (previous?.type === "text") previous.text += entry.value;
@@ -117,6 +124,7 @@ function buildTurn(id: string, entries: ActivityEntry[]): Turn {
       const phase = entry.value;
       if (phase === "任务已创建") { kind = "create"; continue; }
       if (phase.startsWith("目标修订至")) { kind = "revise"; continue; }
+      if (phase === "回答追问") { kind = "ask"; continue; }
       if (TERMINAL_PHASES.has(phase)) outcome = phase;
       const previous = last();
       if (previous?.type === "phase" && previous.phase === phase) continue;
@@ -145,7 +153,7 @@ function buildTurn(id: string, entries: ActivityEntry[]): Turn {
   };
 }
 
-const RANK: Record<TimelineItem["type"], number> = { objective: 0, legacy: 1, guidance: 2, review: 3, turn: 4 };
+const RANK: Record<TimelineItem["type"], number> = { objective: 0, legacy: 1, guidance: 2, question: 2, review: 3, turn: 4 };
 
 export function buildTimeline(input: TimelineInput): TimelineItem[] {
   const { task, activity, reviews, busy } = input;
@@ -162,6 +170,7 @@ export function buildTimeline(input: TimelineInput): TimelineItem[] {
   const groups = new Map<string, ActivityEntry[]>();
   for (const entry of activity) {
     if (entry.kind === "guidance") continue;
+    if (entry.kind === "question") items.push({ type: "question", id: `question-${entry.id}`, text: entry.value, at: entry.recordedAt });
     const key = entry.operationId ?? `entry-${entry.id}`;
     const group = groups.get(key);
     if (group) group.push(entry);

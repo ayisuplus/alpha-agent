@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowUp, Square } from "lucide-react";
 import type { TaskView } from "../api/types";
-import { phaseInfo, taskTitle } from "../state/labels";
+import { phaseInfo } from "../state/labels";
 import { useStore } from "../state/store";
 import { loadDraftFiles, saveDraftFiles } from "../state/draft-files";
-import { approveTaskPlan, enterPlanning, openTask, resumeTask, reviseTask, sendGuidance, sendTaskMessage, stopTask, store } from "../state/workbench";
+import { approveTaskPlan, askTask, enterPlanning, resumeTask, reviseTask, sendGuidance, sendTaskMessage, stopTask, store, taskBusy } from "../state/workbench";
 import { Button } from "./ui";
 import { CapabilityPicker, fileLimitReason } from "./CapabilityPicker";
 import { PromptRefine } from "./PromptRefine";
@@ -14,26 +14,24 @@ import "./Composer.css";
 const drafts = new Map<string, string>();
 const attachments = new Map<string, { files: File[]; skillIds: string[]; pluginIds: string[] }>();
 
-type Mode = "steer" | "resume" | "revise" | "blocked" | "plan-review";
+type Mode = "steer" | "answering" | "resume" | "revise" | "ask" | "blocked" | "plan-review";
+/** What the user chose to do next with an idle task: its usual next step, a new objective, or a question. */
+type Intent = "next" | "revise" | "ask";
+const QUESTION_LIMIT = 8_000;
 
 export function Composer({ task, phase }: { task: TaskView; phase: string | null }) {
   const pending = useStore(store, state => state.pending);
-  const activeTaskId = useStore(store, state => state.activeTaskId);
-  const activeRunId = useStore(store, state => state.activeRunId);
-  const operation = useStore(store, state => state.operation);
+  // Publishing, verifying or cleaning up this task outside a model run.
+  const selfBusy = useStore(store, state => !task.running && taskBusy(state, task.id));
   const defaultModel = useStore(store, state => state.settings?.model.default ?? null);
   const builtinModel = useStore(store, state => state.models?.builtin ?? null);
-  const runningTitle = useStore(store, state => {
-    const running = state.tasks.find(item => item.id === state.activeTaskId);
-    return running ? taskTitle(running) : null;
-  });
   const [draft, setDraftState] = useState(() => drafts.get(task.id) ?? localStorage.getItem(`alpha-task-draft-${task.id}`) ?? "");
   const [added, setAddedState] = useState(() => {
     const saved = JSON.parse(localStorage.getItem(`alpha-task-selection-${task.id}`) ?? "null") as { skillIds: string[]; pluginIds: string[] } | null;
     return attachments.get(task.id) ?? { files: [], skillIds: saved?.skillIds ?? task.capabilities?.skills.map(item => item.id) ?? [], pluginIds: saved?.pluginIds ?? task.capabilities?.plugins.map(item => item.id) ?? [] };
   });
   const [filesLoaded, setFilesLoaded] = useState(false);
-  const [wantsRevise, setWantsRevise] = useState(false);
+  const [intent, setIntent] = useState<Intent>("next");
   const input = useRef<HTMLTextAreaElement>(null);
 
   const setDraft = (value: string) => {
@@ -53,24 +51,28 @@ export function Composer({ task, phase }: { task: TaskView; phase: string | null
   }, [task.id]);
   useEffect(() => { if (filesLoaded) void saveDraftFiles(`task-${task.id}`, added.files).catch(() => undefined); }, [task.id, filesLoaded, added.files]);
 
-  const otherRunning = (activeRunId !== null && activeTaskId !== task.id) || (operation !== null && operation.taskId !== task.id);
-  const selfBusy = !task.running && operation !== null && operation.taskId === task.id;
-  const mode: Mode = task.running ? "steer" : task.queued || otherRunning || selfBusy ? "blocked" : task.phase === "plan-review" && !wantsRevise ? "plan-review" : task.status === "complete" || wantsRevise ? "revise" : "resume";
+  const mode: Mode = task.running ? task.runKind === "answer" ? "answering" : "steer"
+    : task.queued || selfBusy ? "blocked"
+    : intent === "ask" ? "ask"
+    : task.phase === "plan-review" && intent !== "revise" ? "plan-review"
+    : task.status === "complete" || intent === "revise" ? "revise" : "resume";
   const text = draft.trim();
   const nextVersion = task.contractVersion + 1;
   const readyFiles = !fileLimitReason(added.files, task.inputs);
   const hasAdded = added.files.length > 0 || [...added.skillIds].sort().join("|") !== [...(task.capabilities?.skills.map(item => item.id) ?? [])].sort().join("|") || [...added.pluginIds].sort().join("|") !== [...(task.capabilities?.plugins.map(item => item.id) ?? [])].sort().join("|");
-  const canPrimary = !pending && readyFiles && (mode === "steer" ? task.acceptsGuidance && (!!text || !!added.files.length) : mode === "resume" ? task.status !== "needs-input" || !!text || !!added.files.length : mode === "revise" ? !!text && text !== task.objective : mode === "plan-review" ? !!text || !!added.files.length || !!(task.cognition?.steps.length && task.revision) : false);
+  const canPrimary = !pending && (mode === "ask" ? !!text && text.length <= QUESTION_LIMIT : readyFiles && (mode === "steer" ? task.acceptsGuidance && (!!text || !!added.files.length) : mode === "resume" ? task.status !== "needs-input" || !!text || !!added.files.length : mode === "revise" ? !!text && text !== task.objective : mode === "plan-review" ? !!text || !!added.files.length || !!(task.cognition?.steps.length && task.revision) : false));
 
   const done = (ok: boolean) => {
     if (!ok) return;
     setDraft("");
     setAdded({ ...added, files: [] });
-    setWantsRevise(false);
+    setIntent("next");
   };
 
   const primary = async () => {
     if (!canPrimary) return;
+    // A follow-up question keeps the composer on questions, so the next one can be asked once this is answered.
+    if (mode === "ask") { if (await askTask(text)) setDraft(""); return; }
     if (mode === "plan-review" && !text && !added.files.length) { done(await approveTaskPlan()); return; }
     if (task.taskType === "general" || hasAdded || mode === "plan-review") {
       done(await sendTaskMessage({ text, files: added.files, ...(task.running ? {} : { skillIds: added.skillIds, pluginIds: added.pluginIds }), forceRevision: mode === "revise" }));
@@ -93,7 +95,13 @@ export function Composer({ task, phase }: { task: TaskView; phase: string | null
 
   let placeholder = "";
   let hint: ReactNode = null;
-  if (mode === "steer") {
+  if (mode === "ask") {
+    placeholder = "就这个任务提问，例如“登录流程是怎么实现的？”…";
+    hint = text.length > QUESTION_LIMIT ? `问题最多 ${QUESTION_LIMIT} 字` : "只读取任务目录来回答，不改动文件、目标或任务状态";
+  } else if (mode === "answering") {
+    placeholder = "可以先写好下一步，回答结束后再发送…";
+    hint = "Alpha 正在回答追问，回答结束后可以继续";
+  } else if (mode === "steer") {
     placeholder = task.acceptsGuidance ? "补充要求，例如“按钮再大一点，文字改成中文”…" : "可以先写好补充要求，模型会话就绪后再发送…";
     hint = task.acceptsGuidance
       ? "补充的要求会立即送达正在工作的 Alpha"
@@ -109,18 +117,17 @@ export function Composer({ task, phase }: { task: TaskView; phase: string | null
     hint = <>提交后生成目标 v{nextVersion}，之前的要求默认保留，{task.taskType === "code-change" ? "变更和检查会重新评估" : "预览和验收会重新进行"}。<button className="link-button" onClick={loadObjective}>载入当前目标全文</button></>;
   } else {
     placeholder = task.queued ? "任务排队中，开始运行后可补充要求…" : "当前无法发送";
-    hint = task.queued ? "任务已创建，正在等待前一个任务结束" : otherRunning && activeTaskId && runningTitle
-      ? <>「{runningTitle}」正在运行，同一时间只运行一个任务。<button className="link-button" onClick={() => void openTask(activeTaskId)}>查看</button></>
-      : `正在${operation ? phaseInfo(operation.phase).label : "处理"}，完成后可以继续`;
+    hint = task.queued ? "任务排队中：运行位置空出、或同一文件夹的任务结束后自动开始" : `正在${phase ? phaseInfo(phase).label : "处理"}，完成后可以继续`;
   }
 
   return <div className="composer" data-mode={mode}>
-    {(mode === "resume" || mode === "plan-review" || (mode === "revise" && task.status !== "complete")) && <div className="composer-modes" role="tablist" aria-label="下一步">
-      <button role="tab" aria-selected={mode === "resume" || mode === "plan-review"} onClick={() => setWantsRevise(false)}>{task.phase === "plan-review" ? "审阅计划" : task.phase === "plan" ? "继续规划" : "继续修复"}</button>
-      <button role="tab" aria-selected={mode === "revise"} onClick={() => setWantsRevise(true)}>修订目标</button>
+    {(mode === "resume" || mode === "plan-review" || mode === "revise" || mode === "ask") && <div className="composer-modes" role="tablist" aria-label="下一步">
+      {task.status !== "complete" && <button role="tab" aria-selected={mode === "resume" || mode === "plan-review"} onClick={() => setIntent("next")}>{task.phase === "plan-review" ? "审阅计划" : task.phase === "plan" ? "继续规划" : "继续修复"}</button>}
+      <button role="tab" aria-selected={mode === "revise"} onClick={() => setIntent("revise")}>修订目标</button>
+      <button role="tab" aria-selected={mode === "ask"} onClick={() => setIntent("ask")}>追问</button>
     </div>}
-    {mode === "revise" && task.status === "complete" && <div className="composer-modes single"><span>修订目标</span></div>}
     {mode === "steer" && <div className="composer-modes single"><span>运行中补充要求</span></div>}
+    {mode === "answering" && <div className="composer-modes single"><span>正在回答追问</span></div>}
     <div className="composer-box">
       <textarea
         ref={input}
@@ -135,11 +142,11 @@ export function Composer({ task, phase }: { task: TaskView; phase: string | null
         rows={2}
       />
       <div className="composer-bar">
-        <CapabilityPicker files={added.files} existingFiles={task.inputs} skillIds={added.skillIds} pluginIds={added.pluginIds} direct={task.workspaceOrigin?.kind === "direct"} capabilitiesDisabled={task.running}
-          onFiles={files => setAdded({ ...added, files })} onSkills={skillIds => setAdded({ ...added, skillIds })} onPlugins={pluginIds => setAdded({ ...added, pluginIds })} />
+        {mode !== "ask" && mode !== "answering" && <CapabilityPicker files={added.files} existingFiles={task.inputs} skillIds={added.skillIds} pluginIds={added.pluginIds} direct={task.workspaceOrigin?.kind === "direct"} capabilitiesDisabled={task.running}
+          onFiles={files => setAdded({ ...added, files })} onSkills={skillIds => setAdded({ ...added, skillIds })} onPlugins={pluginIds => setAdded({ ...added, pluginIds })} />}
         <span className="composer-hint">{hint}</span>
         <PromptRefine value={draft} onApply={setDraft} optimizationModel={task.modelSelector ?? defaultModel ?? builtinModel} disabled={mode === "blocked"} />
-        {mode === "steer" && <Button variant="danger" size="sm" icon={Square} onClick={() => void stopTask()} busy={pending === "stop"}>停止</Button>}
+        {(mode === "steer" || mode === "answering") && <Button variant="danger" size="sm" icon={Square} onClick={() => void stopTask(task.id)} busy={pending === "stop"}>停止</Button>}
         {mode === "resume" && <Button variant="ghost" size="sm" onClick={() => void sendGuidance(text).then(done)} disabled={!text || !!pending} busy={pending === "guidance"} title="只保存，下次继续修复时交给模型">仅保存到下轮</Button>}
         {mode === "steer" && <Button variant="primary" size="sm" icon={ArrowUp} onClick={() => void primary()} disabled={!canPrimary} busy={pending === "guidance"}>发送</Button>}
         {mode === "resume" && (task.phase ?? "execute") === "execute" && task.status !== "needs-input" && <Button variant="ghost" size="sm" onClick={() => void enterPlanning()} disabled={!!pending} busy={pending === "plan"}>先计划</Button>}
@@ -147,6 +154,7 @@ export function Composer({ task, phase }: { task: TaskView; phase: string | null
         {mode === "plan-review" && <Button variant="ghost" size="sm" onClick={() => void enterPlanning()} disabled={!!pending} busy={pending === "plan"}>继续规划</Button>}
         {mode === "plan-review" && <Button variant="primary" size="sm" onClick={() => text || added.files.length ? void primary() : void approveTaskPlan()} disabled={!!pending || !readyFiles || (!text && !added.files.length && (!task.cognition?.steps.length || !task.revision))} busy={pending === "approve"}>{text || added.files.length ? "提交意见并重新规划" : "开始执行"}</Button>}
         {mode === "revise" && <Button variant="primary" size="sm" onClick={() => void primary()} disabled={!canPrimary} busy={pending === "revise"}>提交修订 · v{nextVersion}</Button>}
+        {mode === "ask" && <Button variant="primary" size="sm" icon={ArrowUp} onClick={() => void primary()} disabled={!canPrimary} busy={pending === "ask"}>追问</Button>}
       </div>
     </div>
     <p className="composer-keys"><kbd>Ctrl</kbd>+<kbd>Enter</kbd> 发送</p>

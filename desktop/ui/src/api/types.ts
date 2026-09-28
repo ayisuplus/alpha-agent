@@ -6,7 +6,7 @@ export type AutomationSchedule = { kind: "once"; at: string } | { kind: "rrule";
 export interface Automation { id: string; name: string; prompt: string; kind: "cron" | "heartbeat"; status: "ACTIVE" | "PAUSED"; schedule: AutomationSchedule; nextRunAt: string | null; modelSelector: string | null; executor?: "scoped-git-backup"; notificationPolicy: "all" | "failures"; projectId?: string; mountId?: string; targetTaskId?: string; createdAt: string; updatedAt: string }
 export interface AutomationRun { id: string; automationId: string; dueAt: string; status: "pending" | "running" | "complete" | "failed" | "needs-input" | "skipped"; missedCount: number; taskId?: string; result?: string; startedAt?: string; finishedAt?: string; readAt?: string }
 export type GuidanceStatus = "recorded" | "delivered" | "processed";
-export interface TaskMeta { title?: string; pinned?: boolean; archived?: boolean }
+export interface TaskMeta { title?: string; autoTitle?: string; pinned?: boolean; archived?: boolean }
 
 export interface TaskSummary {
   id: string;
@@ -23,6 +23,8 @@ export interface TaskSummary {
   phase?: "plan" | "plan-review" | "execute";
   goal?: { enabled: boolean; budget?: { maxToolCalls: number; wallTimeMs: number; maxTotalToolCalls: number; totalWallTimeMs: number }; noProgressRuns?: number; stopReason?: string };
   running: boolean;
+  /** What the task's model run is doing: working on the task, or answering a follow-up question about it. */
+  runKind?: RunKind | null;
   queued?: boolean;
   pendingCount: number;
   createdAt?: string;
@@ -101,6 +103,7 @@ export interface RunRecord {
   toolCalls: number;
   elapsedMs: number;
   usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number };
+  prompt?: { systemTokens: number; toolTokens: number; tools: number; contextShare: number | null; exact: boolean };
   outcome: "returned" | "cancelled" | "budget" | "error" | "needs-input";
   failureReason?: string;
   recordedAt: string;
@@ -149,7 +152,7 @@ export interface TaskView extends TaskSummary {
   preview: { id: string; url: string; live: boolean } | null;
 }
 
-export type ActivityKind = "status" | "tool" | "text" | "error" | "guidance";
+export type ActivityKind = "status" | "tool" | "text" | "error" | "guidance" | "question";
 
 export interface ActivityEntry {
   id: string;
@@ -195,18 +198,28 @@ export interface EvidenceDetail {
   artifactUrl?: string;
 }
 
+export type RunKind = "run" | "answer";
+
+/** A model run in progress; several tasks can run side by side up to the configured limit. */
+export interface RunInfo {
+  runId: string;
+  taskId: string | null;
+  kind: RunKind;
+}
+
 export interface TaskList {
   tasks: TaskSummary[];
-  activeTaskId: string | null;
-  activeRunId: string | null;
-  operation: OperationSnapshot | null;
+  runs: RunInfo[];
+  operations: OperationSnapshot[];
 }
 
 export interface OperationSnapshot {
   id: string;
-  kind: "run" | "publish" | "verify" | "cleanup" | "apply" | "sandbox-check";
+  kind: "run" | "answer" | "publish" | "verify" | "cleanup" | "apply" | "sandbox-check" | "mount";
   taskId: string | null;
+  projectId: string | null;
   phase: string;
+  /** The task whose page the one visible preview browser is showing for this operation. */
   browserTaskId: string | null;
   cancellable: boolean;
 }
@@ -228,6 +241,7 @@ export interface ProviderInfo {
   origin: "api_key" | "oauth" | "env" | "config" | "runtime" | "fallback" | null;
   envVar?: string;
   storedKey: boolean;
+  allowed: boolean;
   models: number;
   available: number;
 }
@@ -268,9 +282,9 @@ export type FontSize = "sm" | "md" | "lg";
 export interface Settings {
   version: 1;
   revision?: number;
-  model: { default: string | null; translation: string | null };
+  model: { default: string | null; translation: string | null; providers: string[] };
   workerModels: { investigate: string | null; implement: string | null; review: string | null };
-  budget: { maxToolCalls: number; wallTimeMinutes: number; maxTotalToolCalls: number; totalWallTimeMinutes: number };
+  budget: { maxToolCalls: number; wallTimeMinutes: number; maxTotalToolCalls: number; totalWallTimeMinutes: number; maxParallelTasks: number };
   generation: { comfyUrl: string; image: boolean; voice: boolean; video: boolean };
   plugins: { comfyui: boolean };
   notifications: { enabled: boolean };
@@ -291,6 +305,8 @@ export interface SkillPlugin {
   mcpEnabled: boolean;
 }
 
+export type ExpertLine = "development" | "research" | "content" | "game" | "office" | "general";
+
 export interface AgentPresetSummary {
   id: string;
   name: string;
@@ -298,6 +314,7 @@ export interface AgentPresetSummary {
   hash: string;
   enabled: boolean;
   builtin: boolean;
+  line?: ExpertLine;
   basedOn?: string;
   skillIds?: string[];
   package?: { revision: string; skills: Array<{ id: string; hash: string }> };
@@ -311,7 +328,8 @@ export interface AgentPreset extends AgentPresetSummary {
 export type SettingsPatch = { [K in keyof Omit<Settings, "version" | "revision">]?: Partial<Settings[K]> };
 
 export type ServerMessage =
-  | { type: "operation"; operation: OperationSnapshot | null }
+  | { type: "operations"; operations: OperationSnapshot[] }
+  | { type: "runs"; runs: RunInfo[] }
   | { type: "settings"; settings: Settings }
   | { type: "status"; taskId?: string; phase: string; runId?: string; pending?: string[] }
   | { type: "text"; taskId?: string; value: string }
@@ -320,7 +338,7 @@ export type ServerMessage =
   | { type: "task"; taskId?: string; task: TaskView }
   | { type: "activity"; taskId: string; entry: ActivityEntry }
   | { type: "control"; holder: ControlHolder }
-  | { type: "error"; taskId?: string; message: string };
+  | { type: "error"; taskId?: string; message: string; runId?: string };
 
 export interface PreviewRect {
   x: number;

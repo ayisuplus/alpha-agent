@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { createDocument } from "../src/runtime/document-tool";
 import { createGeneralWorkspace, verifyGeneralDeliverable } from "../src/runtime/general-work";
+import { requestedOutput } from "../src/runtime/requested-output";
 
 test("file-work keeps input and artifact hashes and completes without a web preview", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-general-file-"));
@@ -49,4 +50,12 @@ test("research validates supplied citations and permits local-only material", as
   await local.refreshRevision();
   await verifyGeneralDeliverable(local, dataRoot);
   expect(local.state.status).toBe("complete");
+});
+
+test("a general answer is checked against the outputs the objective asks for, ignoring declined ones", () => {
+  expect(requestedOutput("按地区汇总金额，告诉我最高的地区。直接回答即可，不需要生成文件。")).toEqual({ deliverable: false, sourceChange: false, webProduct: false });
+  expect(requestedOutput("根据附件生成一份 XLSX 报告")).toMatchObject({ deliverable: true });
+  expect(requestedOutput("解释这个模块的设计，不用修改代码")).toMatchObject({ sourceChange: false });
+  expect(requestedOutput("帮我修复登录模块的 bug，无需生成文档")).toEqual({ deliverable: false, sourceChange: true, webProduct: false });
+  expect(requestedOutput("创建一个记账网页")).toMatchObject({ webProduct: true });
 });

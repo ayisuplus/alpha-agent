@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { createAgentSession, discoverAuthStorage, ModelRegistry, SessionManager } from "@oh-my-pi/pi-coding-agent";
 import { isAllowedModelProvider, isAllowedModelSelector } from "./model-policy";
+import { ompAgentId } from "./omp-settings";
 
 export interface ModelInfo {
   selector: string;
@@ -21,6 +22,8 @@ export interface ProviderInfo {
   envVar?: string;
   /** Whether Alpha can remove a key for it: only stored API keys, never OAuth logins or environment variables. */
   storedKey: boolean;
+  /** Whether Alpha may use the provider's models (设置 → 模型); others are listed only so they can be allowed. */
+  allowed: boolean;
   models: number;
   available: number;
 }
@@ -42,8 +45,8 @@ export async function listModels(): Promise<{ models: ModelInfo[]; providers: Pr
   const { authStorage, modelRegistry } = await ompRegistry();
   try {
     const available = new Set(modelRegistry.getAvailable().map(model => `${model.provider}/${model.id}`));
-    const models: ModelInfo[] = modelRegistry.getAll("chat")
-      .filter(model => isAllowedModelProvider(model.provider) && model.supportsTools !== false)
+    const all: ModelInfo[] = modelRegistry.getAll("chat")
+      .filter(model => model.supportsTools !== false)
       .map(model => ({
         selector: `${model.provider}/${model.id}`,
         provider: model.provider,
@@ -56,8 +59,9 @@ export async function listModels(): Promise<{ models: ModelInfo[]; providers: Pr
         available: available.has(`${model.provider}/${model.id}`),
       }))
       .sort((a, b) => Number(b.available) - Number(a.available) || a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name));
+    const models = all.filter(model => isAllowedModelProvider(model.provider));
     const providers = new Map<string, ProviderInfo>();
-    for (const model of models) {
+    for (const model of all) {
       let provider = providers.get(model.provider);
       if (!provider) {
         const origin = authStorage.getCredentialOrigin(model.provider);
@@ -67,6 +71,7 @@ export async function listModels(): Promise<{ models: ModelInfo[]; providers: Pr
           origin: origin?.kind ?? null,
           envVar: origin?.envVar,
           storedKey: stored.some(row => row.credential.type === "api_key"),
+          allowed: isAllowedModelProvider(model.provider),
           models: 0,
           available: 0,
         };
@@ -75,7 +80,7 @@ export async function listModels(): Promise<{ models: ModelInfo[]; providers: Pr
       provider.models++;
       if (model.available) provider.available++;
     }
-    return { models, providers: [...providers.values()].sort((a, b) => Number(b.available > 0) - Number(a.available > 0) || a.id.localeCompare(b.id)) };
+    return { models, providers: [...providers.values()].sort((a, b) => Number(b.allowed) - Number(a.allowed) || Number(b.available > 0) - Number(a.available > 0) || a.id.localeCompare(b.id)) };
   } finally {
     authStorage.close();
   }
@@ -97,6 +102,7 @@ export async function testModel(selector: string, dataRoot: string, timeoutMs = 
     const model = modelRegistry.getAvailable().find(item => `${item.provider}/${item.id}` === selector);
     if (!model) return { ok: false, latencyMs: 0, error: "这个模型没有可用的认证" };
     const { session } = await createAgentSession({
+      agentId: ompAgentId("text"),
       cwd: dataRoot,
       agentDir: join(dataRoot, "omp"),
       authStorage,
@@ -139,8 +145,9 @@ export async function testModel(selector: string, dataRoot: string, timeoutMs = 
   }
 }
 
+/** Keys are written to OMP's shared store, so Alpha only manages them for providers the person allowed. */
 async function knownProvider(provider: string) {
-  if (!isAllowedModelProvider(provider)) throw new ModelServiceError("没有这个模型服务商");
+  if (!isAllowedModelProvider(provider)) throw new ModelServiceError("先在模型设置中允许 Alpha 使用这个服务商");
   const services = await ompRegistry();
   if (!services.modelRegistry.getAll("chat").some(model => model.provider === provider)) {
     services.authStorage.close();

@@ -1,8 +1,8 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowDown, Check, ChevronDown, ChevronRight, CircleDot, FileDiff, Globe, Hand, RotateCw, Square, X } from "lucide-react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ArrowDown, Check, ChevronDown, ChevronRight, CircleDot, CirclePause, FileDiff, Globe, Hand, RotateCw, UserRound, X } from "lucide-react";
 import type { EvidenceItem, GuidanceStatus, ReviewSummary, TaskView } from "../api/types";
 import { evidenceNear } from "../state/evidence";
-import { formatDateTime, formatDuration, formatTime, guidanceLabel, guidanceText, phaseInfo, toolInfo } from "../state/labels";
+import { formatDateTime, formatDuration, formatTime, guidanceLabel, guidanceText, phaseInfo, toolInfo, type Tone } from "../state/labels";
 import type { Block, TimelineItem, ToolCall, Turn, TurnKind } from "../state/timeline";
 import { openDetail } from "../state/workbench";
 import { Markdown } from "./Markdown";
@@ -14,6 +14,7 @@ const KIND_LABEL: Record<TurnKind, string> = {
   create: "开始构建",
   revise: "按修订后的目标构建",
   resume: "继续修复",
+  ask: "回答追问",
   publish: "重新发布预览",
   verify: "浏览器验收",
   other: "运行",
@@ -21,13 +22,17 @@ const KIND_LABEL: Record<TurnKind, string> = {
 
 function UserMessage({ label, text, at, status }: { label: string; text: string; at: string | null; status?: GuidanceStatus }) {
   const statusLabel = guidanceLabel(status);
+  // Long briefs (migrated automations, pasted specs) would otherwise push the whole conversation off screen.
+  const long = text.length > 420 || text.split("\n").length > 8;
+  const [expanded, setExpanded] = useState(false);
   return <div className="user-message">
     <div className="user-message-meta">
       <span>{label}</span>
       {at && <time dateTime={at}>{formatDateTime(at)}</time>}
       {statusLabel && <Badge tone={status === "processed" ? "success" : status === "delivered" ? "accent" : "neutral"}>{statusLabel}</Badge>}
     </div>
-    <div className="user-message-bubble">{text}</div>
+    <div className={`user-message-bubble${long && !expanded ? " clamped" : ""}`}>{text}</div>
+    {long && <button className="link-button user-message-toggle" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? "收起" : "展开全文"}</button>}
   </div>;
 }
 
@@ -95,7 +100,7 @@ function phaseIcon(phase: string, active: boolean): ReactNode {
     case "已验收": return <Check size={13} className="tone-text-success" aria-hidden />;
     case "失败": return <X size={13} className="tone-text-danger" aria-hidden />;
     case "待验收": return <CircleDot size={13} className="tone-text-warning" aria-hidden />;
-    case "已停止": return <Square size={11} className="tone-text-muted" aria-hidden />;
+    case "已停止": return <CirclePause size={13} className="tone-text-muted" aria-hidden />;
     case "用户接管": return <Hand size={13} className="tone-text-warning" aria-hidden />;
     default: return <span className="progress-dot" aria-hidden />;
   }
@@ -166,7 +171,48 @@ function turnSummary(turn: Turn): string {
   return turn.toolCount ? `${turn.toolCount} 次工具调用` : "";
 }
 
-const AgentTurn = memo(function AgentTurn({ turn, defaultOpen, evidence }: { turn: Turn; defaultOpen: boolean; evidence: EvidenceItem[] }) {
+type WorkerInstance = NonNullable<NonNullable<TaskView["cognition"]>["instances"]>[number];
+
+const MODE_LABEL: Record<string, string> = { investigate: "调查", implement: "实现", review: "审查" };
+
+function workerState(worker: WorkerInstance): { label: string; tone: Tone } {
+  switch (worker.status) {
+    case "queued": return { label: "排队中", tone: "neutral" };
+    case "running": return { label: "进行中", tone: "accent" };
+    case "returned": return worker.integration === "conflict" ? { label: "合并冲突", tone: "danger" } : { label: "待集成", tone: "warning" };
+    case "completed": return { label: worker.integration === "merged" ? "已集成" : "已完成", tone: "success" };
+    case "blocked": return { label: "受阻", tone: "warning" };
+    case "failed": return { label: "失败", tone: "danger" };
+    case "cancelled": return { label: "已取消", tone: "neutral" };
+    default: return { label: worker.status, tone: "neutral" };
+  }
+}
+
+/** Subagents dispatched during a turn, so parallel expert work reads as part of the conversation. */
+function WorkerCards({ workers }: { workers: WorkerInstance[] }) {
+  return <ul className="worker-cards" aria-label="子代理">
+    {workers.map(worker => {
+      const state = workerState(worker);
+      const duration = worker.startedAt && worker.endedAt ? formatDuration(Date.parse(worker.endedAt) - Date.parse(worker.startedAt)) : "";
+      return <li key={worker.id}>
+        <button className="worker-card" onClick={() => openDetail({ kind: "info" })} title="在任务详情中查看活动与差异">
+          <span className="worker-card-head">
+            <UserRound size={13} aria-hidden />
+            <strong>{worker.expert?.name ?? "通用执行"}</strong>
+            <span className="worker-card-mode">{MODE_LABEL[worker.mode] ?? worker.mode}</span>
+            <Badge tone={state.tone}>{worker.status === "running" && <Spinner size={11} />}{state.label}</Badge>
+          </span>
+          <span className="worker-card-meta">{worker.orderId}{duration ? ` · ${duration}` : ""}</span>
+          {!!worker.findings?.length && <span className="worker-card-finding">{worker.findings[0]}</span>}
+        </button>
+      </li>;
+    })}
+  </ul>;
+}
+
+const NO_WORKERS: WorkerInstance[] = [];
+
+const AgentTurn = memo(function AgentTurn({ turn, defaultOpen, evidence, workers = NO_WORKERS }: { turn: Turn; defaultOpen: boolean; evidence: EvidenceItem[]; workers?: WorkerInstance[] }) {
   const [open, setOpen] = useState(defaultOpen);
   useEffect(() => { if (turn.live) setOpen(true); }, [turn.live]);
   const outcome = turn.outcome ? phaseInfo(turn.outcome) : null;
@@ -204,6 +250,7 @@ const AgentTurn = memo(function AgentTurn({ turn, defaultOpen, evidence }: { tur
     {open
       ? <div className="agent-turn-body"><TurnBody turn={turn} evidence={evidence} /></div>
       : summary && <p className="agent-turn-summary" onClick={() => setOpen(true)}>{summary}</p>}
+    {workers.length > 0 && <WorkerCards workers={workers} />}
     {turn.review && <ReviewLink review={turn.review} />}
   </article>;
 });
@@ -215,6 +262,19 @@ export function Timeline({ items, task }: { items: TimelineItem[]; task: TaskVie
   const stuckRef = useRef(true);
   const lastTop = useRef(0);
   const turnCount = items.filter(item => item.type === "turn").length;
+  // Each subagent belongs to the model turn it was dispatched in; without recorded turns they are listed at the end.
+  const { workersByTurn, unplacedWorkers } = useMemo(() => {
+    const workers = (task.cognition?.instances ?? []).filter(item => item.parentId || item.orderId !== "coordinator");
+    const turns = items.filter((item): item is Extract<TimelineItem, { type: "turn" }> => item.type === "turn" && item.modelRun);
+    const byTurn = new Map<string, WorkerInstance[]>();
+    const unplaced: WorkerInstance[] = [];
+    for (const worker of workers) {
+      const turn = worker.startedAt ? turns.findLast(item => item.startedAt <= worker.startedAt!) ?? turns[0] : turns.at(-1);
+      if (turn) byTurn.set(turn.id, [...(byTurn.get(turn.id) ?? []), worker]);
+      else unplaced.push(worker);
+    }
+    return { workersByTurn: byTurn, unplacedWorkers: unplaced };
+  }, [items, task.cognition?.instances]);
 
   const stick = (value: boolean) => {
     stuckRef.current = value;
@@ -266,6 +326,8 @@ export function Timeline({ items, task }: { items: TimelineItem[]; task: TaskVie
               return <UserMessage key={item.id} label={item.version === 1 ? "目标" : `修订目标 · v${item.version}`} text={item.text} at={item.at} />;
             case "guidance":
               return <UserMessage key={item.id} label="补充要求" text={guidanceText(item.text)} at={item.at} status={item.status} />;
+            case "question":
+              return <UserMessage key={item.id} label="追问" text={item.text} at={item.at} />;
             case "review":
               return <div key={item.id} className="system-turn">
                 <header className="system-turn-header"><FileDiff size={14} aria-hidden /><span className="system-turn-title">源码快照</span><time dateTime={item.at}>{formatDateTime(item.at)}</time></header>
@@ -274,9 +336,13 @@ export function Timeline({ items, task }: { items: TimelineItem[]; task: TaskVie
             case "legacy":
               return <p key={item.id} className="timeline-note">这个任务创建于过程记录功能之前，没有逐轮过程；验收证据和源码快照仍然可以查看。</p>;
             case "turn":
-              return <AgentTurn key={item.id} turn={item} defaultOpen={item.live || item.index > turnCount - 2} evidence={task.evidence} />;
+              return <AgentTurn key={item.id} turn={item} defaultOpen={item.live || item.index > turnCount - 2} evidence={task.evidence} workers={workersByTurn.get(item.id)} />;
           }
         })}
+        {unplacedWorkers.length > 0 && <div className="system-turn">
+          <header className="system-turn-header"><UserRound size={14} aria-hidden /><span className="system-turn-title">子代理</span></header>
+          <WorkerCards workers={unplacedWorkers} />
+        </div>}
       </div>
     </div>
     {!stuck && <button className="jump-latest" onClick={jump}><ArrowDown size={14} aria-hidden />最新进展</button>}

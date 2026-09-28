@@ -1,37 +1,36 @@
 import { api } from "../api/client";
 import { connectEvents, type ConnectionState } from "../api/events";
-import type { ActivityEntry, ControlHolder, ModelCatalog, OperationSnapshot, ProjectRecord, ReviewSummary, ServerMessage, Settings, SettingsPatch, TaskList, TaskMeta, TaskSummary, TaskView } from "../api/types";
+import type { ActivityEntry, ControlHolder, ModelCatalog, OperationSnapshot, ProjectRecord, ReviewSummary, RunInfo, ServerMessage, Settings, SettingsPatch, TaskList, TaskMeta, TaskSummary, TaskView } from "../api/types";
 import { TERMINAL_PHASES, taskTitle } from "./labels";
 import { buildTaskReport } from "./report";
 import { createStore } from "./store";
 import { mergeActivity } from "./timeline";
 
 export type Detail = { kind: "diff"; operationId: string } | { kind: "evidence"; criterionId?: string; evidenceId?: string } | { kind: "info" };
-export type PendingAction = "start" | "resume" | "revise" | "guidance" | "stop" | "publish" | "verify" | "control" | "plan" | "approve" | "goal";
-export type SettingsSection = "model" | "run" | "agents" | "generation" | "interface" | "workspace" | "diagnostics" | "shortcuts";
+export type PendingAction = "start" | "resume" | "revise" | "guidance" | "ask" | "stop" | "publish" | "verify" | "control" | "plan" | "approve" | "goal";
+export type SettingsSection = "model" | "run" | "agents" | "generation" | "web" | "interface" | "workspace" | "diagnostics" | "shortcuts";
 export type Panel = { kind: "settings"; section: SettingsSection } | { kind: "automations" };
 
 export interface AppState {
   loaded: boolean;
   tasks: TaskSummary[];
   projects: ProjectRecord[];
-  /** The task whose model run holds the single execution slot, as reported by the server. */
-  activeTaskId: string | null;
-  activeRunId: string | null;
-  serverOperation: OperationSnapshot | null;
+  /** Model runs in progress; tasks run side by side up to the configured limit. */
+  runs: RunInfo[];
+  /** Every server operation in progress (model runs, answers, publications, verifications, cleanups) with its phase. */
+  operations: OperationSnapshot[];
   selectedId: string | null;
   task: TaskView | null;
   activity: ActivityEntry[];
   reviews: ReviewSummary[];
   /** Streamed model text for the selected task that has not yet been flushed into an activity entry. */
   liveText: string;
-  /** Any server operation in progress (model run, publication or verification), from status events. */
-  operation: { taskId: string | null; phase: string } | null;
   runningPreview: { taskId: string; url: string } | null;
   controlHolder: ControlHolder;
   connection: ConnectionState;
   pending: PendingAction | null;
-  starting: { brief: string; error: string | null } | null;
+  /** A new task being started from the new-task page; `runId` identifies its run once the server has accepted it. */
+  starting: { brief: string; error: string | null; runId?: string | null } | null;
   notice: { id: number; tone: "error" | "info"; text: string } | null;
   detail: Detail | null;
   workspaceView: "closed" | "preview" | "detail" | "terminal";
@@ -48,15 +47,13 @@ export const store = createStore<AppState>({
   loaded: false,
   tasks: [],
   projects: [],
-  activeTaskId: null,
-  activeRunId: null,
-  serverOperation: null,
+  runs: [],
+  operations: [],
   selectedId: null,
   task: null,
   activity: [],
   reviews: [],
   liveText: "",
-  operation: null,
   runningPreview: null,
   controlHolder: "alpha",
   connection: "connecting",
@@ -72,8 +69,33 @@ export const store = createStore<AppState>({
   paletteOpen: false,
 });
 
-export function isOccupied(state: AppState): boolean {
-  return state.serverOperation !== null || state.activeRunId !== null || state.operation !== null || state.pending !== null;
+export function runOf(state: AppState, taskId: string): RunInfo | null {
+  return state.runs.find(run => run.taskId === taskId) ?? null;
+}
+
+export function operationOf(state: AppState, taskId: string): OperationSnapshot | null {
+  return state.operations.find(item => item.taskId === taskId) ?? null;
+}
+
+/** Whether the task has work in progress on the server: a model run, an answer, a publication or a verification. */
+export function taskBusy(state: AppState, taskId: string): boolean {
+  return !!runOf(state, taskId) || !!operationOf(state, taskId);
+}
+
+/** The phase of the task's work in progress, until that work settles. */
+export function taskPhase(state: AppState, taskId: string): string | null {
+  const phase = operationOf(state, taskId)?.phase;
+  return phase && !TERMINAL_PHASES.has(phase) ? phase : null;
+}
+
+/** The task whose page the one visible preview browser is working in, if any. */
+export function browserOwner(state: AppState): string | null {
+  return state.operations.find(item => item.browserTaskId)?.browserTaskId ?? state.operations.find(item => item.phase === "浏览器验收")?.taskId ?? null;
+}
+
+/** Whether an action on the task has to wait: this window is already sending one, or the task has work in progress. */
+export function isOccupied(state: AppState, taskId: string | null): boolean {
+  return state.pending !== null || (taskId !== null && taskBusy(state, taskId));
 }
 
 const SELECTED_KEY = "alpha.selectedTask";
@@ -104,7 +126,7 @@ export function dismissNotice(id: number): void {
 function upsertSummary(tasks: TaskSummary[], task: TaskView): TaskSummary[] {
   const summary: TaskSummary = {
     id: task.id, objective: task.objective, originalObjective: task.originalObjective, contractVersion: task.contractVersion,
-    status: task.status, running: task.running, pendingCount: task.pending.length, createdAt: task.createdAt, updatedAt: task.updatedAt,
+    status: task.status, running: task.running, runKind: task.runKind, pendingCount: task.pending.length, createdAt: task.createdAt, updatedAt: task.updatedAt,
     modelSelector: task.modelSelector, meta: task.meta, projectId: task.projectId, projectVersion: task.projectVersion,
     permissionMode: task.permissionMode, taskType: task.taskType, workspaceOrigin: task.workspaceOrigin,
     designatedExpertId: task.designatedExpertId, phase: task.phase, goal: task.goal, queued: task.queued,
@@ -119,7 +141,23 @@ function upsertSummary(tasks: TaskSummary[], task: TaskView): TaskSummary[] {
 async function loadRunningPreview(id: string): Promise<void> {
   const task = await api.task(id).catch(() => null);
   const state = store.get();
-  if (task?.preview?.live && (state.serverOperation?.browserTaskId ?? state.serverOperation?.taskId ?? state.activeTaskId) === id) store.set({ runningPreview: { taskId: id, url: task.preview.url } });
+  if (task?.preview?.live && browserOwner(state) === id) store.set({ runningPreview: { taskId: id, url: task.preview.url } });
+}
+
+/** When a task takes the visible browser (for verification), shows the browser and loads that task's page. */
+function followBrowser(previous: AppState): void {
+  const owner = browserOwner(store.get());
+  if (!owner || owner === browserOwner(previous)) return;
+  revealPreviewForBrowserWork();
+  void loadRunningPreview(owner);
+}
+
+/** Opens the task a new-task start created, once the server reports which task its run belongs to. */
+function openStarted(): void {
+  const { starting, runs, selectedId } = store.get();
+  if (!starting?.runId || starting.error || selectedId !== null) return;
+  const taskId = runs.find(run => run.runId === starting.runId)?.taskId;
+  if (taskId) void openTask(taskId);
 }
 
 let tasksRequestVersion = 0;
@@ -130,16 +168,13 @@ export async function refreshTasks(): Promise<TaskList | null> {
   try { list = await api.tasks(); } catch { return null; }
   if (version !== tasksRequestVersion) return null;
   const previous = store.get();
+  const shown = previous.runningPreview;
   store.set({
-    loaded: true, tasks: list.tasks, activeTaskId: list.activeTaskId, activeRunId: list.activeRunId,
-    serverOperation: list.operation,
-    operation: list.operation ? { taskId: list.operation.taskId, phase: list.operation.phase } : null,
-    runningPreview: list.operation?.taskId ? previous.runningPreview : null,
+    loaded: true, tasks: list.tasks, runs: list.runs, operations: list.operations,
+    runningPreview: shown && list.operations.some(item => item.taskId === shown.taskId) ? shown : null,
   });
-  const owner = list.operation?.browserTaskId ?? list.operation?.taskId ?? list.activeTaskId;
-  if (owner && owner !== (previous.serverOperation?.browserTaskId ?? previous.serverOperation?.taskId ?? previous.activeTaskId)) void loadRunningPreview(owner);
-  const state = store.get();
-  if (state.starting && !state.starting.error && state.selectedId === null && list.activeTaskId) void openTask(list.activeTaskId);
+  followBrowser(previous);
+  openStarted();
   return list;
 }
 
@@ -182,7 +217,7 @@ export function newTask(): void {
 }
 
 export function openDetail(detail: AppState["detail"]): void {
-  store.set(state => ({ detail, workspaceView: detail ? browserPreviewOccupied(state) ? "preview" : "detail" : state.workspaceView === "detail" ? "closed" : state.workspaceView }));
+  store.set(state => ({ detail, workspaceView: detail ? previewLocked(state) ? "preview" : "detail" : state.workspaceView === "detail" ? "closed" : state.workspaceView }));
 }
 
 export function showPreview(): void {
@@ -190,7 +225,7 @@ export function showPreview(): void {
 }
 
 export function selectBrowserTab(tabId: string | null): void {
-  if (tabId && browserPreviewOccupied(store.get())) {
+  if (tabId && previewLocked(store.get())) {
     notify("本机预览正在使用浏览器，完成后再切换网页", "info");
     return;
   }
@@ -198,11 +233,11 @@ export function selectBrowserTab(tabId: string | null): void {
 }
 
 export function showReview(): void {
-  store.set(state => browserPreviewOccupied(state) ? { detail: { kind: "info" } } : { workspaceView: "detail", detail: null });
+  store.set(state => previewLocked(state) ? { detail: { kind: "info" } } : { workspaceView: "detail", detail: null });
 }
 
 export function showTerminal(): void {
-  if (browserPreviewOccupied(store.get())) {
+  if (previewLocked(store.get())) {
     notify("浏览器正在使用预览，完成后再切换终端", "info");
     return;
   }
@@ -392,17 +427,14 @@ function revealPreviewForBrowserWork(): void {
   store.set({ workspaceView: "preview", browserTabId: null });
 }
 
+/** The visible preview stays open on the browser while the user controls it or a task verifies in it. */
 export function previewLocked(state: AppState): boolean {
-  return state.controlHolder === "user" || state.serverOperation !== null || state.operation !== null;
-}
-
-function browserPreviewOccupied(state: AppState): boolean {
-  return state.controlHolder === "user" || !!state.serverOperation?.browserTaskId || ["发布本机预览", "浏览器验收"].includes(state.operation?.phase ?? "");
+  return state.controlHolder === "user" || browserOwner(state) !== null;
 }
 
 const notifiedPhases = new Set<string>();
 function notifyStatus(message: Extract<ServerMessage, { type: "status" }>): void {
-  if (!message.taskId || !["已验收", "待验收", "失败", "用户接管"].includes(message.phase)) return;
+  if (!message.taskId || !["已验收", "待验收", "失败", "用户接管", "已回答"].includes(message.phase)) return;
   const key = `${message.taskId}:${message.runId ?? ""}:${message.phase}`;
   if (notifiedPhases.has(key)) return;
   notifiedPhases.add(key);
@@ -413,17 +445,22 @@ function notifyStatus(message: Extract<ServerMessage, { type: "status" }>): void
       notifiedPhases.delete(key);
       return;
     }
-    window.alpha.notify(`Alpha · ${taskTitle(task)}`, message.phase === "用户接管" ? "浏览器需要你接管" : `任务${message.phase}`, task.id);
+    window.alpha.notify(`Alpha · ${taskTitle(task)}`, message.phase === "用户接管" ? "浏览器需要你接管" : message.phase === "已回答" ? "追问已回答" : `任务${message.phase}`, task.id);
     window.alpha.attention?.();
   }, message.phase === "待验收" ? 1_000 : 0);
 }
 
 function handleMessage(message: ServerMessage): void {
   const state = store.get();
-  if (message.type === "task" || message.type === "operation" || message.type === "status") tasksRequestVersion++;
+  if (message.type === "task" || message.type === "operations" || message.type === "runs" || message.type === "status") tasksRequestVersion++;
   switch (message.type) {
-    case "operation":
-      store.set({ serverOperation: message.operation, operation: message.operation ? { taskId: message.operation.taskId, phase: message.operation.phase } : null });
+    case "operations":
+      store.set({ operations: message.operations });
+      followBrowser(state);
+      break;
+    case "runs":
+      store.set({ runs: message.runs });
+      openStarted();
       break;
     case "activity":
       if (message.taskId === state.selectedId) {
@@ -444,7 +481,6 @@ function handleMessage(message: ServerMessage): void {
         task: current.selectedId === task.id ? task : current.task,
         runningPreview: current.runningPreview?.taskId === task.id && !task.preview?.live ? null : current.runningPreview,
       }));
-      if (state.starting && !state.starting.error && state.selectedId === null && task.running) void openTask(task.id);
       scheduleTasksRefresh();
       break;
     }
@@ -453,11 +489,10 @@ function handleMessage(message: ServerMessage): void {
       break;
     case "status": {
       notifyStatus(message);
-      const terminal = TERMINAL_PHASES.has(message.phase);
-      store.set({ operation: terminal ? null : { taskId: message.taskId ?? null, phase: message.phase } });
-      if (message.phase === "发布本机预览" || message.phase === "浏览器验收") revealPreviewForBrowserWork();
-      if (!terminal) break;
-      if (!message.taskId && state.starting && !state.starting.error) {
+      // Another task's verification reveals the browser through `operations`; its publication stays in the background.
+      if (message.taskId === state.selectedId && (message.phase === "发布本机预览" || message.phase === "浏览器验收")) revealPreviewForBrowserWork();
+      if (!TERMINAL_PHASES.has(message.phase)) break;
+      if (!message.taskId && state.starting && !state.starting.error && message.runId && message.runId === state.starting.runId) {
         store.set({ starting: { ...state.starting, error: "任务未能启动" } });
       }
       void refreshTasks();
@@ -468,7 +503,7 @@ function handleMessage(message: ServerMessage): void {
       break;
     }
     case "preview":
-      revealPreviewForBrowserWork();
+      if (message.taskId === state.selectedId) revealPreviewForBrowserWork();
       if (message.taskId) {
         store.set({ runningPreview: { taskId: message.taskId, url: message.url } });
         if (message.taskId === state.selectedId) void syncSelected(message.taskId);
@@ -478,7 +513,7 @@ function handleMessage(message: ServerMessage): void {
       store.set({ controlHolder: message.holder });
       break;
     case "error":
-      if (!message.taskId && state.starting) store.set({ starting: { ...state.starting, error: message.message } });
+      if (!message.taskId && state.starting && message.runId && message.runId === state.starting.runId) store.set({ starting: { ...state.starting, error: message.message } });
       break;
   }
 }
@@ -510,22 +545,21 @@ export function startWorkbench(): () => void {
     onMessage: handleMessage,
     onState: connection => store.set({ connection }),
     onReconnect: () => {
-      // Status events may have been missed while disconnected; the server state is re-read instead.
-      store.set({ operation: null });
+      // Events may have been missed while disconnected; the server state is re-read instead.
       void resync();
     },
   });
   void (async () => {
     const [list] = await Promise.all([refreshTasks(), refreshProjects(), loadSettings()]);
     const saved = recalled();
-    const id = list?.tasks.find(task => task.id === saved)?.id ?? list?.activeTaskId ?? list?.tasks[0]?.id;
+    const id = list?.tasks.find(task => task.id === saved)?.id ?? list?.runs.find(run => run.taskId)?.taskId ?? list?.tasks[0]?.id;
     if (id && !store.get().selectedId) void openTask(id);
     const holder = await api.control().catch(() => null);
     if (holder) store.set({ controlHolder: holder });
   })();
   const poll = setInterval(() => {
     const state = store.get();
-    if (state.activeRunId || state.operation) void resync();
+    if (state.runs.length || state.operations.length) void resync();
   }, 15_000);
   let lastFocus = 0;
   const onFocus = () => {
@@ -566,7 +600,8 @@ export async function startTask(brief: string, model: string | null = null, expe
   store.set({ pending: "start", starting: { brief: text, error: null } });
   try {
     const { runId } = await api.start(text, model, expertId, startMode, continueUntilAccepted);
-    store.set({ activeRunId: runId });
+    store.set(state => ({ starting: state.starting && !state.starting.error ? { ...state.starting, runId } : state.starting }));
+    openStarted();
   } catch (error) {
     store.set({ starting: { brief: text, error: messageOf(error) } });
   } finally {
@@ -579,8 +614,7 @@ export async function startGeneralTask(input: Parameters<typeof api.startGeneral
   if (!text || store.get().pending) return;
   store.set({ pending: "start", starting: { brief: text, error: null } });
   try {
-    const { taskId, runId } = await api.startGeneral(input);
-    if (runId) store.set({ activeRunId: runId, activeTaskId: taskId });
+    const { taskId } = await api.startGeneral(input);
     await Promise.all([refreshTasks(), openTask(taskId)]);
   } catch (error) { store.set({ starting: { brief: text, error: messageOf(error) } }); }
   finally { store.set({ pending: null }); }
@@ -591,8 +625,7 @@ export async function importTask(sourcePath: string, objective: string, model: s
   if (!sourcePath.trim() || !text || store.get().pending) return;
   store.set({ pending: "start", starting: { brief: text, error: null } });
   try {
-    const { taskId, runId } = await api.importWorkspace(sourcePath.trim(), text, model, expertId, startMode, continueUntilAccepted);
-    store.set({ activeRunId: runId, activeTaskId: taskId });
+    const { taskId } = await api.importWorkspace(sourcePath.trim(), text, model, expertId, startMode, continueUntilAccepted);
     await Promise.all([refreshTasks(), openTask(taskId)]);
   } catch (error) {
     store.set({ starting: { brief: text, error: messageOf(error) } });
@@ -604,8 +637,7 @@ export async function startProjectTask(projectId: string, mountId: string, objec
   if (!projectId || !mountId || !text || store.get().pending) return;
   store.set({ pending: "start", starting: { brief: text, error: null } });
   try {
-    const { taskId, runId } = await api.startProjectTask(projectId, mountId, text, permissionMode, model, expertId, startMode, continueUntilAccepted);
-    store.set({ activeRunId: runId, activeTaskId: taskId });
+    const { taskId } = await api.startProjectTask(projectId, mountId, text, permissionMode, model, expertId, startMode, continueUntilAccepted);
     await Promise.all([refreshTasks(), openTask(taskId)]);
   } catch (error) {
     store.set({ starting: { brief: text, error: messageOf(error) } });
@@ -617,8 +649,7 @@ export async function startWorkflow(taskType: "research" | "file-work", objectiv
   if (!text || store.get().pending) return;
   store.set({ pending: "start", starting: { brief: text, error: null } });
   try {
-    const { taskId, runId } = await api.startWorkflow(taskType, text, files, model, startMode, continueUntilAccepted);
-    store.set({ activeRunId: runId, activeTaskId: taskId });
+    const { taskId } = await api.startWorkflow(taskType, text, files, model, startMode, continueUntilAccepted);
     await Promise.all([refreshTasks(), openTask(taskId)]);
   } catch (error) {
     store.set({ starting: { brief: text, error: messageOf(error) } });
@@ -629,8 +660,7 @@ export function clearStarting(): void {
   store.set({ starting: null });
 }
 
-async function afterLaunch(taskId: string, runId: string): Promise<void> {
-  store.set({ activeRunId: runId, activeTaskId: taskId });
+async function afterLaunch(taskId: string): Promise<void> {
   await Promise.all([refreshTasks(), syncSelected(taskId)]);
 }
 
@@ -639,7 +669,7 @@ export async function resumeTask(instruction: string, taskId?: string): Promise<
   if (!task) return false;
   const result = await perform("resume", () => api.resume(task.id, instruction.trim()));
   if (!result) return false;
-  await afterLaunch(task.id, result.runId);
+  await afterLaunch(task.id);
   return true;
 }
 
@@ -648,7 +678,7 @@ export async function enterPlanning(): Promise<boolean> {
   if (!task) return false;
   const result = await perform("plan", () => api.enterPlan(task.id));
   if (!result) return false;
-  await afterLaunch(task.id, result.runId);
+  await afterLaunch(task.id);
   return true;
 }
 
@@ -657,7 +687,7 @@ export async function approveTaskPlan(): Promise<boolean> {
   if (!task?.cognition || task.phase !== "plan-review" || !task.revision) return false;
   const result = await perform("approve", () => api.approvePlan(task.id, { contractVersion: task.contractVersion, cognitionRevision: task.cognition!.revision, sourceRevision: task.revision! }));
   if (!result) return false;
-  await afterLaunch(task.id, result.runId);
+  await afterLaunch(task.id);
   return true;
 }
 
@@ -676,7 +706,7 @@ export async function reviseTask(objective: string): Promise<boolean> {
   if (!task || !text || text === task.objective) return false;
   const result = await perform("revise", () => api.revise(task.id, text));
   if (!result) return false;
-  await afterLaunch(task.id, result.runId);
+  await afterLaunch(task.id);
   return true;
 }
 
@@ -685,7 +715,7 @@ export async function sendTaskMessage(input: Parameters<typeof api.sendMessage>[
   if (!task) return false;
   const result = await perform(task.running ? "guidance" : task.status === "complete" ? "revise" : "resume", () => api.sendMessage(task.id, input));
   if (!result) return false;
-  if (result.runId) await afterLaunch(task.id, result.runId);
+  if (result.runId) await afterLaunch(task.id);
   else await syncSelected(task.id);
   return true;
 }
@@ -700,22 +730,34 @@ export async function sendGuidance(text: string): Promise<boolean> {
   return true;
 }
 
-export async function stopTask(): Promise<void> {
-  if (stopFlight) return stopFlight;
-  const { activeRunId, serverOperation } = store.get();
-  if (!serverOperation?.cancellable && !activeRunId) return;
-  stopFlight = (async () => {
-    try {
-      if (serverOperation?.cancellable) await api.cancelOperation(serverOperation.id);
-      else if (activeRunId) await api.cancel(activeRunId);
-      notify("正在停止本轮运行…", "info");
-    } catch (error) { notify(messageOf(error)); }
-    finally { stopFlight = null; }
-  })();
-  return stopFlight;
+/** Asks a question about the selected task; the answer reads its workspace and never changes the task. */
+export async function askTask(question: string): Promise<boolean> {
+  const task = store.get().task;
+  const text = question.trim();
+  if (!task || !text) return false;
+  const result = await perform("ask", () => api.ask(task.id, text));
+  if (!result) return false;
+  await afterLaunch(task.id);
+  return true;
 }
 
-let stopFlight: Promise<void> | null = null;
+/** Stops the work in progress on a task (the selected one by default): its model run, or a cancellable operation. */
+export async function stopTask(taskId: string | null = store.get().selectedId): Promise<void> {
+  if (!taskId || stopping.has(taskId)) return;
+  const state = store.get();
+  const run = runOf(state, taskId);
+  const operation = operationOf(state, taskId);
+  if (!run && !operation?.cancellable) return;
+  stopping.add(taskId);
+  try {
+    if (run) await api.cancel(run.runId);
+    else await api.cancelOperation(operation!.id);
+    notify("正在停止本轮运行…", "info");
+  } catch (error) { notify(messageOf(error)); }
+  finally { stopping.delete(taskId); }
+}
+
+const stopping = new Set<string>();
 
 export async function republish(): Promise<void> {
   const task = store.get().task;
@@ -761,7 +803,7 @@ export async function toggleControl(): Promise<void> {
       store.set({ controlHolder: holder });
       const state = store.get();
       const task = state.task;
-      if (holder === "alpha" && task?.status === "active" && task.preview?.live && task.pending.includes("user-path") && !isOccupied(state)) void verifyTask();
+      if (holder === "alpha" && task?.status === "active" && task.preview?.live && task.pending.includes("user-path") && !isOccupied(state, task.id)) void verifyTask();
     } catch (error) { notify(messageOf(error)); }
     finally { controlFlight = null; }
   })();

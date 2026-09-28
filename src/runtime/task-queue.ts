@@ -55,7 +55,8 @@ export class TaskQueueStore {
       return queued;
     });
   }
-  async next(): Promise<QueueItem | null> { return (await this.all()).items.find(item => item.status === "pending") ?? null; }
+  /** The oldest pending item, passing over items `skip` rejects (their task is busy). */
+  async next(skip: (item: QueueItem) => boolean = () => false): Promise<QueueItem | null> { return (await this.all()).items.find(item => item.status === "pending" && !skip(item)) ?? null; }
   async start(id: string, runId: string): Promise<void> { await this.mutate(async () => { const data = await this.read(); const item = data.items.find(value => value.id === id); if (!item || item.status !== "pending") throw new Error("Queue item is not pending"); item.status = "running"; item.runId = runId; item.startedAt = new Date().toISOString(); await this.write(data); }); }
   async finish(id: string, result: string, success: boolean): Promise<void> { await this.mutate(async () => { const data = await this.read(); const item = data.items.find(value => value.id === id); if (!item || item.status === "complete" || item.status === "failed") return; item.status = success ? "complete" : "failed"; item.result = result; item.finishedAt = new Date().toISOString(); await this.write(data); }); }
   async cancel(id: string): Promise<void> { await this.mutate(async () => { const data = await this.read(); const item = data.items.find(value => value.id === id); if (!item || item.status !== "pending") throw new Error("Queue item is not pending"); item.status = "failed"; item.result = "cancelled before start"; item.finishedAt = new Date().toISOString(); await this.write(data); }); }

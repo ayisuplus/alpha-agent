@@ -73,12 +73,12 @@ try {
   await shell.click(".new-task-button");
   await shell.waitForSelector("#brief");
   const initial = await shell.evaluate(() => ({
-    heading: document.querySelector(".new-task-hero h1")?.textContent,
+    heading: document.querySelector(".new-task-hero h1")?.getAttribute("aria-label"),
     projectPanel: !!document.querySelector('[aria-label="项目与工作目录"]'),
     refine: [...document.querySelectorAll(".new-task-box button")].some(button => button.textContent?.includes("优化并英译")),
     taskTypes: !!document.querySelector(".new-task-type-list"),
   }));
-  if (initial.heading !== "想让 Alpha 完成什么？" || !initial.projectPanel || !initial.refine || initial.taskTypes) throw new Error(`Unified composer failed: ${JSON.stringify(initial)}`);
+  if (initial.heading !== "你好，我是 Alpha，想让我替你完成什么？" || !initial.projectPanel || !initial.refine || initial.taskTypes) throw new Error(`Unified composer failed: ${JSON.stringify(initial)}`);
   await shell.click('[aria-label="添加文件、Skill 或插件"]');
   console.log("probe: plus menu");
   const menu = await shell.$eval(".capability-menu", element => element.textContent);

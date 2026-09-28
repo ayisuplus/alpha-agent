@@ -35,10 +35,59 @@ function filePath(input: string, allowSelector: boolean): string {
   return path;
 }
 
+/**
+ * ast_grep takes `;`-separated targets that may end in a glob. Each target's fixed directory prefix is what must stay
+ * inside the project; URL schemes and `..` segments are refused outright.
+ */
+export function astGrepBases(input: Record<string, unknown>): string[] {
+  const raw = input.path === undefined ? "." : input.path;
+  if (typeof raw !== "string" || !raw.trim()) throw new Error("ast_grep target cannot be validated");
+  return raw.split(";").map(part => part.trim()).filter(Boolean).map(part => {
+    if (/^[a-z][\w+.-]*:\/\//i.test(part) || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(part) || /[\r\n]/.test(part)) throw new Error(`Unsupported ast_grep target: ${part}`);
+    const wildcard = part.search(/[*?[{]/);
+    return wildcard < 0 ? part : part.slice(0, wildcard).replace(/[^\\/]*$/, "") || ".";
+  });
+}
+
+const PROTECTED_READ = /(?:^|[\\/])(?:\.env(?:\.[^\\/]*)?|\.ssh|\.aws|\.azure|\.codex|\.npmrc|credentials?(?:\.[^\\/]*)?|auth\.json|id_(?:rsa|ed25519)|user data)(?:[\\/]|$)/i;
+
+function inScope(relativePath: string, scopes: readonly string[]): boolean {
+  return scopes.some(scope => scope === "." || (scope.endsWith("/") ? relativePath === scope.slice(0, -1) || relativePath.startsWith(scope) : relativePath === scope));
+}
+
 export async function checkFileToolCall(toolName: string, input: Record<string, unknown>, projectRoot: string, order?: WorkOrder, protectedPaths: string[] = [], reviewing = false, parentWorkers?: { assertParentWrite(path: string): void; assertParentTool(name: string): void }, onRead?: (path: string) => void): Promise<void> {
   if (!order) parentWorkers?.assertParentTool(toolName);
   if (order && !order.fullAccess && ["glob", "ls", "find"].includes(toolName)) throw new Error(`Worker cannot enumerate files with ${toolName}; use explicit readPaths`);
-  if (order?.fullAccess && !["read", "grep", "edit", "write", "alpha_check", "alpha_worker_result", "alpha_cognition_update", "alpha_send", "alpha_inbox", "alpha_browser", "alpha_search", "alpha_source", "alpha_crawl", "alpha_skill_read"].includes(toolName)) onRead?.(".");
+  if (order?.fullAccess && !["read", "grep", "ast_grep", "lsp", "edit", "write", "alpha_check", "alpha_worker_result", "alpha_cognition_update", "alpha_send", "alpha_inbox", "alpha_browser", "alpha_search", "alpha_source", "alpha_crawl", "alpha_skill_read"].includes(toolName)) onRead?.(".");
+  if (toolName === "ast_grep") {
+    const root = await realpath(projectRoot);
+    for (const base of astGrepBases(input)) {
+      const target = await canonicalTarget(resolve(projectRoot, base));
+      if (!inside(root, target)) throw new Error(`File target is outside the assigned project: ${base}`);
+      const relativePath = relative(root, target).split(sep).join("/") || ".";
+      if (order && !order.fullAccess && !inScope(relativePath, [...order.ownedPaths, ...(order.readPaths ?? [])])) throw new Error(`Worker cannot search unassigned path: ${base}`);
+      if (order?.fullAccess) onRead?.(relativePath === "." ? "." : `${relativePath}/`);
+      if (reviewing && PROTECTED_READ.test(target)) throw new Error(`Reviewer cannot read protected file: ${base}`);
+    }
+    return;
+  }
+  if (toolName === "lsp") {
+    // Read-only LSP (navigation, diagnostics) addresses one file, or the whole workspace when none is given.
+    const scopes = order && !order.fullAccess ? [...order.ownedPaths, ...(order.readPaths ?? [])] : null;
+    if (input.file === undefined) {
+      if (scopes && !inScope(".", scopes)) throw new Error("Worker LSP queries need an assigned file");
+      if (order?.fullAccess) onRead?.(".");
+      return;
+    }
+    if (typeof input.file !== "string" || !input.file) throw new Error("lsp target cannot be validated");
+    const root = await realpath(projectRoot);
+    const target = await canonicalTarget(resolve(projectRoot, filePath(input.file, false)));
+    if (!inside(root, target)) throw new Error(`File target is outside the assigned project: ${input.file}`);
+    const relativePath = relative(root, target).split(sep).join("/") || ".";
+    if (scopes && !inScope(relativePath, scopes)) throw new Error(`Worker cannot read unassigned file: ${input.file}`);
+    if (order?.fullAccess) onRead?.(relativePath);
+    return;
+  }
   if (!["read", "grep", "edit", "write"].includes(toolName)) return;
   const paths = toolName === "edit" ? [...(Array.isArray(input.paths) ? input.paths : []), ...(typeof input.path === "string" ? [input.path] : [])]
     : [toolName === "grep" ? input.path ?? "." : input.path];
@@ -60,9 +109,9 @@ export async function checkFileToolCall(toolName: string, input: Record<string, 
     }
     if (order && !order.fullAccess && (toolName === "read" || toolName === "grep")) {
       const scopes = [...order.ownedPaths, ...(order.readPaths ?? [])];
-      if (!scopes.some(scope => scope === "." || (scope.endsWith("/") ? relativePath === scope.slice(0, -1) || relativePath.startsWith(scope) : relativePath === scope))) throw new Error(`Worker cannot read unassigned file: ${raw}`);
+      if (!inScope(relativePath, scopes)) throw new Error(`Worker cannot read unassigned file: ${raw}`);
     }
-    if (reviewing && /(?:^|[\\/])(?:\.env(?:\.[^\\/]*)?|\.ssh|\.aws|\.azure|\.codex|\.npmrc|credentials?(?:\.[^\\/]*)?|auth\.json|id_(?:rsa|ed25519)|user data)(?:[\\/]|$)/i.test(target)) throw new Error(`Reviewer cannot read protected file: ${raw}`);
+    if (reviewing && PROTECTED_READ.test(target)) throw new Error(`Reviewer cannot read protected file: ${raw}`);
     if (reviewing && (toolName === "edit" || toolName === "write")) throw new Error("Reviewer is read-only");
     if (toolName === "edit" || toolName === "write") {
       const relativePath = relative(root, target).split(sep).join("/");

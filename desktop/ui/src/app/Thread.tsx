@@ -13,7 +13,7 @@ import { Timeline } from "../components/Timeline";
 import { Spinner } from "../components/ui";
 import { useStore } from "../state/store";
 import { attachLiveText, buildTimeline, livePhase } from "../state/timeline";
-import { openDetail, store, type Detail } from "../state/workbench";
+import { openDetail, store, taskBusy, taskPhase, type Detail } from "../state/workbench";
 import "./Thread.css";
 
 export function TaskDetail({ task, detail, onBack }: { task: TaskView; detail: Detail; onBack(): void }) {
@@ -26,14 +26,15 @@ function TaskThread({ task }: { task: TaskView }) {
   const activity = useStore(store, state => state.activity);
   const reviews = useStore(store, state => state.reviews);
   const liveText = useStore(store, state => state.liveText);
-  const operation = useStore(store, state => state.operation);
+  const serverBusy = useStore(store, state => taskBusy(state, task.id));
+  const serverPhase = useStore(store, state => taskPhase(state, task.id));
   const detail = useStore(store, state => state.detail);
   const workspaceView = useStore(store, state => state.workspaceView);
 
-  const busy = task.running || operation?.taskId === task.id;
+  const busy = task.running || serverBusy;
   const items = useMemo(() => buildTimeline({ task, activity, reviews, busy }), [task, activity, reviews, busy]);
   const withLive = useMemo(() => attachLiveText(items, liveText, busy, new Date().toISOString()), [items, liveText, busy]);
-  const phase = (operation?.taskId === task.id ? operation.phase : null) ?? livePhase(items);
+  const phase = serverPhase ?? livePhase(items);
   const back = () => openDetail(null);
   const artifacts = task.status === "complete" ? task.evidence.filter(item => item.kind === "artifact" && item.contractVersion === task.contractVersion && item.revision === task.revision) : [];
 

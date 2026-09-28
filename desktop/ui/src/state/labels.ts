@@ -1,8 +1,8 @@
-import type { Criterion, GuidanceStatus, TaskSummary } from "../api/types";
+import type { Criterion, ExpertLine, GuidanceStatus, TaskSummary } from "../api/types";
 
 export type Tone = "neutral" | "accent" | "success" | "warning" | "danger";
 
-export const TERMINAL_PHASES = new Set(["待验收", "已验收", "用户接管", "已停止", "失败", "需要回答", "计划待审阅", "继续规划", "无实际进展，已停止"]);
+export const TERMINAL_PHASES = new Set(["待验收", "已验收", "用户接管", "已停止", "失败", "需要回答", "计划待审阅", "继续规划", "无实际进展，已停止", "已回答", "回答失败"]);
 
 /** The instruction the server substitutes when "continue repair" is sent without text. */
 export const DEFAULT_RESUME_INSTRUCTION = "Repair the pending acceptance checks while preserving the original objective.";
@@ -28,7 +28,7 @@ export function titleOf(objective: string): string {
 }
 
 export function taskTitle(task: Pick<TaskSummary, "objective" | "originalObjective" | "meta">): string {
-  return task.meta?.title ?? titleOf(task.originalObjective ?? task.objective);
+  return task.meta?.title ?? task.meta?.autoTitle ?? titleOf(task.originalObjective ?? task.objective);
 }
 
 export function taskStatus(task: Pick<TaskSummary, "running" | "queued" | "status" | "taskType" | "phase">): { label: string; tone: Tone } {
@@ -42,16 +42,32 @@ export function taskStatus(task: Pick<TaskSummary, "running" | "queued" | "statu
   return { label: "待验收", tone: "warning" };
 }
 
+// The runtime writes criterion descriptions in English for the model; the workbench always shows these names.
 const CRITERIA: Record<string, string> = {
   build: "产品构建",
   change: "变更审阅",
   check: "项目检查",
+  deliverable: "交付文件",
   "user-path": "浏览器关键路径",
   "local-preview": "本机预览",
 };
 
 export function criterionLabel(id: string, criteria: Criterion[] = []): string {
   return CRITERIA[id] ?? criteria.find(item => item.id === id)?.description ?? id;
+}
+
+export const EXPERT_LINES: ReadonlyArray<{ id: ExpertLine; label: string }> = [
+  { id: "content", label: "内容创作" },
+  { id: "development", label: "全栈开发" },
+  { id: "research", label: "AI 与科研" },
+  { id: "game", label: "平面游戏" },
+  { id: "office", label: "文档办公" },
+  { id: "general", label: "通用" },
+];
+
+/** Experts imported from elsewhere or written by hand carry no line. */
+export function expertLineLabel(line: ExpertLine | undefined): string {
+  return EXPERT_LINES.find(item => item.id === line)?.label ?? "导入与自定义";
 }
 
 export type ToolIcon = "read" | "search" | "edit" | "write" | "build" | "delegate" | "image" | "voice" | "video" | "browser" | "tool";
@@ -86,6 +102,9 @@ export function phaseInfo(phase: string): { label: string; tone: Tone } {
     case "需要回答": return { label: "需要回答", tone: "warning" };
     case "失败": return { label: "失败", tone: "danger" };
     case "修复中": return { label: "根据验收失败自动修复", tone: "warning" };
+    case "回答追问": return { label: "回答追问", tone: "neutral" };
+    case "已回答": return { label: "已回答", tone: "success" };
+    case "回答失败": return { label: "回答失败", tone: "danger" };
     default: return { label: phase, tone: "neutral" };
   }
 }

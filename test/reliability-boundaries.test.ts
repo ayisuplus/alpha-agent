@@ -3,26 +3,51 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkFileToolCall } from "../src/runtime/file-tool-guard";
-import { OperationManager } from "../src/runtime/operation-manager";
+import { BrowserLock, OperationManager } from "../src/runtime/operation-manager";
 import { SettingsStore, WorkbenchMeta } from "../src/runtime/settings";
 import { TaskLedger } from "../src/runtime/task-ledger";
 import { uiHashes, verifyUiHashes } from "../scripts/portable-ui";
 
-test("operation claim is synchronous and only its owner can release or cancel", () => {
-  const seen: Array<string | null> = [];
-  const manager = new OperationManager(snapshot => seen.push(snapshot?.id ?? null));
-  const first = manager.claim("run");
+test("operations on different tasks run side by side; shared tasks, folders and projects are refused", () => {
+  const seen: number[] = [];
+  const manager = new OperationManager(snapshots => seen.push(snapshots.length));
+  const first = manager.claim("run", { taskId: "a", projectId: "p", roots: ["E:\\work\\app"] });
   expect(first).not.toBeNull();
-  expect(manager.claim("run")).toBeNull();
-  expect(manager.claim("verify", "other")).toBeNull();
+  expect(manager.claim("run", { taskId: "a" })).toBeNull();
+  expect(manager.claim("verify", { taskId: "b", roots: ["E:\\WORK\\app\\src"] })).toBeNull();
+  const second = manager.claim("run", { taskId: "b", projectId: "p", roots: ["E:\\work\\other"] });
+  expect(second).not.toBeNull();
+  expect(manager.claim("mount", { projectId: "p", exclusiveProject: true })).toBeNull();
+  expect(manager.claim("answer", { taskId: "c", runLimit: 2 })).toBeNull();
+  expect(manager.claim("cleanup", { exclusive: true })).toBeNull();
+  expect(manager.forTask("b")?.id).toBe(second!.id);
   expect(manager.cancel("wrong")).toBe(false);
   expect(manager.cancel(first!.id)).toBe(true);
   expect(first!.controller.signal.aborted).toBe(true);
-  manager.release({ id: "wrong", controller: new AbortController() });
-  expect(manager.snapshot()?.id).toBe(first!.id);
+  manager.release({ id: first!.id, controller: new AbortController() });
+  expect(manager.snapshots()).toHaveLength(2);
   manager.release(first!);
-  expect(manager.claim("publish", "task")).not.toBeNull();
-  expect(seen).toHaveLength(3);
+  manager.release(second!);
+  const cleanup = manager.claim("cleanup", { exclusive: true });
+  expect(cleanup).not.toBeNull();
+  expect(manager.claim("run", { taskId: "d" })).toBeNull();
+  expect(seen).toEqual([1, 2, 1, 0, 1]);
+});
+
+test("the visible browser is handed to waiting operations in order", async () => {
+  const lock = new BrowserLock();
+  const releaseFirst = await lock.acquire("first", new AbortController().signal);
+  const order: string[] = [];
+  const second = lock.acquire("second", new AbortController().signal).then(release => { order.push("second"); return release; });
+  const cancelled = new AbortController();
+  const third = lock.acquire("third", cancelled.signal).catch(() => order.push("third cancelled"));
+  cancelled.abort();
+  await third;
+  expect(lock.owner).toBe("first");
+  releaseFirst();
+  (await second)();
+  expect(order).toEqual(["third cancelled", "second"]);
+  expect(lock.owner).toBeNull();
 });
 
 test("portable UI manifest rejects a changed or incomplete renderer", async () => {

@@ -201,7 +201,8 @@ export class AutomationStore {
       return due;
     });
   }
-  next(): Promise<AutomationRun | null> { return this.serial(async () => (await this.read()).runs.find(run => run.status === "pending") ?? null); }
+  /** The oldest pending run, passing over runs `skip` rejects (they would follow a busy task). */
+  next(skip: (run: AutomationRun, automation: Automation | undefined) => boolean = () => false): Promise<AutomationRun | null> { return this.serial(async () => { const data = await this.read(); return data.runs.find(run => run.status === "pending" && !skip(run, data.automations.find(item => item.id === run.automationId))) ?? null; }); }
   async start(id: string, taskId: string, operationId: string): Promise<void> { await this.serial(async () => { const data = await this.read(); const run = data.runs.find(item => item.id === id); if (!run || run.status !== "pending") throw new Error("Automation run is not pending"); Object.assign(run, { status: "running", taskId, operationId, startedAt: new Date().toISOString() }); await this.write(data); }); }
   async finish(id: string, status: "complete" | "failed" | "needs-input", result: string): Promise<void> { await this.serial(async () => { const data = await this.read(); const run = data.runs.find(item => item.id === id); if (!run || !["pending", "running"].includes(run.status)) return; Object.assign(run, { status, result, finishedAt: new Date().toISOString() }); await this.write(data); }); }
   async markRead(id: string): Promise<void> { await this.serial(async () => { const data = await this.read(); const run = data.runs.find(item => item.id === id); if (!run) throw new Error("Automation run not found"); run.readAt = new Date().toISOString(); await this.write(data); }); }

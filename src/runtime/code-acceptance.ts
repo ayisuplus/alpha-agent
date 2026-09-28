@@ -5,6 +5,7 @@ import { runCodeCheck } from "./code-check";
 import { ProjectStore } from "./projects";
 import { snapshotSourceHashes, sourceChanges } from "./source-review";
 import { fingerprintSource, type TaskLedger } from "./task-ledger";
+import { taskProfile } from "./task-profile";
 import { reviewCodeApply } from "./workspace-apply";
 
 /** One acceptance path for server and CLI code tasks. Model reports do not create evidence. */
@@ -17,7 +18,7 @@ export async function acceptCodeChange(input: {
   complete?: boolean;
 }): Promise<boolean> {
   const { ledger, dataRoot, runId } = input;
-  if (!["code-change", "general"].includes(ledger.state.taskType ?? "") || ledger.state.status !== "active") throw new Error("Code acceptance requires an active code task");
+  if (!taskProfile(ledger.state.taskType).codeAcceptance || ledger.state.status !== "active") throw new Error("Code acceptance requires an active code task");
   input.signal?.throwIfAborted();
   const projectRoot = ledger.state.projectRoot;
   const direct = ledger.state.workspaceOrigin?.kind === "direct";

@@ -2,7 +2,7 @@ import type { ActivityEntry, ReviewSummary, TaskView } from "../api/types";
 import { criterionLabel, taskStatus, taskTitle } from "./labels";
 import { buildTimeline } from "./timeline";
 
-const TURN_NAMES = { create: "创建", revise: "修订", resume: "构建或修复", publish: "发布预览", verify: "浏览器验收", other: "操作" };
+const TURN_NAMES = { create: "创建", revise: "修订", resume: "构建或修复", ask: "回答追问", publish: "发布预览", verify: "浏览器验收", other: "操作" };
 
 export function buildTaskReport(task: TaskView, activity: ActivityEntry[], reviews: ReviewSummary[]): string {
   const lines = [

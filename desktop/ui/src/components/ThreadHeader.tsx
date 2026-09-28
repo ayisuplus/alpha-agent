@@ -210,7 +210,7 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
         <TaskMenu task={task} open={menuOpen} onClose={() => setMenuOpen(false)} />
       </div>
     </div>
-    <WebPanel task={task} />
+    <WebPanel task={task} compact />
     {task.blockedService === "project" && <div className="thread-alert tone-warning" role="alert"><CircleAlert size={16} aria-hidden /><div className="thread-alert-body"><strong>项目目录已变化</strong><p>{task.pendingQuestion ?? "重新检查后可继续当前任务"}</p></div><div className="thread-alert-actions"><button className="link-button" disabled={rechecking} onClick={() => void (async () => {
       setRechecking(true);
       try { await api.recheckTaskProject(task.id); await syncSelected(task.id); notify("项目目录已重新检查，可以继续任务", "info"); }

@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent";
 import { ompRegistry } from "./models";
+import { ompAgentId } from "./omp-settings";
 import { isAllowedModelSelector } from "./model-policy";
 
 export const PROMPT_CATEGORIES = ["software", "research", "creative", "writing", "general"] as const;
@@ -54,14 +55,15 @@ export function protectedTokens(source: string): string[] {
   return [...new Set(matches.map(token => token.startsWith("`") ? token : token.replace(/[.,;:!?。，；！？]+$/, "")))];
 }
 
-async function generateText(modelSelector: string, system: string, input: string, dataRoot: string, signal?: AbortSignal): Promise<string> {
+/** One tool-less model completion through the local OMP credentials. */
+export async function generateText(modelSelector: string, system: string, input: string, dataRoot: string, signal?: AbortSignal): Promise<string> {
   if (!isAllowedModelSelector(modelSelector)) throw new PromptRefinementError(`模型 ${modelSelector} 不受支持`);
   const { authStorage, modelRegistry } = await ompRegistry();
   try {
     const model = modelRegistry.getAvailable().find(item => `${item.provider}/${item.id}` === modelSelector);
     if (!model) throw new PromptRefinementError(`模型 ${modelSelector} 没有可用的认证`);
     const { session } = await createAgentSession({
-      cwd: dataRoot, agentDir: join(dataRoot, "omp"), authStorage, modelRegistry, model,
+      cwd: dataRoot, agentDir: join(dataRoot, "omp"), authStorage, modelRegistry, model, agentId: ompAgentId("prompt-refine"),
       sessionManager: SessionManager.inMemory(dataRoot), systemPrompt: system,
       toolNames: [], restrictToolNames: true, disableExtensionDiscovery: true,
       enableMCP: false, enableLsp: false, skipPythonPreflight: true,

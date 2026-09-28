@@ -122,16 +122,17 @@ try {
   while (Date.now() < deadline) {
     const [detail, list] = await Promise.all([
       fetch(`${base}/api/tasks/${taskId}`).then(response => response.json()) as Promise<{ task: Record<string, unknown> }>,
-      fetch(`${base}/api/tasks`).then(response => response.json()) as Promise<{ activeRunId: string | null }>,
+      fetch(`${base}/api/tasks`).then(response => response.json()) as Promise<{ runs: Array<{ runId: string; taskId: string | null }> }>,
     ]);
     task = detail.task;
-    const status = `${task.status}/${task.phase}/${list.activeRunId ? "running" : "idle"}`;
+    const runId = list.runs.find(run => run.taskId === taskId)?.runId;
+    const status = `${task.status}/${task.phase}/${runId ? "running" : "idle"}`;
     if (status !== lastStatus) { console.log(JSON.stringify({ event: "status", status, pending: task.pending, lastFailure: task.lastFailure })); lastStatus = status; }
-    if (!list.activeRunId && !task.queued) break;
+    if (!runId && !task.queued) break;
     await Bun.sleep(3_000);
   }
-  const list = await (await fetch(`${base}/api/tasks`)).json() as { activeRunId: string | null };
-  if (list.activeRunId) await fetch(`${base}/api/tasks/${list.activeRunId}/cancel`, { method: "POST" });
+  // Cancelling by task id stops only this probe's run, whatever else is running.
+  await fetch(`${base}/api/tasks/${taskId}/cancel`, { method: "POST" });
   const projectRoot = typeof task.projectRoot === "string" ? task.projectRoot : "";
   const metricsPath = projectRoot ? join(projectRoot, "outputs", "metrics.json") : "";
   const reportPath = projectRoot ? join(projectRoot, "outputs", "report.md") : "";
