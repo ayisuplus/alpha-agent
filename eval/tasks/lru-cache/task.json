@@ -1,0 +1,8 @@
+{
+  "id": "lru-cache",
+  "kind": "code",
+  "hidden": [
+    "hidden/lru.hidden.test.ts"
+  ],
+  "objective": "src/lru.ts 的 LRUCache 应当是标准的最近最少使用缓存：\n- 超出容量时淘汰最久未被使用的条目（现在淘汰的是最新的）；\n- get 读取一个存在的条目会让它变成最近使用；\n- set 一个已存在的键会更新值并让它变成最近使用，不增加条目数；\n- has 只做检查，不改变使用顺序；\n- 容量为 0 时不保存任何条目。\n请修复并补充测试。"
+}

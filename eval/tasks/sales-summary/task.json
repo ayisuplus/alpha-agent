@@ -1,0 +1,39 @@
+{
+  "id": "sales-summary",
+  "kind": "general",
+  "files": [
+    "files/sales.csv"
+  ],
+  "objective": "根据附件 sales.csv（列为 month, region, product, amount，金额单位为元），生成 outputs/region-summary.csv：两列 region,total，每个地区一行，按 total 从高到低排序，第一行为表头，金额写成整数。",
+  "checks": {
+    "file": {
+      "path": "outputs/region-summary.csv",
+      "rows": [
+        [
+          "region",
+          "total"
+        ],
+        [
+          "东北",
+          "96131"
+        ],
+        [
+          "华北",
+          "95462"
+        ],
+        [
+          "华东",
+          "90459"
+        ],
+        [
+          "西南",
+          "82240"
+        ],
+        [
+          "华南",
+          "69371"
+        ]
+      ]
+    }
+  }
+}

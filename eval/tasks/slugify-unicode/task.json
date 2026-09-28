@@ -1,0 +1,8 @@
+{
+  "id": "slugify-unicode",
+  "kind": "code",
+  "hidden": [
+    "hidden/slug.hidden.test.ts"
+  ],
+  "objective": "src/slug.ts 的 slugify 需要满足：\n- 转成小写；连续的空白和标点只变成一个连字符，并去掉首尾的连字符（\"  Hello,   World!  \" → \"hello-world\"）；\n- 保留中文字符（\"你好 World!\" → \"你好-world\"）；\n- 去掉拉丁字母上的重音（\"Café Crème\" → \"cafe-creme\"）；\n- 没有可用字符时返回空字符串。\n请修复并补充测试。"
+}
