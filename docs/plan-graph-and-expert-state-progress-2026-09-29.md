@@ -37,7 +37,11 @@
 另：`totalTokens` 里 DeepSeek 会计入 prompt 缓存命中（第一轮 approval-loop 9.75M 中 7.38M 是 cacheRead），评测报告已拆成"新输入+输出 + 缓存读"两列，跨模型对比只用前者。
 
 ### 1. 端到端评测（进行中）
-- 第一轮（deepseek/deepseek-flash，`--label p6-round-1`，任务：`content-pipeline`、`stale-premise`、`sales-question`、`lru-cache`、`approval-loop`，并发 2）已跑完：独立检查 5/5 通过，但暴露 F1–F3 三个缺陷（见第 0 节）。**该轮不计入对比**（任务被提前评分），记录保留在 `artifacts/eval-2026-09-29-p6-round-1-preboundary/`。
+- 迭代过程中被缺陷中断的三轮不计入对比，作为证据保留：
+  - `artifacts/eval-2026-09-29-p6-round-1-preboundary/`（暴露 F1–F3；5/5 通过但任务被提前评分）
+  - `artifacts/eval-2026-09-29-p6-round-1-boundary-incomplete/`（修复 F1–F3 后暴露 F4–F6；0/5）
+  - `artifacts/eval-2026-09-29-p6-round-1-provider-down/`、`…-xiaomi-partial/`（模型与额度问题）
+- 冒烟验证（`sales-question` 单任务）：图跑通、任务 `complete`、独立检查通过，新输入+输出 29,511 tokens（P0 同任务 28,946），轮次 1→4——小任务开销的可比口径见下一轮完整评测。
 - 第二轮（方案附录 A.3 要求"至少跑两轮取区间"）未跑。
 - 与 P0 基线对比：`bun run eval compare artifacts/eval-2026-09-29-p6-round-3 artifacts/eval-2026-09-29-p6-round-1`。小任务（`sales-question`）看轮次与 token 增量；内容任务关注 gate 拦下数（报告"计划图"列的计划/回边/退审计数）；`stale-premise` 关注是否出现 premise 回边与计划修订。
 - 注意：第一轮评测使用的是 `22bf782` 时点的工作树（服务器在启动时加载模块，之后的提交不影响该进程）。
