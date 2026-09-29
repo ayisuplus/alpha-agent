@@ -451,6 +451,57 @@ gate 的来源与承担者：
 3. 节点粒度指引：规划提示中给出多粗的建议，待 P6 评测后按开销数据确定。
 4. 前提回退导致下游过期时，是自动重开还是由主代理逐个决定：建议先由主代理决定，积累数据后再考虑自动化。
 
+## 附录 B：P6 端到端评测（2026-09-29 实测）
+
+### B.1 方法与场景
+
+四个场景（§10 P6）对应五个任务：内容任务 `content-pipeline`（新增：内容线全流程 + 合规 gate 陷阱）、中途改计划 `stale-premise`（新增：objective 把 bug 指向 money.ts，真实缺陷在 total.ts 的 `Math.round`）、较难代码 `lru-cache`、多轮暂停 `approval-loop`、小任务开销 `sales-question`。命令：
+
+```bash
+bun run eval --tasks content-pipeline,stale-premise,sales-question,lru-cache,approval-loop \
+  --concurrency 2 --label p6-graph-round-N --model deepseek/deepseek-flash
+```
+
+模型换用 DeepSeek Flash 的原因见 A.0（xiaomi 系限速且额度将尽）。评测框架同期增强：`checks.text`（交付文本的必含/禁用词与汉字数）、代码任务的答案检查、从事件日志读取计划图指标（计划提交/修订、rework/premise/redo 回边、changes-requested 结论）、token 拆成"新输入+输出"与"缓存读"（DeepSeek 的 `totalTokens` 含缓存命中）、运行边界后的稳定等待窗口。评分自检 `bun run eval --selfcheck` 12/12 通过。
+
+### B.2 P1 目标验证（`bun run scripts/probe-session-prompt.ts`）
+
+| 指标 | P0 基线（A.1） | P6 实测 |
+|---|---|---|
+| 能力目录条目 | 119（skill 113，其中 expert- 随包 111） | **8**（skill 2、mcp-server 1、builtin-tool 5），expert- 随包 **0** |
+| 任务默认装载 | 2 Skill + 1 MCP 服务 | **0 Skill + 0 MCP** |
+| 协调者固定提示词（评测记录口径） | 代码任务 4,944–5,071 + 4,741（37 工具）；通用 4,634–4,742 + 3,567 | 代码任务 4,204–4,213 + 4,783；通用 4,480–4,926 + 3,811 |
+
+系统提示词少 700–870 token；工具定义多约 240 token（新增 alpha_step/alpha_reopen/alpha_expert_* 等），净减。
+
+### B.3 两轮结果（同一修订：F1–F8 修复后的最终代码）
+
+| 任务 | 轮次 | 独立检查 | Alpha 状态 | 耗时 | 轮次 | 工具调用 | 新输入+输出 | 缓存读 | 计划图 |
+|---|---|---|---|---|---|---|---|---|---|
+| sales-question | R2/R3 | ✅/✅ | complete/complete | 45s/25s | 4/4 | 11/6 | 44,604/27,723 | 199k/90k | 计划 1/修订 1 · 回边 0 · 退审 0 |
+| lru-cache | R2/R3 | ❌/✅ | active/needs-input | 366s/176s | 5/4 | 89/46 | 148,907/68,480 | 4.03M/1.13M | 计划 1/修订 5、1 · redo 1/0 |
+| approval-loop | R2/R3 | ❌/✅ | needs-input/active | 261s/351s | 4/8 | 58/133 | 94,472/328,782 | 1.49M/3.98M | 计划 1/修订 4、2 |
+| content-pipeline | R2/R3 | ✅/✅ | needs-input | 501s/231s | 4/3 | 119/45 | 249,376/110,226 | 4.57M/1.35M | 计划 1/修订 2 · 退审 0 |
+| stale-premise | R2/R3 | ✅/✅ | active/complete | 682s/682s | 17/16 | 231/476 | 748,497/1,037,414 | 12.4M/21.5M | 计划 1/修订 8、3 · redo 0/1 |
+
+两轮合计：R2 3/5、R3 5/5。失败都不是同一处系统缺陷：R2 的 `lru-cache`/`approval-loop` 是模型自己把节点计划成"依赖一个被重开的节点"（`节点前置未完成：verify`/`regen`，运行时守卫正确、模型未恢复）；R3 五个任务独立检查全部通过，其中三个停在命令审批（`alpha_command` 非配置检查，属策略正常暂停）。
+
+与 P0 基线（A.3，xiaomi mimo-v2.6-flash）对比同一批任务：
+
+| 任务 | P0 轮2/轮3 | P6 R2/R3 | 结论 |
+|---|---|---|---|
+| sales-question（小任务） | 1 轮 / 1 调用 / 28,946 / 29,586 tok | 4 轮 / 6–11 调用 / 27,723–44,604 新 token | **轮次 1→4**（计划+三阶段+审查各一轮），**新输入+输出 token 基本不变**（中位约 3.2 万 vs 2.9 万） |
+| lru-cache（较难代码） | 3–5 轮 / 22–58 调用 / 40 万–204 万 | 4–5 轮 / 46–89 调用 / 6.8 万–14.9 万新 + 113 万–403 万缓存 | 轮次相当；调用数上升（含节点交接与审查），token 口径受模型与缓存影响不可直接比 |
+| approval-loop（多轮暂停） | 4 轮 / 32–43 调用 / 46 万–58 万 | 4–8 轮 / 58–133 调用 / 9.4 万–32.9 万新 + 149 万–398 万缓存 | 轮次与调用上升，独立检查在两轮的多数轮次通过 |
+
+### B.4 接力质量（§13）与观察
+
+- **gate**：每轮的计划都带审查节点（`code-review` 由中性审查者承担），`sales-question` 记录到 `verdict: pass`；**两轮均无 `changes-requested` 返工**——内容任务的合规 gate 节点被计划出来（`research → draft → compliance → final`，`draft` 由 `core-content-strategist` 承担，`compliance` 由任务内创建的合规专家承担），但两轮都在 `draft` 里停在命令审批，合规节点未执行到。方案 §10 要求的"含一次 changes-requested 返工"因此**尚未在端到端评测中出现**。
+- **回边**：`premise` 回边两轮均为 0；`redo`（无边重开）在 `lru-cache`/`stale-premise` 各出现 1 次。中途改计划场景靠的是多次 `alpha_plan` 修订（修订 1–8 次），不是 premise 回边。
+- **成本**：`stale-premise` 两轮都跑到 682s、16–17 轮、231–476 次调用、总 token 千万级——模型反复用新节点重写计划（修订最多 8 次），是当前最大的开销与噪声来源；小任务开销稳定。
+- **暂停**：非配置检查的命令审批是无人值守评测里最常见的暂停原因（每轮 2 个任务），模型为了哈希/版本/git 状态去调 `certman`/`certutil`/`git status` 等命令；`alpha_step` 已能自行计算产物哈希，后续可在提示中进一步收紧"不要为交接或验证去跑命令"。
+- **数据存档**：迭代中被缺陷中断的轮次与基线存档见 A.0.1；本轮最终两个样本为 `artifacts/eval-2026-09-29-p6-round-2/`、`artifacts/eval-2026-09-29-p6-round-3/`（标签沿用，P0 基线副本在 `artifacts/eval-2026-09-29-p0-baseline-round-3/`）。
+
 ## 附录 A：P0 量化基线（2026-09-29 实测）
 
 ### A.0.1 基线数据存档说明（2026-09-29 补记）
