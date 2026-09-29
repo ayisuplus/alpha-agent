@@ -1,6 +1,6 @@
 # 计划图与专家状态：最终方案（2026-09-29）
 
-状态：方案已定稿，未实施。取代同日草稿 `expert-as-state-2026-09-29.md`。
+状态：方案已施工（P0–P6）。施工进展与未完事项见 [`plan-graph-and-expert-state-progress-2026-09-29.md`](plan-graph-and-expert-state-progress-2026-09-29.md)；本文保留为设计基准，历史段落不追改。取代同日草稿 `expert-as-state-2026-09-29.md`。
 背景：[dynamic-experts-and-cognition.md](dynamic-experts-and-cognition.md) 的术语表与提交 `e34c28c`。
 
 ## 0. 前提：先计划，后行动
