@@ -40,13 +40,14 @@ export function planGraphSignature(ledger: TaskLedger): string {
 }
 
 /**
- * A node the coordinator still owes work on: one it entered without exiting, one ready to start (a ready node hosted
- * by a worker is the coordinator's to dispatch), or one reopened for redo — without the last case a graph whose only
- * pending work is a reopened node would sit still (§3.3/§3.5).
+ * A node the coordinator still owes work on: one it entered without exiting, one waiting after a pause, one reopened
+ * for redo, or one ready to start (a ready worker node is the coordinator's to dispatch). The first match wins, so a
+ * paused or reopened node is finished before fresh work (§3.3/§3.5).
  */
 export function planActionableNode(ledger: TaskLedger): string | null {
   const nodes = ledger.state.cognition?.nodes ?? [];
   return nodes.find(node => node.status === "active")?.id
+    ?? nodes.find(node => node.status === "waiting")?.id
     ?? nodes.find(node => node.status === "reopened")?.id
     ?? nodes.find(node => node.status === "ready")?.id
     ?? null;

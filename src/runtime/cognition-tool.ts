@@ -113,7 +113,7 @@ export function createCognitionTools(ledger: TaskLedger, dataRoot: string, hooks
           // the plan existed — no node, default access. The run ends here so the driver's next run enters the first
           // node with that node's expert and access tier; without it the graph never runs.
           const live = ledger.state.cognition?.nodes ?? [];
-          const firstReady = live.find(node => (node.status === "ready" || node.status === "reopened") && node.host === "coordinator");
+          const firstReady = live.find(node => (node.status === "ready" || node.status === "reopened" || node.status === "waiting") && node.host === "coordinator");
           if (ledger.state.phase === "execute" && planApprovalModeOf(ledger.state) === "auto" && !live.some(node => node.status === "active" && node.host === "coordinator") && firstReady) {
             hooks.onCursorMoved?.({ next: { nodeId: firstReady.id, sameConfig: false } });
             return { content: [{ type: "text", text: `计划修订 v${ledger.state.cognition?.revision} 已记录并自动批准（${nodes.length} 个节点）。本轮到此结束，下一轮从节点 ${firstReady.id} 开始执行；候选专家不会自动启动。` }] };
