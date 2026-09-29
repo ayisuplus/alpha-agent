@@ -2,6 +2,8 @@
 
 Alpha = 原生 OMP 内核 + 天枢证据层 + Alpha 方法（Skill）+ 本机能力 + 桌面工作台。当前版本 0.2.0，执行内核为 OMP 18.4.3；界面上只有 Alpha 一个产品名，OMP 只在“关于”页与更新横幅出现。每次启动检查一次 OMP 更新，只提醒，不自动升级。
 
+当前 Windows 安装入口：[Alpha-Setup-0.2.0-x64.exe](Alpha-Setup-0.2.0-x64.exe)。发行目录、校验值与归档见 [发行归档](docs/2026-09-29-release-archive.md)。
+
 ## 组成
 
 - **执行内核**：原生 OMP 18.4.3。会话按 `--resume <会话 ID>` 显式恢复；RPC 与终端两种模式共用 `src/native/launch.ts` 的同一份启动构造。
