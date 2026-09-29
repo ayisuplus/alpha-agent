@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PreparedExtension } from "@oh-my-pi/pi-coding-agent";
+import { createCognitionTools } from "../src/runtime/cognition-tool";
 import { fileToolGuard } from "../src/runtime/file-tool-guard";
 import { hasRecordedPlan } from "../src/runtime/planning-policy";
 import { TaskLedger } from "../src/runtime/task-ledger";
@@ -88,6 +89,50 @@ test("等待审批模式 keeps the plan unapproved until the user reviews it", a
     await ledger.submitPlanForReview();
     expect(ledger.state.phase).toBe("plan-review");
     expect(ledger.state.planApproval).toBeUndefined();
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
+test("自动批准模式 re-approves a revised plan against the source as it is now", async () => {
+  const { root, ledger } = await fixture("execute");
+  const plan = (objective: string) => [
+    { id: "inspect", objective: "Check the value", kind: "investigate" as const, phase: "investigate" as const, dependsOn: [], expertDecision: { reason: "the coordinator checks itself" }, host: "coordinator" as const, skillIds: [], status: "planned" as const },
+    { id: "work", objective, kind: "execute" as const, phase: "execute" as const, dependsOn: ["inspect"], expertDecision: { reason: "the coordinator works itself" }, host: "coordinator" as const, skillIds: [], status: "planned" as const },
+    { id: "review", objective: "Check the update", kind: "review" as const, phase: "review" as const, dependsOn: ["work"], expertDecision: { reason: "the coordinator checks itself" }, host: "coordinator" as const, skillIds: [], status: "planned" as const },
+  ];
+  try {
+    await ledger.reviseCognition({ summary: "Change the value", reason: "clear task", candidates: [], nodes: plan("Update app.ts") });
+    expect(ledger.state.phase).toBe("execute");
+    // The coordinator edits source inside the run, then revises an un-entered node. The approval must bind to the
+    // source as it is now instead of failing the fingerprint check and parking the task in the review lane.
+    await writeFile(join(ledger.state.projectRoot, "app.ts"), "export const value = 2;\n");
+    await ledger.reviseCognition({ summary: "Change the value", reason: "learned the real shape", candidates: [], nodes: plan("Update app.ts and its call site") });
+    expect(ledger.state.phase).toBe("execute");
+    expect(ledger.state.planApproval).toMatchObject({ contractVersion: 1, cognitionRevision: 3 });
+    expect(ledger.state.lastFailure ?? null).toBeNull();
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
+test("自动批准模式 ends the run at the graph boundary so the next run enters the first node", async () => {
+  const { root, ledger } = await fixture("execute");
+  try {
+    const moved: Array<{ next?: { nodeId: string; sameConfig: boolean } }> = [];
+    const tools = createCognitionTools(ledger, join(root, "state"), { onCursorMoved: input => { moved.push(input); } });
+    const alphaPlan = tools.find(tool => tool.name === "alpha_plan");
+    if (!alphaPlan) throw new Error("alpha_plan tool is missing");
+    await alphaPlan.execute("call-1", {
+      summary: "Change the value", reason: "clear task", candidates: [], nodes: [
+        { id: "inspect", objective: "Check the value", kind: "investigate", phase: "investigate", dependsOn: [], expertDecision: { reason: "the coordinator checks itself" }, host: "coordinator", skillIds: [] },
+        { id: "work", objective: "Update app.ts", kind: "execute", phase: "execute", dependsOn: ["inspect"], expertDecision: { reason: "the coordinator works itself" }, host: "coordinator", skillIds: [] },
+        { id: "review", objective: "Check the update", kind: "review", phase: "review", dependsOn: ["work"], expertDecision: { reason: "the coordinator checks itself" }, host: "coordinator", skillIds: [], gateRole: "code-review" },
+      ],
+    } as never, undefined, undefined as never);
+    expect(ledger.state.phase).toBe("execute");
+    // Without the boundary the run keeps a session that predates the graph and no node is ever entered.
+    expect(moved).toEqual([{ next: { nodeId: "inspect", sameConfig: false } }]);
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }

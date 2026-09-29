@@ -20,8 +20,19 @@
 
 ## 未完成
 
+### 0. 第一轮评测暴露并已修复的三个缺陷（2026-09-29）
+第一轮（deepseek/deepseek-flash）5/5 独立检查通过，但账本显示四个任务停在 `active`：这是真实缺陷，不是评测噪声。
+| # | 现象（证据） | 根因 | 修复 |
+|---|---|---|---|
+| F1 | `lru-cache`/`stale-premise` 停在 `plan-review`，失败记录"计划自动批准未完成：Plan or project changed" | `reviseCognition` 在 auto 模式用**旧**的源指纹提交审批，而协调者在同一轮里改过源码 | `reviseCognition` 先 `refreshRevision()` 再记录修订，计划与审批绑定当前源码（§3.5） |
+| F2 | 除 `approval-loop` 外节点全部停在 `ready/planned`，图空转：模型反复 `alpha_plan`（plans 1/rev 1–3）干完活也不进节点 | 首个计划在**本轮内**自动批准，但本轮会话是在没有节点时创建的（无节点、默认权限），且没有任何机制把首节点纳入游标 | `alpha_plan` 自动批准后立即发 `onCursorMoved`（`sameConfig: false`）结束本轮；driver 按 `node-switch` 续跑，下一轮进入首节点并重建会话（§3.6/§7） |
+| F3 | harness 在运行边界（`running=false` 的间隙）就判定任务结束并评分，`rework/premise/redo` 统计因此失真 | `waitForTask` 只要见过 running 就认为"不再 running"即结束 | 引入稳定窗口：`active` 任务需连续 4 次（约 20s）空闲才判定结束 |
+两条回归测试已加入 `test/plan-first.test.ts`，并验证过"修复前失败、修复后通过"（`git stash` 对照）。
+
+另：`totalTokens` 里 DeepSeek 会计入 prompt 缓存命中（第一轮 approval-loop 9.75M 中 7.38M 是 cacheRead），评测报告已拆成"新输入+输出 + 缓存读"两列，跨模型对比只用前者。
+
 ### 1. 端到端评测（进行中）
-- 第一轮（`--label p6-round-1`，任务：`content-pipeline`、`stale-premise`、`sales-question`、`lru-cache`、`approval-loop`，并发 2）在本轮施工结束时仍在运行，结果落在 `artifacts/eval-2026-09-29-p6-round-1/`（`results.json` 逐任务写盘，可随时查看已完成部分）。
+- 第一轮（deepseek/deepseek-flash，`--label p6-round-1`，任务：`content-pipeline`、`stale-premise`、`sales-question`、`lru-cache`、`approval-loop`，并发 2）已跑完：独立检查 5/5 通过，但暴露 F1–F3 三个缺陷（见第 0 节）。**该轮不计入对比**（任务被提前评分），记录保留在 `artifacts/eval-2026-09-29-p6-round-1-preboundary/`。
 - 第二轮（方案附录 A.3 要求"至少跑两轮取区间"）未跑。
 - 与 P0 基线对比：`bun run eval compare artifacts/eval-2026-09-29-p6-round-3 artifacts/eval-2026-09-29-p6-round-1`。小任务（`sales-question`）看轮次与 token 增量；内容任务关注 gate 拦下数（报告"计划图"列的计划/回边/退审计数）；`stale-premise` 关注是否出现 premise 回边与计划修订。
 - 注意：第一轮评测使用的是 `22bf782` 时点的工作树（服务器在启动时加载模块，之后的提交不影响该进程）。

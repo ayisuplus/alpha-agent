@@ -47,7 +47,7 @@ export interface PlanMetricRecord {
   changesRequested: number;
 }
 
-interface RunRecord { model: string; stage?: string; toolCalls: number; elapsedMs: number; firstResponseMs?: number; usage?: { totalTokens: number }; prompt?: { systemTokens: number; toolTokens: number; tools: number; contextShare: number | null }; outcome: string; failureReason?: string }
+interface RunRecord { model: string; stage?: string; toolCalls: number; elapsedMs: number; firstResponseMs?: number; usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost?: number }; prompt?: { systemTokens: number; toolTokens: number; tools: number; contextShare: number | null }; outcome: string; failureReason?: string }
 interface StepContextRecord { stage: string; model: string; taskContextBytes: number; systemTokens: number; toolTokens: number; contextShare: number | null; tools: number; recordedAt: string }
 
 export interface TaskResult {
@@ -63,7 +63,11 @@ export interface TaskResult {
   wallMs: number;
   runs: number;
   toolCalls: number;
+  /** input + output + cache reads + cache writes, as the provider reports them. */
   tokens: number;
+  /** Fresh input plus output: re-sent context that the provider served from its cache is reported separately. */
+  freshTokens: number;
+  cacheReadTokens: number;
   prompt: RunRecord["prompt"] | null;
   /** Slowest first model response across the task's runs, and the largest task context block a step was given. */
   firstResponseMs: number | null;
@@ -233,11 +237,16 @@ async function waitForTask(base: string, taskId: string, timeoutMs: number, auto
   const started = Date.now();
   let seenWork = false;
   let pauses = 0;
+  // Every run boundary (plan approval, node switch, round repair) leaves the task briefly idle before the driver
+  // starts the next run. An active task is only finished once it stays idle for this many polls.
+  const idleLimit = 4;
+  let idlePolls = 0;
   while (true) {
     const { body } = await api<{ task?: { running: boolean; queued?: boolean; status: string } }>(base, `/api/tasks/${taskId}`);
     const task = body.task;
     if (task) {
-      if (task.running || task.queued) seenWork = true;
+      if (task.running || task.queued) { seenWork = true; idlePolls = 0; }
+      else if (task.status === "active" && seenWork && ++idlePolls < idleLimit) { await sleep(5_000); continue; }
       else if (task.status === "needs-input" && autoResume && pauses < (autoResume.times ?? 1)) {
         // A paused task with nobody at the keyboard would sit here until the timeout: resume it and count the pause.
         await sleep((autoResume.afterSeconds ?? 5) * 1_000);
@@ -321,6 +330,8 @@ async function runTask(base: string, workspace: string, task: TaskSpec, timeoutM
     wallMs: Date.now() - started, runs: runs.length,
     toolCalls: runs.reduce((sum, item) => sum + item.toolCalls, 0),
     tokens: runs.reduce((sum, item) => sum + (item.usage?.totalTokens ?? 0), 0),
+    freshTokens: runs.reduce((sum, item) => sum + (item.usage?.input ?? 0) + (item.usage?.output ?? 0), 0),
+    cacheReadTokens: runs.reduce((sum, item) => sum + (item.usage?.cacheRead ?? 0), 0),
     prompt: coordinator?.prompt ?? null,
     firstResponseMs: runs.some(run => run.firstResponseMs !== undefined) ? Math.max(...runs.map(run => run.firstResponseMs ?? 0)) : null,
     contextBytes: stepContexts.length ? Math.max(...stepContexts.map(item => item.taskContextBytes)) : 0,
@@ -352,13 +363,13 @@ function report(label: string, app: string, results: TaskResult[]): string {
     if (!plan.plans && !plan.revisions && !plan.reworkReopens && !plan.premiseReopens && !plan.redoReopens && !plan.changesRequested) return "—";
     return `计划 ${plan.plans}/修订 ${plan.revisions} · 回边 rework ${plan.reworkReopens} premise ${plan.premiseReopens} redo ${plan.redoReopens} · 退审 ${plan.changesRequested}`;
   };
-  const rows = results.map(item => `| ${item.id} | ${item.passed ? "✅" : "❌"} | ${item.alphaStatus}${item.falseAcceptance ? " ⚠️" : ""} | ${Math.round(item.wallMs / 1000)}s | ${item.runs} | ${item.toolCalls} | ${item.tokens.toLocaleString()} | ${item.prompt ? `${item.prompt.systemTokens} + ${item.prompt.toolTokens}` : "—"} | ${item.contextBytes ? `${Math.round(item.contextBytes / 102.4) / 10}k` : "—"} | ${item.firstResponseMs === null ? "—" : `${Math.round(item.firstResponseMs / 100) / 10}s`} | ${item.pauses ? `${item.pauses} 次` : "—"} | ${planCell(item)} | ${item.detail.split("\n")[0].replace(/\|/g, "\\|").slice(0, 120)} |`);
+  const rows = results.map(item => `| ${item.id} | ${item.passed ? "✅" : "❌"} | ${item.alphaStatus}${item.falseAcceptance ? " ⚠️" : ""} | ${Math.round(item.wallMs / 1000)}s | ${item.runs} | ${item.toolCalls} | ${item.freshTokens.toLocaleString()} + ${item.cacheReadTokens.toLocaleString()} | ${item.prompt ? `${item.prompt.systemTokens} + ${item.prompt.toolTokens}` : "—"} | ${item.contextBytes ? `${Math.round(item.contextBytes / 102.4) / 10}k` : "—"} | ${item.firstResponseMs === null ? "—" : `${Math.round(item.firstResponseMs / 100) / 10}s`} | ${item.pauses ? `${item.pauses} 次` : "—"} | ${planCell(item)} | ${item.detail.split("\n")[0].replace(/\|/g, "\\|").slice(0, 120)} |`);
   return [
     `# Alpha 评测：${label}`, "",
     `- 被测代码：\`${app}\``, `- 时间：${new Date().toISOString()}`,
     `- 通过：${total.passed}/${total.tasks}；Alpha 自评已验收 ${total.alphaAccepted}；自评通过但独立检查失败 ${total.falseAcceptances}；独立检查通过但自评未验收 ${total.missedAcceptances}`,
-    `- 合计：${total.toolCalls} 次工具调用，${total.tokens.toLocaleString()} tokens，${total.wallMinutes} 分钟（各任务耗时之和）`, "",
-    "| 任务 | 独立检查 | Alpha 状态 | 耗时 | 轮次 | 工具调用 | tokens | 固定提示词（系统 + 工具） | 每步上下文 | 首响应 | 恢复 | 计划图 | 说明 |",
+    `- 合计：${total.toolCalls} 次工具调用，${total.tokens.toLocaleString()} tokens（新输入+输出 ${results.reduce((sum, item) => sum + item.freshTokens, 0).toLocaleString()}，缓存读 ${results.reduce((sum, item) => sum + item.cacheReadTokens, 0).toLocaleString()}），${total.wallMinutes} 分钟（各任务耗时之和）`, "",
+    "| 任务 | 独立检查 | Alpha 状态 | 耗时 | 轮次 | 工具调用 | tokens（新输入+输出 + 缓存读） | 固定提示词（系统 + 工具） | 每步上下文 | 首响应 | 恢复 | 计划图 | 说明 |",
     "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ...rows, "",
   ].join("\n");
@@ -416,7 +427,7 @@ try {
       catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         console.log(`ERROR ${task.id}: ${detail}`);
-        results.push({ id: task.id, kind: task.kind, alphaStatus: "error", passed: false, falseAcceptance: false, detail, wallMs: 0, runs: 0, toolCalls: 0, tokens: 0, prompt: null, firstResponseMs: null, contextBytes: 0, pauses: 0, models: [], lastFailure: null, timedOut: false, plan: { plans: 0, revisions: 0, reworkReopens: 0, premiseReopens: 0, redoReopens: 0, changesRequested: 0 } });
+        results.push({ id: task.id, kind: task.kind, alphaStatus: "error", passed: false, falseAcceptance: false, detail, wallMs: 0, runs: 0, toolCalls: 0, tokens: 0, freshTokens: 0, cacheReadTokens: 0, prompt: null, firstResponseMs: null, contextBytes: 0, pauses: 0, models: [], lastFailure: null, timedOut: false, plan: { plans: 0, revisions: 0, reworkReopens: 0, premiseReopens: 0, redoReopens: 0, changesRequested: 0 } });
       }
       await writeFile(join(out, "results.json"), JSON.stringify({ label, app, workspace, results }, null, 2));
     }

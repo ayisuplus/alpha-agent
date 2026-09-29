@@ -86,6 +86,15 @@ export function createCognitionTools(ledger: TaskLedger, dataRoot: string, hooks
           }
           for (const role of requiredGates) if (!nodes.some(node => node.kind === "review" && node.gateRole === role)) throw new Error(`审查阶段缺少 ${role} gate 节点`);
           await ledger.reviseCognition({ summary: args.summary, reason: args.reason, scope: args.scope, constraints: args.constraints, openQuestions: args.openQuestions, candidates, nodes, ...(args.edges ? { edges: args.edges } : {}) });
+          // §3.6/§7: an auto-approved plan moves the cursor onto the graph, and this run's session was built before
+          // the plan existed — no node, default access. The run ends here so the driver's next run enters the first
+          // node with that node's expert and access tier; without it the graph never runs.
+          const live = ledger.state.cognition?.nodes ?? [];
+          const firstReady = live.find(node => node.status === "ready" && node.host === "coordinator");
+          if (ledger.state.phase === "execute" && planApprovalModeOf(ledger.state) === "auto" && !live.some(node => node.status === "active" && node.host === "coordinator") && firstReady) {
+            hooks.onCursorMoved?.({ next: { nodeId: firstReady.id, sameConfig: false } });
+            return { content: [{ type: "text", text: `计划修订 v${ledger.state.cognition?.revision} 已记录并自动批准（${nodes.length} 个节点）。本轮到此结束，下一轮从节点 ${firstReady.id} 开始执行；候选专家不会自动启动。` }] };
+          }
           const outcome = ledger.state.phase === "execute"
             ? planApprovalModeOf(ledger.state) === "auto" ? "计划已自动批准，继续按计划执行。候选专家不会自动启动。" : "候选专家不会自动启动。"
             : ledger.state.phase === "plan-review" ? "计划正在等待用户审阅；此轮到此结束，不要声称已批准。"

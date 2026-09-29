@@ -706,6 +706,10 @@ export class TaskLedger {
   }
 
   async reviseCognition(input: { summary: string; candidates: string[]; nodes: PlanNode[]; edges?: PlanEdge[]; reason: string; scope?: string[]; constraints?: string[]; openQuestions?: string[] }): Promise<void> {
+    // §3.5: in auto mode the plan is approved against the source, and the coordinator may have edited files inside
+    // this very run. Recording the moved revision first binds the plan (and the approval below) to the current source
+    // instead of failing the fingerprint check and parking the task in the review lane.
+    if (planApprovalModeOf(this.state) === "auto") await this.refreshRevision();
     await this.commit(() => ({ type: "plan/revised", payload: { input, recordedAt: new Date().toISOString() } }));
     if (planApprovalModeOf(this.state) !== "auto" || !this.state.cognition?.nodes.length) return;
     // 计划自动批准: the recorded plan is approved at once, so the same run moves into execution without a review
