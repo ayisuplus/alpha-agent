@@ -1,10 +1,16 @@
-# Alpha 本机首版
+# Alpha
 
 当前 Windows 安装入口：[Alpha-Setup-0.1.0-x64.exe](Alpha-Setup-0.1.0-x64.exe)。本次 OMP 发行归档与校验值见 [2026-09-29 发行归档](docs/2026-09-29-release-archive.md)。
 
+当前版本以 OMP 18.4.3 为执行内核，Alpha 提供桌面工作台、天枢证据认知扩展和本机工具能力。每次启动检查一次 OMP 更新，只提醒，不自动升级。源码开发运行 `bun run desktop`；当前便携版位于 `release/alpha-portable-2026-09-29T13-23-18-668Z/`。实现与验收边界见 [原生 OMP 重构说明](docs/2026-09-29-omp-native-refactor.md)。
+
+## 旧版说明（历史归档）
+
+以下内容记录旧架构，不代表当前发行版本；旧发行包已移至 `release/archive/`。
+
 网页搜索与操控现由 Alpha 内核统一管理：Tavily 搜索、Firecrawl 提取和采集、带来源哈希的归档，以及 Electron 可见标签页共享任务授权和人工接管状态。密钥在「设置 → 网页服务」配置；完整边界与验证见 [网页内核说明](docs/web-kernel-2026-09-25.md)。
 
-在 Windows 上运行 [Alpha.cmd](release/alpha-portable-2026-09-24T16-40-57-095Z/Alpha.cmd)（源码版用 `bun run desktop` 启动，新便携包用 `bun run package:portable` 生成）。工作台为三栏：左侧搜索和切换任务；中间是任务对话——头部显示目标版本、验收项与最近问题，时间线按轮展示 Alpha 的说明、工具调用、构建与浏览器验收结果，可下钻到逐步验收证据和源码 diff，底部唯一的输入框随任务状态切换为开始构建、运行中补充要求、继续修复或修订目标；右侧是实际运行的产品预览，可拖动分隔条调整宽度、接管或交回 Alpha。提交软件产品需求后，Alpha 会在本项目的 `release/products/` 中构建产品，并在 `release/.alpha/` 中保存任务、构建、预览和浏览器证据。预览只监听本机 `127.0.0.1`；关闭 Alpha 后预览服务停止，再次启动可从工作台重新发布并复验。
+在 Windows 上运行 [Alpha.cmd](release/archive/alpha-portable-2026-09-24T16-40-57-095Z/Alpha.cmd)（源码版用 `bun run desktop` 启动，新便携包用 `bun run package:portable` 生成）。工作台为三栏：左侧搜索和切换任务；中间是任务对话——头部显示目标版本、验收项与最近问题，时间线按轮展示 Alpha 的说明、工具调用、构建与浏览器验收结果，可下钻到逐步验收证据和源码 diff，底部唯一的输入框随任务状态切换为开始构建、运行中补充要求、继续修复或修订目标；右侧是实际运行的产品预览，可拖动分隔条调整宽度、接管或交回 Alpha。提交软件产品需求后，Alpha 会在本项目的 `release/products/` 中构建产品，并在 `release/.alpha/` 中保存任务、构建、预览和浏览器证据。预览只监听本机 `127.0.0.1`；关闭 Alpha 后预览服务停止，再次启动可从工作台重新发布并复验。
 
 首版的执行引擎使用 OMP 和 Hashline；完成状态由构建、当前预览和浏览器验收共同决定。ComfyUI 是 Alpha 的内置插件，在「设置 → 插件」中可整体启停，并分别启停图片、配音和视频工具；设置在下一轮任务开始时生效。第三方 GitHub 仓库可在同一处安装为插件，按仓库提交号保存并独立启停；Alpha 装载 `skills/*/SKILL.md` 与同目录参考文件，并可单独启用仓库 `package.json` 声明的 Pi 扩展 Hook，以及根目录 `.mcp.json` 声明的 MCP 服务。Hook 与 MCP 都默认关闭并可分别开启；MCP 工具按插件和服务命名，仍须经过 Alpha 的工具白名单。设置中的「检测」可验证已启用 MCP 服务的连接与工具发现；服务所需程序、凭据及依赖须在本机可用。Hook 开启后会以 Alpha 进程权限执行第三方代码；Claude Hook 脚本尚未接入。ComfyUI 服务须由用户自行保持运行在 `127.0.0.1:8188`，Alpha 不会替换成其他生成服务。模型仍使用本机已有的 OMP 认证配置，便携包并不包含凭据或模型。
 

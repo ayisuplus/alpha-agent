@@ -1,6 +1,6 @@
 # Alpha Windows 发行归档（2026-09-29）
 
-项目根目录的 `Alpha-Setup-0.1.0-x64.exe` 是本次交付的双击安装入口。相同文件的原始构建产物、`SHA256SUMS.txt` 和 `build.json` 保存在 `release/alpha-installer-2026-09-29T13-25-33-421Z/`；对应可携带版保存在 `release/alpha-portable-2026-09-29T13-23-18-668Z/`。归档保留两种发行形式及校验记录，不覆盖旧版本。
+项目根目录的 `Alpha-Setup-0.1.0-x64.exe` 是本次交付的双击安装入口。相同文件的原始构建产物、`SHA256SUMS.txt` 和 `build.json` 保存在 `release/alpha-installer-2026-09-29T13-25-33-421Z/`；对应可携带版保存在 `release/alpha-portable-2026-09-29T13-23-18-668Z/`。这两个当前版本留在 `release/` 顶层；此前的 69 个便携版和安装包目录移至 `release/archive/`，原文件完整保留，未合并或覆盖。
 
 - 安装包大小：559,876,638 字节
 - SHA-256：`EB5B42E85786F3692F3E17F35EBC1AC520865DA7B06D589361C8FDEB5BCDEB9B`
