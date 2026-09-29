@@ -496,7 +496,7 @@ bun run eval --tasks content-pipeline,stale-premise,sales-question,lru-cache,app
 
 ### B.4 接力质量（§13）与观察
 
-- **gate**：每轮的计划都带审查节点（`code-review` 由中性审查者承担），`sales-question` 记录到 `verdict: pass`。内容任务的合规 gate 在收尾复测中**跑通**（`artifacts/eval-2026-09-29-p6-graph-content-gate/`：`research → draft → compliance → final`，`n3-compliance` 由任务内创建的广告合规审查员执行，结论 `pass` 绑定产物，终审通过，任务 `complete`）；`draft` 由 `core-content-strategist` 承担。**`changes-requested` 返工在所有观测轮次中都未触发**（初稿一次合规）：方案 §10 要求的"含一次 changes-requested 返工"作为**场景**尚未稳定复现，机制本身由 `test/plan-graph.test.ts` 覆盖。
+- **gate**：每轮的计划都带审查节点（`code-review` 由中性审查者承担），`sales-question` 记录到 `verdict: pass`。内容任务的合规 gate 在收尾复测中**跑通**（`artifacts/eval-2026-09-29-p6-graph-content-gate/`：`research → draft → compliance → final`，`n3-compliance` 由任务内创建的广告合规审查员执行，结论 `pass` 绑定产物，终审通过，任务 `complete`）；`draft` 由 `core-content-strategist` 承担。**`changes-requested` 返工已在演练中完整复现**（`artifacts/eval-2026-09-29-p6-graph-rework-drill5/`，任务 `complete`、独立检查通过、计划图指标 `退审 1 · 回边 rework 1 · redo 2`）：节点序列 `research-facts → draft-script（违规初稿） → shotlist-extra → review-compliance（changes-requested，拦下 5 处广告法风险） →` 运行时沿声明的 rework 回边自动 `node/reopened draft-script(edge=rework, traversals 1/1)` `→ draft-script → comply-rewrite → review-compliance 复审 pass → 交付`。演练把初稿固定在 `outputs/script-draft.md`、交付版固定在 `outputs/script.md`，避免"初稿必须违规/交付必须合规"写在同一文件里造成的自相矛盾。
 - **回边**：`premise` 回边两轮均为 0；`redo`（无边重开）在 `lru-cache`/`stale-premise` 各出现 1 次。中途改计划场景靠的是多次 `alpha_plan` 修订（修订 1–8 次），不是 premise 回边。
 - **成本**：`stale-premise` 两轮都跑到 682s、16–17 轮、231–476 次调用、总 token 千万级——模型反复用新节点重写计划（修订最多 8 次），是当前最大的开销与噪声来源；小任务开销稳定。
 - **暂停**：非配置检查的命令审批是无人值守评测里最常见的暂停原因（每轮 2 个任务），模型为了哈希/版本/git 状态去调 `certman`/`certutil`/`git status` 等命令；`alpha_step` 已能自行计算产物哈希，后续可在提示中进一步收紧"不要为交接或验证去跑命令"。

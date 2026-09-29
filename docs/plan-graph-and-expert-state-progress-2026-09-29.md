@@ -78,6 +78,8 @@
 
 三处都有回归测试（`test/plan-first.test.ts` / `test/cognitive-workflow.test.ts`），全套 513/513。
 
+**演练结果（第五轮）：`artifacts/eval-2026-09-29-p6-graph-rework-drill5/` —— 任务 `complete`、独立检查通过、`退审 1 · rework 1 · redo 2`；合规审查拦下 5 处广告法风险，运行时自动沿 rework 回边重开初稿节点，改写后复审 pass 再交付。**
+
 演练场景本身也改了两版：第四轮发现"初稿必须违规"与"交付版必须合规"写在同一个文件里会让模型在同一节点反复重写（不退出节点、不触发回边）；现在把初稿固定为 `outputs/script-draft.md`（合规审查对象），交付版 `outputs/script.md` 是改写结果，两个产物分开后演练目标不再自相矛盾。
 
 ### 3. 审查者会话路径是死代码（§12 收尾）
