@@ -205,6 +205,9 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
           emitRun({ type: "status", phase: "已停止", runId, pending: ledger.completionGaps() });
           return ledger;
         }
+        // §3.6: a node switch is a run boundary, not a finished attempt. Acceptance belongs to the node's end; without
+        // this the "no reviewable output" check would fail the run and stop the loop before the cursor moves on.
+        if (ledger.state.runs?.at(-1)?.outcome === "node-switch") return ledger;
         if (ledger.state.phase === "plan") {
           try { await ledger.submitPlanForReview(); emitRun({ type: "status", phase: "计划待审阅", runId }); }
           catch (error) { await ledger.recordFailure(error instanceof Error ? error.message : String(error)); emitRun({ type: "status", phase: "继续规划", runId }); }

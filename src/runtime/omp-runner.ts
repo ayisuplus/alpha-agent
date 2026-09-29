@@ -140,6 +140,34 @@ export function toolTarget(args: unknown, projectRoot: string): string | undefin
 
 export { cognitionSnapshot, taskPrompt, workerSystemPrompt } from "./session-profile";
 
+/**
+ * A run that stopped at a boundary instead of finishing its work (§3.6): a node switch continues at the new node, a
+ * worker handoff waits for the coordinator, and a recorded plan waits for the next actor. The driver keys its
+ * continuation on the outcome, so the whole path honours the boundary exactly like the interrupted one.
+ */
+export async function settleBoundary(ledger: TaskLedger, input: {
+  nodeSwitchReason: string | null; workerHandoff: boolean; planning: boolean; planRecorded: boolean;
+  aborted: boolean; budgetReason: string | null; stalledReason: string | null;
+}): Promise<{ outcome: "node-switch" | "needs-input"; reason?: string } | null> {
+  if (input.aborted || input.budgetReason || input.stalledReason) return null;
+  if (input.nodeSwitchReason) {
+    await ledger.refreshRevision();
+    await ledger.clearFailure();
+    return { outcome: "node-switch", reason: input.nodeSwitchReason };
+  }
+  if (input.workerHandoff) {
+    await ledger.refreshRevision();
+    await ledger.clearFailure();
+    return { outcome: "needs-input" };
+  }
+  if (input.planning && input.planRecorded) {
+    await ledger.refreshRevision();
+    await ledger.clearFailure();
+    return null;
+  }
+  return null;
+}
+
 export async function runTask(options: RunOptions): Promise<TaskLedger> {
   options.signal?.throwIfAborted();
   const selector = options.modelSelector ?? DEFAULT_MODEL;
@@ -603,15 +631,11 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     await options.onSessionReady?.(text => session.steer(text));
     options.signal?.throwIfAborted();
     await session.prompt(prompt);
-    if (workerHandoff && !options.signal?.aborted && !budgetReason && !stalledReason) {
-      outcome = "needs-input";
-      await ledger.refreshRevision();
-      await ledger.clearFailure();
-      return ledger;
-    }
-    if (planning && planRecorded && !options.signal?.aborted && !budgetReason && !stalledReason) {
-      await ledger.refreshRevision();
-      await ledger.clearFailure();
+    // A clean abort leaves no exception behind: the boundary reasons are honoured here exactly as in the catch path.
+    const boundary = await settleBoundary(ledger, { nodeSwitchReason, workerHandoff, planning, planRecorded, aborted: !!options.signal?.aborted, budgetReason, stalledReason });
+    if (boundary) {
+      outcome = boundary.outcome;
+      if (boundary.reason) failureReason = boundary.reason;
       return ledger;
     }
     if (answering && needsInputReason) throw new Error(needsInputReason);
@@ -638,20 +662,14 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     } else await ledger.clearFailure();
     return ledger;
   } catch (error) {
-    if (nodeSwitchReason && !options.signal?.aborted && !budgetReason && !stalledReason) {
+    const boundary = await settleBoundary(ledger, { nodeSwitchReason, workerHandoff, planning, planRecorded, aborted: !!options.signal?.aborted, budgetReason, stalledReason });
+    if (boundary) {
       // The cursor moved to a differently configured node: this run ends cleanly and the driver continues there (§3.6).
-      outcome = "node-switch";
-      failureReason = nodeSwitchReason;
-      await ledger.refreshRevision();
-      await ledger.clearFailure();
+      outcome = boundary.outcome;
+      if (boundary.reason) failureReason = boundary.reason;
       return ledger;
     }
-    if (workerHandoff && !options.signal?.aborted && !budgetReason && !stalledReason) {
-      outcome = "needs-input";
-      await ledger.refreshRevision();
-      await ledger.clearFailure();
-      return ledger;
-    }
+    // A recorded plan (review mode) ends the run; the boundary helper above already settled it in the clean path.
     if (planning && planRecorded && !options.signal?.aborted && !budgetReason && !stalledReason) {
       await ledger.refreshRevision();
       await ledger.clearFailure();

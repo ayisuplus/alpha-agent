@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -303,4 +304,52 @@ test("reapproving an exact installed Skill enables only that valid Skill", async
     await writeFile(skillFile, "invalid Skill contents");
     await expect(store.installSelectedSkill(approved)).rejects.toThrow("内容已变化");
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("alpha_step hashes declared artifacts itself instead of asking the model to shell out", async () => {
+  const { root, projectRoot, ledger } = await fixture();
+  try {
+    const tools = createCognitionTools(ledger, join(root, "state"));
+    const step = tools.find(tool => tool.name === "alpha_step");
+    if (!step) throw new Error("alpha_step tool is missing");
+    await ledger.reviseCognition({ summary: "Write the summary", reason: "task start", candidates: [], nodes: [
+      { id: "scan", objective: "Scan app", kind: "investigate", phase: "investigate", dependsOn: [], expertDecision: { reason: "the coordinator scans itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "write", objective: "Write the summary", kind: "execute", phase: "execute", dependsOn: ["scan"], produces: ["report"], expertDecision: { reason: "the coordinator writes it itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "inspect", objective: "Inspect the summary", kind: "review", phase: "review", dependsOn: ["write"], expertDecision: { reason: "the coordinator inspects itself" }, host: "coordinator", skillIds: [], status: "planned" },
+    ] });
+    await ledger.enterNode({ nodeId: "scan", host: "coordinator", runId: "run-1" });
+    await ledger.exitNode({ nodeId: "scan", runId: "run-1", artifacts: [], findings: [{ claim: "Scanned", source: "app.ts" }], note: "Scanned", unresolved: [] });
+    await ledger.enterNode({ nodeId: "write", host: "coordinator", runId: "run-1" });
+    await Bun.write(join(projectRoot, "report.md"), "# Report\n");
+    const result = await step.execute("step-1", { nodeId: "write", artifacts: [{ path: "report.md", kind: "report" }], findings: [], note: "Wrote the summary", unresolved: [] } as never, undefined, undefined as never);
+    expect(result.isError).toBeUndefined();
+    const handoff = ledger.state.cognition?.nodes.find(node => node.id === "write")!.handoff;
+    expect(handoff?.artifacts[0]).toMatchObject({ path: "report.md", kind: "report" });
+    expect(handoff?.artifacts[0].hash).toBe(createHash("sha256").update(await Bun.file(join(projectRoot, "report.md")).arrayBuffer().then(bytes => Buffer.from(bytes))).digest("hex"));
+    // A missing artifact still fails the exit instead of recording a phantom handoff.
+    const missing = await step.execute("step-2", { nodeId: "inspect", artifacts: [{ path: "absent.md", kind: "report" }], findings: [{ claim: "x", source: "y" }], verdict: "pass", note: "n", unresolved: [] } as never, undefined, undefined as never);
+    expect(missing.isError).toBe(true);
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+});
+
+test("alpha_plan rejects a gate role nobody can perform while the plan is still editable", async () => {
+  const { root, ledger } = await fixture();
+  try {
+    const [plan] = createCognitionTools(ledger, join(root, "state"));
+    const rejected = await plan.execute("plan", { summary: "Do the task", reason: "task start", candidates: [], nodes: [
+      { id: "scan", objective: "Scan app", kind: "investigate", phase: "investigate", dependsOn: [], host: "coordinator", expertDecision: { reason: "the coordinator scans itself" }, skillIds: [] },
+      { id: "work", objective: "Change app", kind: "execute", phase: "execute", dependsOn: ["scan"], host: "coordinator", expertDecision: { reason: "the coordinator changes it itself" }, skillIds: [] },
+      { id: "self-check", objective: "Check itself", kind: "review", phase: "review", dependsOn: ["work"], host: "coordinator", expertDecision: { reason: "the coordinator checks itself" }, skillIds: [], gateRole: "self-check" },
+      { id: "review", objective: "Check the change", kind: "review", phase: "review", dependsOn: ["work"], host: "coordinator", expertDecision: { reason: "the coordinator checks itself" }, skillIds: [], gateRole: "code-review" },
+    ] } as never, undefined, undefined as never);
+    expect(rejected.isError).toBe(true);
+    expect(String(rejected.content[0].type === "text" ? rejected.content[0].text : "")).toContain("没有已启用专家能承担 gate");
+    // The task type's own gate stays acceptable: code-review has the neutral reviewer.
+    const accepted = await plan.execute("plan-2", { summary: "Do the task", reason: "task start", candidates: [], nodes: [
+      { id: "scan", objective: "Scan app", kind: "investigate", phase: "investigate", dependsOn: [], host: "coordinator", expertDecision: { reason: "the coordinator scans itself" }, skillIds: [] },
+      { id: "work", objective: "Change app", kind: "execute", phase: "execute", dependsOn: ["scan"], host: "coordinator", expertDecision: { reason: "the coordinator changes it itself" }, skillIds: [] },
+      { id: "review", objective: "Check the change", kind: "review", phase: "review", dependsOn: ["work"], host: "coordinator", expertDecision: { reason: "the coordinator checks itself" }, skillIds: [], gateRole: "code-review" },
+    ] } as never, undefined, undefined as never);
+    expect(accepted.isError).toBeUndefined();
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 });

@@ -1,8 +1,12 @@
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
 import { ExpertStore } from "./experts";
 import { SkillPluginStore } from "../plugins/third-party";
 import { accessOf, planApprovalModeOf, type PlanNode, type TaskLedger } from "./task-ledger";
+import { gateActorFor } from "./expert-selection";
 import { discoverForGap } from "./skill-discovery";
 import { taskProfile } from "./task-profile";
 
@@ -34,7 +38,8 @@ const gapParameters = type({ kind: "string", description: "string", publicQuery:
 const resolveParameters = type({ kind: "string", description: "string", evidence: "string" });
 const exitParameters = type({
   nodeId: "string",
-  artifacts: type({ path: "string", hash: "string", kind: "string" }).array(),
+  // The runtime hashes the declared files itself when `hash` is omitted, so a handoff never needs a shell hash command.
+  artifacts: type({ path: "string", "hash?": "string", kind: "string" }).array(),
   findings: type({ claim: "string", source: "string" }).array(),
   verdict: "'pass' | 'changes-requested' | 'inconclusive'?",
   note: "string",
@@ -53,7 +58,7 @@ export function createCognitionTools(ledger: TaskLedger, dataRoot: string, hooks
     {
       name: "alpha_plan",
       label: "Record or adjust task plan",
-      description: "Record the task's plan graph: scope, constraints, open questions, candidate experts and nodes. Every task plans before it acts, and every node fills one of the three stages (investigate, execute, review) with a stated expert decision and reason. Candidates are not dispatched. Call again only when evidence or user guidance changes the plan. Use only enabled experts and available Skills.",
+      description: "Record the task's plan graph: scope, constraints, open questions, candidate experts and nodes. Every task plans before it acts, and every node fills one of the three stages (investigate, execute, review) with a stated expert decision and reason. A review node's gateRole must be a role an enabled expert declares or code-review (the neutral reviewer); leave gateRole out for a plain review. Candidates are not dispatched. Call again only when evidence or user guidance changes the plan. Use only enabled experts and available Skills.",
       parameters: planParameters,
       loadMode: "essential",
       async execute(_id, args) {
@@ -85,6 +90,14 @@ export function createCognitionTools(ledger: TaskLedger, dataRoot: string, hooks
             for (const role of actor?.package?.handoff?.gate ?? []) requiredGates.add(role);
           }
           for (const role of requiredGates) if (!nodes.some(node => node.kind === "review" && node.gateRole === role)) throw new Error(`审查阶段缺少 ${role} gate 节点`);
+          // §6.2: a gate needs an actor. Rejecting an unperformable role while the plan is still editable beats pausing
+          // mid-task with a capability gap after the work is done.
+          for (const node of nodes) {
+            if (node.kind !== "review" || !node.gateRole) continue;
+            if (!("missing" in gateActorFor(experts, node.gateRole))) continue;
+            const available = [...new Set([...experts.map(item => item.package?.handoff?.role).filter((role): role is string => !!role), "code-review"])];
+            throw new Error(`没有已启用专家能承担 gate「${node.gateRole}」；可用角色：${available.join("、")}。改用可用角色，或去掉该节点的 gateRole 当作普通审查`);
+          }
           await ledger.reviseCognition({ summary: args.summary, reason: args.reason, scope: args.scope, constraints: args.constraints, openQuestions: args.openQuestions, candidates, nodes, ...(args.edges ? { edges: args.edges } : {}) });
           // §3.6/§7: an auto-approved plan moves the cursor onto the graph, and this run's session was built before
           // the plan existed — no node, default access. The run ends here so the driver's next run enters the first
@@ -135,10 +148,16 @@ export function createCognitionTools(ledger: TaskLedger, dataRoot: string, hooks
     },
     {
       name: "alpha_step", label: "Exit the current plan node", loadMode: "essential", parameters: exitParameters,
-      description: "Exit the current plan node by submitting its handoff: the artifacts it produced (with hashes), findings with sources, and what downstream must know. The runtime checks the node's exit conditions and derives its status; models never report status directly. A review node must give a verdict bound to the reviewed artifacts.",
+      description: "Exit the current plan node by submitting its handoff: the artifacts it produced (paths and kinds; the runtime hashes them), findings with sources, and what downstream must know. The runtime checks the node's exit conditions and derives its status; models never report status directly. A review node must give a verdict bound to the reviewed artifacts.",
       async execute(_id, args) {
         try {
-          await ledger.exitNode({ nodeId: args.nodeId, runId: ledger.runId ?? "unbound", artifacts: args.artifacts, findings: args.findings, ...(args.verdict ? { verdict: args.verdict } : {}), note: args.note, unresolved: args.unresolved });
+          const artifacts = await Promise.all(args.artifacts.map(async artifact => {
+            if (artifact.hash) return { path: artifact.path, hash: artifact.hash, kind: artifact.kind };
+            const contents = await readFile(resolve(ledger.state.projectRoot, artifact.path)).catch(() => null);
+            if (!contents) throw new Error(`交接产物不存在：${artifact.path}`);
+            return { path: artifact.path, hash: createHash("sha256").update(contents).digest("hex"), kind: artifact.kind };
+          }));
+          await ledger.exitNode({ nodeId: args.nodeId, runId: ledger.runId ?? "unbound", artifacts, findings: args.findings, ...(args.verdict ? { verdict: args.verdict } : {}), note: args.note, unresolved: args.unresolved });
           // §3.6: the cursor moves to the next coordinator node. The same expert and access continue in this run;
           // anything else ends it with `node-switch` so the driver rebuilds the session for the new node.
           const exited = ledger.state.cognition?.nodes.find(node => node.id === args.nodeId);

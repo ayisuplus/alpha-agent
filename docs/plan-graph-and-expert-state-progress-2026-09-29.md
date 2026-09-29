@@ -27,7 +27,12 @@
 | F1 | `lru-cache`/`stale-premise` 停在 `plan-review`，失败记录"计划自动批准未完成：Plan or project changed" | `reviseCognition` 在 auto 模式用**旧**的源指纹提交审批，而协调者在同一轮里改过源码 | `reviseCognition` 先 `refreshRevision()` 再记录修订，计划与审批绑定当前源码（§3.5） |
 | F2 | 除 `approval-loop` 外节点全部停在 `ready/planned`，图空转：模型反复 `alpha_plan`（plans 1/rev 1–3）干完活也不进节点 | 首个计划在**本轮内**自动批准，但本轮会话是在没有节点时创建的（无节点、默认权限），且没有任何机制把首节点纳入游标 | `alpha_plan` 自动批准后立即发 `onCursorMoved`（`sameConfig: false`）结束本轮；driver 按 `node-switch` 续跑，下一轮进入首节点并重建会话（§3.6/§7） |
 | F3 | harness 在运行边界（`running=false` 的间隙）就判定任务结束并评分，`rework/premise/redo` 统计因此失真 | `waitForTask` 只要见过 running 就认为"不再 running"即结束 | 引入稳定窗口：`active` 任务需连续 4 次（约 20s）空闲才判定结束 |
-两条回归测试已加入 `test/plan-first.test.ts`，并验证过"修复前失败、修复后通过"（`git stash` 对照）。
+| F4 | 修好 F1/F2 后的冒烟运行停在第 2 个节点：模型为了给出产物哈希去调 `powershell Get-FileHash`，触发命令审批暂停 | `alpha_step` 要求模型自己算 sha256；而哈希本应由运行时在退出时对文件计算（模型没有理由为此执行 shell） | `alpha_step` 的 `artifacts[].hash` 改为可选，缺省时由工具读取文件计算 sha256 并写入交接记录；`exitNode` 的校验不变 |
+| F5 | 同上冒烟：run 以 `node-switch` 结束后 driver 没有继续——被 `acceptRun` 的"本轮没有可审阅产出"错误提前终止 | `verifyCycle()` 无条件跑验收，节点切换这种运行边界被当成一次失败的尝试 | `verifyCycle` 在验收前跳过 `node-switch` 的运行；driver 随后按既有分支继续到下一个节点 |
+
+| F6 | 冒烟中图跑到第 3 个节点时暂停：模型给审查节点起了 `gateRole: "self-check"`，没有任何专家能承担 → 运行到一半记能力缺口 | 计划校验只检查"任务默认 gate 与专家声明 gate 有没有节点"，没有检查节点自创的 gateRole 有没有承担者 | `alpha_plan` 用 `gateActorFor` 在记录计划前校验每个审查节点的 gateRole：没人能承担就报错并列出可用角色，让模型当场改计划（工具描述同时写明 gateRole 的取值口径） |
+
+回归测试：F1/F2 在 `test/plan-first.test.ts`（含 `settleBoundary` 的边界结算），F4/F6 在 `test/cognitive-workflow.test.ts`；均验证过"修复前失败、修复后通过"（`git stash` 对照）。
 
 另：`totalTokens` 里 DeepSeek 会计入 prompt 缓存命中（第一轮 approval-loop 9.75M 中 7.38M 是 cacheRead），评测报告已拆成"新输入+输出 + 缓存读"两列，跨模型对比只用前者。
 

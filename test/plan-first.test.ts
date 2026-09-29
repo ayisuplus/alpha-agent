@@ -6,6 +6,7 @@ import type { PreparedExtension } from "@oh-my-pi/pi-coding-agent";
 import { createCognitionTools } from "../src/runtime/cognition-tool";
 import { fileToolGuard } from "../src/runtime/file-tool-guard";
 import { hasRecordedPlan } from "../src/runtime/planning-policy";
+import { settleBoundary } from "../src/runtime/omp-runner";
 import { TaskLedger } from "../src/runtime/task-ledger";
 import { recordApprovedPlan } from "./support/approved-plan";
 
@@ -133,6 +134,24 @@ test("自动批准模式 ends the run at the graph boundary so the next run ente
     expect(ledger.state.phase).toBe("execute");
     // Without the boundary the run keeps a session that predates the graph and no node is ever entered.
     expect(moved).toEqual([{ next: { nodeId: "inspect", sameConfig: false } }]);
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
+test("运行边界把节点切换记成 node-switch，并把下一轮绑到当前源码", async () => {
+  const { root, ledger } = await fixture("execute");
+  try {
+    await ledger.recordFailure("一次失败");
+    await writeFile(join(ledger.state.projectRoot, "app.ts"), "export const value = 3;\n");
+    const before = ledger.state.revision;
+    const settled = await settleBoundary(ledger, { nodeSwitchReason: "节点切换：inspect", workerHandoff: false, planning: false, planRecorded: false, aborted: false, budgetReason: null, stalledReason: null });
+    expect(settled).toEqual({ outcome: "node-switch", reason: "节点切换：inspect" });
+    expect(ledger.state.lastFailure ?? null).toBeNull();
+    expect(ledger.state.revision).not.toBe(before);
+    // 被中断的运行不结算边界：取消、超预算与停滞各有自己的出口。
+    const aborted = await settleBoundary(ledger, { nodeSwitchReason: "节点切换：inspect", workerHandoff: false, planning: false, planRecorded: false, aborted: true, budgetReason: null, stalledReason: null });
+    expect(aborted).toBeNull();
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
