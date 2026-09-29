@@ -64,6 +64,7 @@ export const api = {
   createExpert: (draft: Pick<Expert, "name" | "description" | "instructions"> & { skillIds?: string[] }) => post<{ expert: Expert }>("/api/experts", draft).then(result => result.expert),
   deleteExpert: (id: string) => send<{ deleted: boolean }>("DELETE", `/api/experts/${encodeURIComponent(id)}`, {}).then(result => result.deleted),
   decideSkillProposal: (taskId: string, proposalId: string, decision: "install" | "reject") => post<{ task: TaskView }>(`/api/tasks/${encodeURIComponent(taskId)}/skills/${encodeURIComponent(proposalId)}/decision`, { decision }).then(result => result.task),
+  decideExpertProposal: (taskId: string, proposalId: string, decision: "install" | "reject") => post<{ task: TaskView }>(`/api/tasks/${encodeURIComponent(taskId)}/experts/${encodeURIComponent(proposalId)}/decision`, { decision }).then(result => result.task),
   setExpertEnabled: (id: string, enabled: boolean) => send<{ expert: Expert }>("PATCH", `/api/experts/${encodeURIComponent(id)}`, { enabled }).then(result => result.expert),
   copyExpert: (id: string) => post<{ expert: Expert }>(`/api/experts/${encodeURIComponent(id)}/copy`, {}).then(result => result.expert),
   updateExpert: (id: string, patch: Pick<Expert, "name" | "description" | "instructions"> & { skillIds?: string[] }) => send<{ expert: Expert }>("PUT", `/api/experts/${encodeURIComponent(id)}`, patch).then(result => result.expert),

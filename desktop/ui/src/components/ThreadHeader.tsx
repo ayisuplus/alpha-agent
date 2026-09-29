@@ -82,6 +82,7 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
   const [rechecking, setRechecking] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [skillDecision, setSkillDecision] = useState<string | null>(null);
+  const [expertDecision, setExpertDecision] = useState<string | null>(null);
   const [selectedWorker, setSelectedWorker] = useState<{ id: string; diff?: string; status: string; reason?: string; findings?: string[]; events?: Array<{ sequence: number; type: string; value: string }> } | null>(null);
   const [workerLoading, setWorkerLoading] = useState<string | null>(null);
   const [agentMessages, setAgentMessages] = useState<Awaited<ReturnType<typeof api.agentMessages>>["messages"]>([]);
@@ -109,6 +110,7 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
   const criteria = [...task.criteria.map(item => item.id).filter(id => id !== "local-preview"), ...(!task.taskType || task.taskType === "web-product" ? ["local-preview"] : []), ...(task.development?.enabled ? ["development-review"] : []), ...(task.designatedExpertId ? ["designated-expert"] : []), ...(task.cognition?.gaps.some(gap => !gap.resolvedAt) ? ["capability-gap"] : [])];
   const history = [...(task.contractHistory ?? [])].sort((a, b) => b.version - a.version);
   const proposals = task.cognition?.skillProposals?.filter(item => item.status === "pending") ?? [];
+  const expertProposals = task.cognition?.expertProposals?.filter(item => item.status === "pending") ?? [];
   const nodes = task.cognition?.nodes ?? [];
   const completedSteps = nodes.filter(node => node.status === "done").length;
   const usedCalls = (task.runs ?? []).reduce((sum, run) => sum + run.toolCalls, 0);
@@ -123,6 +125,15 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
       notify(decision === "install" ? "Skill 已按提案版本安装，后续派发可使用" : "Skill 提案已拒绝", "info");
     } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
     finally { setSkillDecision(null); }
+  };
+  const decideExpert = async (id: string, decision: "install" | "reject") => {
+    setExpertDecision(id);
+    try {
+      await api.decideExpertProposal(task.id, id, decision);
+      await syncSelected(task.id);
+      notify(decision === "install" ? "专家已存入专家库" : "专家提案已拒绝，本任务仍按临时专家继续", "info");
+    } catch (error) { notify(error instanceof Error ? error.message : String(error)); }
+    finally { setExpertDecision(null); }
   };
   const recheckProject = () => void (async () => {
     setRechecking(true);
@@ -223,6 +234,15 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
         <button disabled={!!skillDecision} onClick={() => void decideSkill(proposal.id, "install")}>安装此 Skill</button>
         <button disabled={!!skillDecision} onClick={() => void decideSkill(proposal.id, "reject")}>拒绝</button>
       </div>)}</div>}
+      {!!expertProposals.length && <div><strong>待决定的专家提案</strong>{expertProposals.map(proposal => <div className="skill-proposal" key={proposal.id}>
+        <strong>{proposal.temporaryExpert.name}</strong>
+        <p>{proposal.temporaryExpert.description}</p>
+        <p>专家人设：{proposal.temporaryExpert.instructions}</p>
+        {!!proposal.temporaryExpert.skillIds.length && <p>随包方法：{proposal.temporaryExpert.skillIds.join("、")}</p>}
+        <p>这是任务内创建的专家；批准后存入专家库，之后可在其它任务里选用。</p>
+        <button disabled={!!expertDecision} onClick={() => void decideExpert(proposal.id, "install")}>存入专家库</button>
+        <button disabled={!!expertDecision} onClick={() => void decideExpert(proposal.id, "reject")}>拒绝</button>
+      </div>)}</div>}
       {!!task.cognition.skillSearches?.some(search => search.error) && <p>Skill 搜索异常：{task.cognition.skillSearches.filter(search => search.error).map(search => search.error).join("；")}</p>}
     </details>}
     <details className="cognition-panel">
@@ -264,7 +284,7 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
       <div className="thread-alert-body"><strong>已停止：{stopReasonLabel(task.stop.reason)}</strong>{task.stop.detail && <p>{task.stop.detail}</p>}</div>
     </div>}
     {task.phase === "plan-review" && <div className="thread-alert tone-info" role="status"><Info size={16} aria-hidden /><div className="thread-alert-body"><strong>计划待审阅 · v{task.cognition?.revision ?? 0}</strong><p>{task.cognition?.summary ?? "尚无计划摘要"}</p><p>范围：{task.cognition?.scope?.join("；") || "未列出"}；约束：{task.cognition?.constraints?.join("；") || "未列出"}</p><ol aria-label="待审计划节点">{nodes.map(node => <li key={node.id}>{node.id} · {node.objective} · {node.kind} · {node.phase} · 专家 {node.expertDecision.expertId ?? node.expertDecision.temporaryExpert?.name ?? "主代理"}{node.dependsOn.length ? ` · 依赖 ${node.dependsOn.join("、")}` : ""}</li>)}</ol></div></div>}
-    {!!proposals.length && <button className="thread-attention" onClick={() => openDetail({ kind: "info" })}>{proposals.length} 个 Skill 提案待决定 · 查看任务详情</button>}
+    {!!(proposals.length + expertProposals.length) && <button className="thread-attention" onClick={() => openDetail({ kind: "info" })}>{[proposals.length ? `${proposals.length} 个 Skill 提案` : "", expertProposals.length ? `${expertProposals.length} 个专家提案` : ""].filter(Boolean).join("、")}待决定 · 查看任务详情</button>}
     {task.lastFailure && task.status !== "complete" && !busy && <FailureAlert reason={task.lastFailure} />}
     {!task.lastFailure && task.reopenReason && task.status === "active" && !busy && <div className="thread-alert tone-info">
       <Info size={16} aria-hidden />
