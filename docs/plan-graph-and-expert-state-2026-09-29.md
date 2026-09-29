@@ -496,7 +496,7 @@ bun run eval --tasks content-pipeline,stale-premise,sales-question,lru-cache,app
 
 ### B.4 接力质量（§13）与观察
 
-- **gate**：每轮的计划都带审查节点（`code-review` 由中性审查者承担），`sales-question` 记录到 `verdict: pass`；**两轮均无 `changes-requested` 返工**——内容任务的合规 gate 节点被计划出来（`research → draft → compliance → final`，`draft` 由 `core-content-strategist` 承担，`compliance` 由任务内创建的合规专家承担），但两轮都在 `draft` 里停在命令审批，合规节点未执行到。方案 §10 要求的"含一次 changes-requested 返工"因此**尚未在端到端评测中出现**。
+- **gate**：每轮的计划都带审查节点（`code-review` 由中性审查者承担），`sales-question` 记录到 `verdict: pass`。内容任务的合规 gate 在收尾复测中**跑通**（`artifacts/eval-2026-09-29-p6-graph-content-gate/`：`research → draft → compliance → final`，`n3-compliance` 由任务内创建的广告合规审查员执行，结论 `pass` 绑定产物，终审通过，任务 `complete`）；`draft` 由 `core-content-strategist` 承担。**`changes-requested` 返工在所有观测轮次中都未触发**（初稿一次合规）：方案 §10 要求的"含一次 changes-requested 返工"作为**场景**尚未稳定复现，机制本身由 `test/plan-graph.test.ts` 覆盖。
 - **回边**：`premise` 回边两轮均为 0；`redo`（无边重开）在 `lru-cache`/`stale-premise` 各出现 1 次。中途改计划场景靠的是多次 `alpha_plan` 修订（修订 1–8 次），不是 premise 回边。
 - **成本**：`stale-premise` 两轮都跑到 682s、16–17 轮、231–476 次调用、总 token 千万级——模型反复用新节点重写计划（修订最多 8 次），是当前最大的开销与噪声来源；小任务开销稳定。
 - **暂停**：非配置检查的命令审批是无人值守评测里最常见的暂停原因（每轮 2 个任务），模型为了哈希/版本/git 状态去调 `certman`/`certutil`/`git status` 等命令；`alpha_step` 已能自行计算产物哈希，后续可在提示中进一步收紧"不要为交接或验证去跑命令"。

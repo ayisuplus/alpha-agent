@@ -61,7 +61,7 @@
 | 观察 | 处置 |
 |---|---|
 | 命令审批暂停最多：两轮各约 2 个任务停在非配置检查的命令审批（模型为哈希/版本/git 状态去调 `certutil`/`git status`/`bun --version`） | 协调者提示新增硬性指引："退出节点用 alpha_step，它自己对产物算哈希；不要为哈希、校验或查看文件运行任何命令；配置检查只走 alpha_check，其余 alpha_command 都会暂停任务等用户批准" |
-| 合规 gate 未跑到：`content-pipeline` 两轮都在 `draft` 暂停，`compliance` 审查节点未执行，`changes-requested` 返工未出现 | 同上的命令指引；评测侧给该任务加 `autoResume`（无人值守时按 brief 续跑，并提示不要用需审批的命令）；复测见下 |
+| 合规 gate 未跑到：`content-pipeline` 两轮都在 `draft` 暂停，`compliance` 审查节点未执行，`changes-requested` 返工未出现 | 同上的命令指引；评测侧给该任务加 `autoResume`（无人值守时按 brief 续跑，并提示不要用需审批的命令）。**复测（`artifacts/eval-2026-09-29-p6-graph-content-gate/`）：任务 8 轮跑完并 `complete`，`n3-compliance` 由任务内临时"广告合规审查员"执行、结论 `pass` 并绑定产物，`n4-final` 终审通过，`redo` 重开 1 次。**`changes-requested` 返工在本轮仍未触发（初稿一次合规），其机制由 `test/plan-graph.test.ts` 的"审查退回自动走 rework 回边"覆盖 |
 | 成本噪声：`stale-premise` 16–17 轮、千万级 token，模型用新节点重写计划而非就地修订 | 提示新增："就地修订计划——保留节点 id、改写未进入的节点，只有工作真的变大才加节点；反复用平行新节点重规划是成本失控的主因" |
 | `premise` 回边未走通（只有 redo 重开） | 归因于场景设计：`stale-premise` 的虚构前提在调查阶段就能被发现，模型靠重新规划推进。要稳定触发需让矛盾在执行后才暴露，属场景改进（待做），机制本身由 `test/plan-graph.test.ts` 的 premise 回边测试覆盖 |
 | 评测标签覆盖基线目录 | `eval/run.ts`：目标目录已有 `results.json` 时拒绝覆盖（需 `--force`），并在 `results.json` 写入被测 `revision` 与 `model` |
