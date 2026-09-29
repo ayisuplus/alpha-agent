@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 /**
@@ -22,6 +22,8 @@ export interface LaunchOptions {
   mode: "rpc" | "terminal";
   /** Terminal mode only: offer the bundled Alpha theme when the user has no theme set. */
   terminalTheme?: boolean;
+  /** Agent dir (getAgentDir) used to install the bundled theme for terminal mode. */
+  agentDir?: string;
   /** Overrides the generated browser.cdpUrl (desktop browser host endpoint). */
   browserCdpUrl?: string;
 }
@@ -74,6 +76,19 @@ export async function writeLaunchConfig(options: LaunchOptions): Promise<string>
   const cdpUrl = options.browserCdpUrl ?? process.env.ALPHA_BROWSER_CDP_URL;
   if (cdpUrl && /^http:\/\/127\.0\.0\.1:\d+(\/.*)?$/.test(cdpUrl)) {
     lines.push("browser:", `  cdpUrl: ${cdpUrl}`);
+  }
+  if (options.mode === "terminal" && options.terminalTheme && options.agentDir) {
+    // Bundled "墨·深" theme: installed by name into <agentDir>/themes; never overwrites a user's file.
+    const themeSource = join(resolve(options.appRoot), "presets", "terminal-themes", "alpha-ink.json");
+    const themesDir = join(options.agentDir, "themes");
+    const themeTarget = join(themesDir, "alpha-ink.json");
+    const installed = await stat(themeTarget).then(() => true, () => false);
+    const bundled = await readFile(themeSource, "utf8").then(text => text, () => null);
+    if (!installed && bundled) {
+      await mkdir(themesDir, { recursive: true });
+      await writeFile(themeTarget, bundled, "utf8");
+    }
+    if (installed || bundled) lines.push("theme:", "  dark: alpha-ink", "  light: alpha-ink");
   }
   await writeFile(configPath, `${lines.join("\n")}\n`, "utf8");
   return configPath;

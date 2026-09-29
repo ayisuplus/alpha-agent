@@ -10,7 +10,9 @@ Alpha 是本机运行的个人 agent。当前产品内核为原生 OMP；Alpha �
 
 > 界面纠偏：2026-09-29 用户明确要求保留原开场 UI 和可视化模型、账号及配置操作。原生 OMP 是执行内核；迁移内核不得以删除桌面设置和欢迎体验为代价。设置直接接入原生配置，不恢复旧执行编排。见 `docs/2026-09-29-desktop-ui-restoration.md`。
 
-> 变更留痕：2026-09-30 用户确认最终方向为退回原生 OMP，并决定**取消专家，专家内容转化为 Skill**。第 3、6 节的专家包规范在方案实施前仅约束现存源码，实施时改写为 Skill 规范。方案见 `docs/2026-09-30-final-convergence-recommendations.md`。
+> 变更留痕：2026-09-30 用户确认最终方向为退回原生 OMP，并决定**取消专家，专家内容转化为 Skill**。第 3、6 节的专家包规范在方案实施前仅约束现存源码，实施时改写为 Skill 规范。实施方案见 `docs/2026-09-30-final-refactor-plan.md`（诊断依据见 `docs/2026-09-30-final-convergence-recommendations.md`）。
+
+> 变更留痕：2026-09-30 重构完成（0.2.0）。专家已取消，方法以 Skill 随包发行（`presets/alpha-plugin/`，`--plugin-dir` 挂载）；执行内核为原生 OMP 18.4.3，天枢为 OMP 扩展证据层（只建议不拦截），本机能力为 `alpha_office`、`alpha_generate_*` 加 OMP 原生工具；产品名只有 Alpha，OMP 只在“关于”页与更新横幅出现。本文件第 3、4、5、6 节已按此改写。
 
 ## 2. 任务边界
 
@@ -18,31 +20,30 @@ Alpha 是本机运行的个人 agent。当前产品内核为原生 OMP；Alpha �
 - 发布、登录、账号操作、投放、私信评论等外部动作，需要当前任务明确授权；未授权时只交付可审阅物料。
 - 不承诺未测得的传播效果（涨粉、播放、GMV、转化率、收益），效果一律以发布后的真实后台数据评估。
 
-## 3. 专家与 Skill 编写规范
+## 3. Skill 编写规范
 
-- 专家由两部分组成：`presets/agents/<id>.md`（人设）与 `presets/agents/skills/<skill>/SKILL.md`（方法），并在 `presets/agents/index.json` 注册。注册条目声明装载（`mounts`：随包 Skill、主方法 `primarySkill`、所需 MCP）与交接（`handoff`：角色、消耗/产出的产物类型、通常交给谁 `next`、必须经过的 gate）。
-- 人设写四件事：角色性格与判断偏好、负责范围、事实原则、交接边界。姓名为虚构角色名，不假冒真人或暗示真实资历。交接边界由 `handoff` 声明生成，不再手写两份。
-- Skill 写四件事：输入与前置阅读、可执行的工作步骤、交付物、验收依据与能力缺口处理。一个 Skill 只聚焦一个角色的核心职责，不把同一个大 Skill 无差别挂给多个角色。Skill 声明需含 `mounts` 相关字段：随包即装载的 Skill、正文直接注入的主方法、依赖的第三方 MCP。
-- 专家激活即装载：进入节点时装载人设、随包 Skill 与声明的 MCP；主方法 `primarySkill` 的 `SKILL.md` 正文直接注入。未分发方法或所需工具/服务不可用时上报缺口，不绕过、不虚构执行结果。
-- 角色与产物类型使用受控词表 `presets/agents/roles.json`；内置专家只能引用词表中的值，自建专家可用词表外的值（界面提示但不拒绝）。
+- 方法以 Skill 随包发行：`presets/alpha-plugin/` 是 Claude 插件目录（`.claude-plugin/plugin.json` 清单、`skills/<name>/SKILL.md`、`SOURCES.md`），用 OMP 的 `--plugin-dir` 进程级挂载，不写入用户的 `~/.omp`。**`--skills` 是按名称过滤的参数，不能用来挂载目录。**
+- 每个 Skill 的 `SKILL.md` 写六件事：输入与前置阅读、可执行的工作步骤、交付物、验收依据与能力缺口处理、原则与边界、工具用法（涉及文档/媒体生产时必写）。frontmatter 的 `name` 与目录名一致；`description` 写明触发场景，中英文关键词都要有。
+- 一个 Skill 只聚焦一个角色的核心职责。原人设中的负责范围并入 `description` 与“适用范围”；事实原则、禁止事项、时效规则的核对要求并入“原则与边界”；判断偏好并入工作步骤或验收依据。虚构姓名、性格描写、“你是 Alpha 的…”、交接/handoff/gate 声明一律不得出现。
+- 工具用法与实现契约对齐（`read` 读文档、`alpha_office` 六动作、`alpha_generate_*` 媒体、`browser`/`web_search`/`fetch`）：没有工具支撑、也给不出备选做法的承诺，要么删掉，要么改成“说明限制”。超出能力范围时如实上报缺口，不虚构执行结果。
 - 平台规则、算法权重、流量阈值具有时效性且口径不一：写入时标注核对日期与来源性质（官方 / 第三方 / 创作者经验），并在 Skill 中要求"涉及时效规则先查官方或真实页面"，禁止把记忆中的数字当成当前规则向用户保证。
+- 对外发布类内容的复核建议写明"在独立子任务中复核，不要同一上下文自审"；只作建议，运行时不拦截。
 
 > 变更留痕：2026-09-29 按《计划图与专家状态》方案（docs/archive/plan-graph-and-expert-state-2026-09-29.md）第 11 节更新本节：删除"人设中统一声明：先读取随包方法 `alpha-core:<skill>`"（随包方法改为激活即装载、主方法直接注入）；"交接边界"改为由 `handoff` 声明生成；Skill 编写要求补充 `mounts` 字段；新增角色词表要求。
 
 ## 4. 事实与合规
 
-- 数字、案例、规则必须可追溯到用户素材或具体来源；区分事实、观点与虚构。来源记录写入 `presets/agents/SOURCES.md`。
+- 数字、案例、规则必须可追溯到用户素材或具体来源；区分事实、观点与虚构。来源记录写入 `presets/alpha-plugin/SOURCES.md`。
 - 面向中国媒体的内容默认经过合规视角：广告法极限词、医疗/金融/教育资质、AI 生成与虚构演绎/营销信息等强制标注、搬运与刷数据风险。拿不准的内容标记待核验，不静默放行。
 
 ## 5. 文件组织与归档
 
 - 最终交付物放项目根或对应功能目录；阶段性产物、来源材料、可复现脚本放当次任务约定位置，任务结束后归档，避免散落在根目录。
-- 新增专家相关产物路径：人设 `presets/agents/`、Skill `presets/agents/skills/`、说明文档 `docs/`（文件名带日期，格式 `YYYY-MM-DD`）。
+- Skill 产物路径：`presets/alpha-plugin/skills/<name>/SKILL.md`（含 Skill 自带的 `references/` 参考材料）；来源记录 `presets/alpha-plugin/SOURCES.md`；说明文档 `docs/`（文件名带日期，格式 `YYYY-MM-DD`）。
 - 不覆盖用户已有文件；确需修改既有文件时保留原意，历史记录文档（如已发生的验收记录）不追改其中的历史数字。
 
 ## 6. 验证与交付
 
-- 改完专家包后至少运行：专家包结构校验（`bun run validate:packs`）、`bun run scripts/sync-core-experts.ts`（安装包与源人设是否漂移）与 `bun test ./test/agent-presets.test.ts`；条件允许时运行 `bun run check` 和相关构建。
-  - 留痕（2026-09-29）：原引用的 `skill-creator/scripts/quick_validate.py` 在本仓库与 OMP 安装目录中均不存在（全盘检索确认），改用本仓库的 `scripts/validate-expert-packs.ts` 承担同一职责：注册完整性、人设非空与禁用句、Skill 的 frontmatter/篇幅/结构为硬性失败，四件事的措辞覆盖为提示项。
+- 改动后至少运行：`bun run check`（类型）、`bun run test`（原生套件：native-launch、native-imports、native-capabilities、native-tianshu、native-comfy-client 等）。改动 Skill 后加跑 `bun run validate:skills`（frontmatter、篇幅、description 触发场景、退役术语、办公/媒体 Skill 的“工具用法”节为硬性失败）。涉及打包时跑 `bun run package:portable` 与打包探针（`scripts/probe-portable.ts`、`scripts/probe-office-runtime.ts`）。
 - 交付说明写清：产物名、路径/打开方式、验证方式与覆盖范围、仍存在的缺口。
 - 最终文件通过交付通道呈现，不用口头描述替代实际产物。

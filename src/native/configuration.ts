@@ -46,6 +46,16 @@ export class NativeConfiguration {
     })) };
   }
 
+  /** True when the user has no theme of their own; Alpha may then offer its bundled terminal theme. */
+  async themeUnset(): Promise<boolean> {
+    const settings = await this.settings();
+    for (const id of ["theme.dark", "theme.light"]) {
+      const setting = lookup(id);
+      if (setting && settings.getProvenance(setting) !== "default") return false;
+    }
+    return true;
+  }
+
   async update(input: Record<string, unknown>) {
     const settings = await this.settings();
     if (input.role === "default") {

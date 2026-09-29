@@ -1,5 +1,6 @@
 {
   "name": "alpha-agent",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,10 +10,9 @@
     "desktop": "bun run scripts/start-desktop.ts",
     "package:portable": "bun run scripts/package-portable.ts",
     "package:exe": "bun run scripts/package-installer.ts",
-    "probe:desktop": "bun run scripts/probe-desktop.ts",
     "check": "tsc --noEmit -p tsconfig.native.json",
     "test": "bun test ./test/native-*.test.ts",
-    "validate:packs": "bun run scripts/validate-expert-packs.ts"
+    "validate:skills": "bun run scripts/validate-skills.ts"
   },
   "dependencies": {
     "@oh-my-pi/omptype": "18.4.3",

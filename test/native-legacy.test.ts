@@ -17,21 +17,23 @@ test("lists both historical ledger formats and continues without modifying them"
     env: { ...process.env, ALPHA_WORKSPACE_ROOT: root }, stdout: "pipe", stderr: "pipe", windowsHide: true });
   try {
     const reader = child.stdout.getReader();
-    const ready = await Promise.race([(async () => {
+    const { port, token } = await Promise.race([(async () => {
       let output = "";
       for (;;) {
         const chunk = await reader.read();
         if (chunk.done) throw new Error(`Native server exited before ready: ${output}`);
         output += new TextDecoder().decode(chunk.value);
-        const match = /ALPHA_SERVER_READY (\d+)/.exec(output);
-        if (match) return Number(match[1]);
+        const readyMatch = /ALPHA_SERVER_READY (\d+)/.exec(output);
+        const tokenMatch = /ALPHA_SERVER_TOKEN (\w+)/.exec(output);
+        if (readyMatch && tokenMatch) return { port: Number(readyMatch[1]), token: tokenMatch[1] };
       }
     })(),
       Bun.sleep(20_000).then(() => { throw new Error("Native server did not become ready"); })]);
-    const base = `http://127.0.0.1:${ready}`;
-    const listed = await fetch(`${base}/api/native/legacy`).then(response => response.json()) as { tasks: Array<{ id: string }> };
+    const base = `http://127.0.0.1:${port}`;
+    const auth = { "x-alpha-token": token };
+    const listed = await fetch(`${base}/api/native/legacy`, { headers: auth }).then(response => response.json()) as { tasks: Array<{ id: string }> };
     expect(listed.tasks.map(item => item.id).sort()).toEqual([direct, wrapped].sort());
-    const continued = await fetch(`${base}/api/native/legacy/${direct}/continue`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(response => response.json()) as { draft: string; session: { legacyTaskId: string } };
+    const continued = await fetch(`${base}/api/native/legacy/${direct}/continue`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: "{}" }).then(response => response.json()) as { draft: string; session: { legacyTaskId: string } };
     expect(continued.session.legacyTaskId).toBe(direct);
     expect(continued.draft).toContain("Direct objective");
     expect(await readFile(directFile, "utf8")).toBe(original);

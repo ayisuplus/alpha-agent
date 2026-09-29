@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
@@ -8,6 +8,8 @@ import { RpcProcess } from "./rpc-process";
 import { OmpUpdateMonitor } from "./omp-update-monitor";
 import { NativeConfiguration } from "./configuration";
 import { buildLaunch, defaultWorkspaceRoot } from "./launch";
+import { officeRuntimeStatus } from "./capabilities/office/office-runtime";
+import { ComfyClient } from "./capabilities/comfyui/comfy-client";
 
 interface SessionRecord {
   id: string;
@@ -58,7 +60,7 @@ async function enforceProcessCap(): Promise<void> {
     const ordered = [...processes.keys()].sort((a, b) => (lastUsed.get(a) ?? 0) - (lastUsed.get(b) ?? 0));
     const victim = ordered.find(id => (streams.get(id)?.size ?? 0) === 0) ?? ordered[0];
     if (!victim) return;
-    await stopProcess(victim, "Alpha 已按最近使用回收 OMP 进程");
+    await stopProcess(victim, "Alpha 已按最近使用回收内核进程");
   }
 }
 
@@ -74,7 +76,7 @@ async function reapIdleProcesses(): Promise<void> {
     const state = await child.command({ type: "get_state" }).catch(() => null);
     const data = state && "data" in state ? state.data : null;
     const settled = data && typeof data === "object" && "isSettled" in data && data.isSettled === true;
-    if (settled && !terminals.has(id)) await stopProcess(id, "Alpha 已停止空闲的 OMP 进程");
+    if (settled && !terminals.has(id)) await stopProcess(id, "Alpha 已停止空闲的内核进程");
   }
 }
 const reaper = setInterval(() => void reapIdleProcesses(), 60_000);
@@ -96,6 +98,14 @@ function saveRecords(): Promise<void> {
 
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status, headers: { "cache-control": "no-store" } });
+}
+
+/** Local interface boundary: Host must be 127.0.0.1:<port> and /api requires the per-run token. */
+const apiToken = process.env.ALPHA_SERVER_TOKEN ?? randomBytes(32).toString("hex");
+const selfIssuedToken = !process.env.ALPHA_SERVER_TOKEN;
+
+function authorized(request: Request, url: URL): boolean {
+  return request.headers.get("x-alpha-token") === apiToken || url.searchParams.get("token") === apiToken;
 }
 function errorResponse(error: unknown, status = 400): Response {
   return json({ error: error instanceof Error ? error.message : String(error) }, status);
@@ -224,9 +234,11 @@ const server = Bun.serve({
   async fetch(request) {
     const url = new URL(request.url);
     const origin = `http://127.0.0.1:${server.port}`;
+    if (request.headers.get("host") !== `127.0.0.1:${server.port}`) return new Response("Forbidden", { status: 403 });
     if (!["GET", "HEAD"].includes(request.method) && request.headers.get("origin") && request.headers.get("origin") !== origin) return new Response("Forbidden", { status: 403 });
     if (url.pathname === "/health") return json({ ok: true, engine: "omp-native" });
     if (url.pathname.startsWith("/ui")) return uiFile(url.pathname);
+    if (url.pathname.startsWith("/api") && !authorized(request, url)) return json({ error: "Forbidden" }, 403);
     try {
       if (url.pathname === "/api/native/configuration" && request.method === "GET") return json(await configuration.read());
       if (url.pathname === "/api/native/models" && request.method === "GET") return json(await configuration.catalog());
@@ -236,6 +248,21 @@ const server = Bun.serve({
         return json({ saved: true });
       }
       if (url.pathname === "/api/native/updates" && request.method === "GET") return json(updates.status());
+      if (url.pathname === "/api/native/capabilities" && request.method === "GET") {
+        const [office, comfyOk] = await Promise.all([officeRuntimeStatus().catch(error => ({ available: false as const, reason: String(error) })),
+          new ComfyClient().health().catch(() => false)]);
+        return json({ office, comfy: { available: comfyOk, url: process.env.ALPHA_COMFY_URL ?? "http://127.0.0.1:8188", ...(comfyOk ? {} : { reason: "本机未检测到 ComfyUI 服务" }) } });
+      }
+      if (url.pathname === "/api/native/skills" && request.method === "GET") {
+        const root = join(appRoot, "presets", "alpha-plugin", "skills");
+        const names = await readdir(root).catch(() => [] as string[]);
+        const skills = await Promise.all(names.sort().map(async name => {
+          const text = await readFile(join(root, name, "SKILL.md"), "utf8").catch(() => "");
+          const description = /^description:\s*(.+)$/m.exec(text)?.[1]?.trim() ?? "";
+          return { name, description };
+        }));
+        return json({ skills: skills.filter(skill => skill.description) });
+      }
       if (url.pathname === "/api/native/updates/check" && request.method === "POST") return json(await updates.check());
       if (url.pathname === "/api/native/updates/notified" && request.method === "POST") {
         const input = await body(request);
@@ -273,7 +300,8 @@ const server = Bun.serve({
           const terminal = { pty, output: "" };
           terminals.set(id, terminal);
           const sessionDir = join(nativeRoot, "sessions", id);
-          const plan = await buildLaunch({ appRoot, cwd: item.cwd, sessionDir, sessionId: id, dataRoot, mode: "terminal", ...(item.ompSessionId ? { ompSessionId: item.ompSessionId } : {}) });
+          const plan = await buildLaunch({ appRoot, cwd: item.cwd, sessionDir, sessionId: id, dataRoot, agentDir: configuration.agentDir,
+            mode: "terminal", terminalTheme: await configuration.themeUnset(), ...(item.ompSessionId ? { ompSessionId: item.ompSessionId } : {}) });
           void captureTerminalSession(id, sessionDir);
           void pty.startArgv({ application: process.execPath, args: plan.argv, cwd: item.cwd, env: plan.env, cols, rows }, (error, chunk) => {
             if (error) emit(id, { type: "terminal_error", error: error.message });
@@ -309,17 +337,24 @@ const server = Bun.serve({
         const session = await createSession({ cwd, title: String(state.title ?? state.objective).slice(0, 120), legacyTaskId: oldTask[1] });
         return json({ session, draft: continuationDraft(state) }, 201);
       }
-      const match = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/(state|messages|models|cognition|files|events|command|ui-response|open)$/.exec(url.pathname);
+      const consentMatch = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/browser-consent$/.exec(url.pathname);
+      if (consentMatch && (request.method === "GET" || request.method === "DELETE")) {
+        const [, id] = consentMatch;
+        record(id);
+        const file = join(dataRoot, "native", "browser-consent.json");
+        const entries = await readFile(file, "utf8").then(text => JSON.parse(text) as Record<string, unknown>, () => ({}) as Record<string, unknown>);
+        if (request.method === "GET") return json({ consent: entries[id] ?? null });
+        delete entries[id];
+        await writeFile(file, JSON.stringify(entries, null, 2), "utf8");
+        return json({ revoked: true });
+      }
+      const match = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/(state|messages|models|files|events|command|ui-response|open)$/.exec(url.pathname);
       if (match) {
         const [, id, action] = match;
         record(id);
         if (action === "open" && request.method === "POST") {
           await host(id);
           return json({ open: true });
-        }
-        if (action === "cognition" && request.method === "GET") {
-          const file = join(nativeRoot, "cognition", `${id}.json`);
-          return json(await readFile(file, "utf8").then(text => JSON.parse(text), () => null));
         }
         if (action === "files" && request.method === "GET") {
           const directory = await readdir(record(id).cwd, { withFileTypes: true });
@@ -372,6 +407,7 @@ const server = Bun.serve({
 });
 
 console.log(`ALPHA_SERVER_READY ${server.port}`);
+if (selfIssuedToken) console.log(`ALPHA_SERVER_TOKEN ${apiToken}`);
 void updates.start();
 process.on("SIGINT", () => {
   for (const terminal of terminals.values()) terminal.pty.kill();

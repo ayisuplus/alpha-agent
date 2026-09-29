@@ -48,7 +48,9 @@ for (const source of ["desktop/dist", "licenses"]) {
 }
 await mkdir(join(output, "presets"), { recursive: true });
 for (const name of ["flux2-image.api.json", "voxcpm2-voice.api.json", "h3-video.api.json"]) await cp(join(root, "presets", name), join(output, "presets", name));
-for (const source of ["desktop/main.cjs", "desktop/preload.cjs", "scripts/start-desktop.ts", "scripts/probe-portable.ts", "scripts/portable-ui.ts", "src/native/capabilities/office/office-worker.py", "scripts/probe-office-runtime.ts", "package.json", "package-lock.json"]) {
+for (const source of ["presets/alpha-plugin", "presets/terminal-themes"]) await cp(join(root, source), join(output, source), { recursive: true });
+await cp(join(root, "presets", "alpha-identity.md"), join(output, "presets", "alpha-identity.md"));
+for (const source of ["desktop/main.cjs", "desktop/preload.cjs", "desktop/browser-host.cjs", "scripts/start-desktop.ts", "scripts/probe-portable.ts", "scripts/portable-ui.ts", "src/native/capabilities/office/office-worker.py", "scripts/probe-office-runtime.ts", "package.json", "package-lock.json"]) {
   const target = join(output, source);
   await mkdir(resolve(target, ".."), { recursive: true });
   await cp(join(root, source), target);
@@ -90,7 +92,7 @@ await writeFile(join(output, "release.json"), JSON.stringify({
   ui: { files: ui },
   office: { version: "26.2.5.2", buildId: "cd7284b4cbbfeb507e630c1aac019f4157393acb", sofficeSha256: officeHash, location: "runtime/libreoffice" },
   launch: "Alpha.cmd",
-  localData: ["../.alpha", "../products"],
+  localData: ["../.alpha", "../workspace"],
 }, null, 2));
 await writeFile(join(output, "README.txt"), [
   "Alpha 本机可携带版",

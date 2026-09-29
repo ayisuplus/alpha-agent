@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { buildLaunch, buildLaunchEnv, defaultWorkspaceRoot, writeLaunchConfig, type LaunchOptions } from "../src/native/launch";
@@ -88,6 +88,28 @@ describe("Alpha launch construction", () => {
     expect(await readFile(configPath, "utf8")).toContain("  cdpUrl: http://127.0.0.1:9222");
     const unsafe = await writeLaunchConfig(options({ dataRoot, browserCdpUrl: "http://10.0.0.5:9222" }));
     expect(await readFile(unsafe, "utf8")).not.toContain("cdpUrl");
+  });
+
+  test("bundled terminal theme installs by name and never overrides a user theme", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "alpha-launch-"));
+    const agentDir = await mkdtemp(join(tmpdir(), "alpha-agent-"));
+    created.push(dataRoot, agentDir);
+    const terminal = { dataRoot, agentDir, mode: "terminal", terminalTheme: true } as const;
+    const configPath = await writeLaunchConfig(options({ ...terminal, agentDir }));
+    const config = await readFile(configPath, "utf8");
+    expect(config).toContain("  dark: alpha-ink");
+    expect(config).toContain("  light: alpha-ink");
+    const installed = await readFile(join(agentDir, "themes", "alpha-ink.json"), "utf8");
+    expect(JSON.parse(installed).name).toBe("alpha-ink");
+
+    // A user's existing theme file is never overwritten.
+    await writeFile(join(agentDir, "themes", "alpha-ink.json"), '{"name":"user-edited"}', "utf8");
+    await writeLaunchConfig(options({ ...terminal, agentDir }));
+    expect(await readFile(join(agentDir, "themes", "alpha-ink.json"), "utf8")).toContain("user-edited");
+
+    // No theme overlay when the user has their own theme choice or in rpc mode.
+    expect(await readFile(await writeLaunchConfig(options({ dataRoot, agentDir, mode: "terminal", terminalTheme: false })), "utf8")).not.toContain("alpha-ink");
+    expect(await readFile(await writeLaunchConfig(options({ dataRoot, agentDir, mode: "rpc", terminalTheme: true })), "utf8")).not.toContain("alpha-ink");
   });
 
   test("default working directory is a workspace subdirectory", () => {

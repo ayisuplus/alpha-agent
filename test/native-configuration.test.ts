@@ -3,6 +3,17 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 
+type Row = Record<string, unknown>;
+function row(value: unknown): Row {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
+}
+function list(value: unknown): Row[] {
+  return Array.isArray(value) ? value.filter(item => item && typeof item === "object" && !Array.isArray(item)) as Row[] : [];
+}
+function findRow(value: unknown, match: Row): Row | undefined {
+  return list(value).find(item => Object.entries(match).every(([key, expected]) => item[key] === expected));
+}
+
 test("desktop settings persist through OMP and a new RPC session uses the selected default", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-native-settings-"));
   const agentDir = join(root, "omp");
@@ -21,41 +32,49 @@ test("desktop settings persist through OMP and a new RPC session uses the select
         const chunk = await reader.read();
         if (chunk.done) throw new Error(`Server exited: ${await errors}`);
         output += new TextDecoder().decode(chunk.value);
-        const match = /ALPHA_SERVER_READY (\d+)/.exec(output);
-        if (match) return Number(match[1]);
+        const readyMatch = /ALPHA_SERVER_READY (\d+)/.exec(output);
+        const tokenMatch = /ALPHA_SERVER_TOKEN (\w+)/.exec(output);
+        if (readyMatch && tokenMatch) return { port: Number(readyMatch[1]), token: tokenMatch[1] };
       }
     })();
-    const port = await Promise.race([ready, Bun.sleep(30_000).then(() => { throw new Error("Settings server timed out"); })]);
-    const request = async (path: string, input?: unknown) => {
-      const response = await fetch(`http://127.0.0.1:${port}/api/native/${path}`, input === undefined ? undefined : {
-        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input),
+    const { port, token } = await Promise.race([ready, Bun.sleep(30_000).then(() => { throw new Error("Settings server timed out"); })]);
+    const request = async (path: string, input?: unknown): Promise<{ status: number; value: unknown }> => {
+      const response = await fetch(`http://127.0.0.1:${port}/api/native/${path}`, {
+        method: input === undefined ? "GET" : "POST",
+        headers: { "x-alpha-token": token, ...(input === undefined ? {} : { "content-type": "application/json" }) },
+        ...(input === undefined ? {} : { body: JSON.stringify(input) }),
       });
-      return { status: response.status, value: await response.json() as any };
+      return { status: response.status, value: await response.json() };
     };
     const before = await request("configuration");
-    expect(before.value.agentDir).toBe(agentDir);
-    expect(before.value.settings.some((item: any) => item.id === "auth.broker.token")).toBe(false);
+    const config = row(before.value);
+    expect(config.agentDir).toBe(agentDir);
+    expect(JSON.stringify(config)).not.toContain("auth.broker.token");
     expect((await request("credentials", { provider: "deepseek", key: "alpha-test-not-a-real-key", action: "save" })).status).toBe(200);
-    const catalog = (await request("models")).value;
+    const catalog = row((await request("models")).value);
     expect(JSON.stringify(catalog)).not.toContain("alpha-test-not-a-real-key");
-    expect(catalog.providers.find((item: any) => item.id === "deepseek").storedKey).toBe(true);
-    const model = catalog.models.find((item: any) => item.provider === "deepseek" && item.available);
-    expect(model).toBeDefined();
-    expect((await request("settings", { role: "default", model: model.selector })).status).toBe(200);
+    expect(findRow(catalog.providers, { id: "deepseek" })?.storedKey).toBe(true);
+    const model = list(catalog.models).find(item => item.provider === "deepseek" && item.available === true);
+    const selector = typeof model?.selector === "string" ? model.selector : "";
+    expect(selector).not.toBe("");
+    expect((await request("settings", { role: "default", model: selector })).status).toBe(200);
     expect((await request("settings", { id: "retry.maxRetries", value: 4 })).status).toBe(200);
     expect((await request("settings", { id: "compaction.enabled", value: "false" })).status).toBe(400);
     expect((await request("settings", { id: "auth.broker.token", value: "forbidden" })).status).toBe(400);
     const persisted = await readFile(join(agentDir, "config.yml"), "utf8");
-    expect(persisted).toContain(model.selector);
+    expect(persisted).toContain(selector);
     expect(persisted).toContain("deepseek/deepseek-reasoner");
-    const created = (await request("sessions", { cwd: root, title: "Settings regression" })).value;
-    expect((await request(`sessions/${created.session.id}/open`, {})).status).toBe(200);
-    const state = await request(`sessions/${created.session.id}/state`);
+    const created = row(row((await request("sessions", { cwd: root, title: "Settings regression" })).value).session);
+    const sessionId = typeof created.id === "string" ? created.id : "";
+    expect(sessionId).not.toBe("");
+    expect((await request(`sessions/${sessionId}/open`, {})).status).toBe(200);
+    const state = await request(`sessions/${sessionId}/state`);
     expect(state.status).toBe(200);
-    expect(`${state.value.model.provider}/${state.value.model.id}`).toBe(model.selector);
+    const model2 = row(row(state.value).model);
+    expect(`${model2.provider}/${model2.id}`).toBe(selector);
     expect((await request("credentials", { provider: "deepseek", action: "remove" })).status).toBe(200);
-    const after = (await request("models")).value;
-    expect(after.providers.find((item: any) => item.id === "deepseek").storedKey).toBe(false);
+    const after = row((await request("models")).value);
+    expect(findRow(after.providers, { id: "deepseek" })?.storedKey).toBe(false);
   } finally {
     if (process.platform === "win32") await Bun.spawn(["taskkill.exe", "/T", "/F", "/PID", String(child.pid)], { stdout: "ignore", stderr: "ignore", windowsHide: true }).exited;
     else child.kill();
