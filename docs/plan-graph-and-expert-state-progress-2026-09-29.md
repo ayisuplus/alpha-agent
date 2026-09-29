@@ -40,13 +40,14 @@
 
 另：`totalTokens` 里 DeepSeek 会计入 prompt 缓存命中（第一轮 approval-loop 9.75M 中 7.38M 是 cacheRead），评测报告已拆成"新输入+输出 + 缓存读"两列，跨模型对比只用前者。
 
-### 1. 端到端评测（进行中）
+### 1. 端到端评测（已完成）
 - 迭代过程中被缺陷中断的三轮不计入对比，作为证据保留：
   - `artifacts/eval-2026-09-29-p6-round-1-preboundary/`（暴露 F1–F3；5/5 通过但任务被提前评分）
   - `artifacts/eval-2026-09-29-p6-round-1-boundary-incomplete/`（修复 F1–F3 后暴露 F4–F6；0/5）
   - `artifacts/eval-2026-09-29-p6-round-1-stalled/`（修复 F4–F6 后暴露 F7：`sales-question`/`lru-cache`/`stale-premise` 通过，`content-pipeline`/`approval-loop` 停在图中间；3/5）
   - `artifacts/eval-2026-09-29-p6-round-1-provider-down/`、`…-xiaomi-partial/`（模型与额度问题）
-- 冒烟验证（`sales-question` 单任务）：图跑通、任务 `complete`、独立检查通过，新输入+输出 29,511 tokens（P0 同任务 28,946），轮次 1→4——小任务开销的可比口径见下一轮完整评测。
+- 最终修订（F1–F9 修复后）的两个样本：`artifacts/eval-2026-09-29-p6-round-2/`（3/5）与 `-round-3/`（5/5）；四个场景全部跑通，逐任务数字、与 P0 基线对比、接力质量与未观察到的事项写在方案文档**附录 B**。
+- 端到端过程中修复的缺陷共 9 项（F1–F9，见第 0 节），每项都有回归测试，全套 512/512 通过。
 - 第二轮（方案附录 A.3 要求"至少跑两轮取区间"）未跑。
 - 与 P0 基线对比：`bun run eval compare artifacts/eval-2026-09-29-p6-round-3 artifacts/eval-2026-09-29-p6-round-1`。小任务（`sales-question`）看轮次与 token 增量；内容任务关注 gate 拦下数（报告"计划图"列的计划/回边/退审计数）；`stale-premise` 关注是否出现 premise 回边与计划修订。
 - 注意：第一轮评测使用的是 `22bf782` 时点的工作树（服务器在启动时加载模块，之后的提交不影响该进程）。
@@ -54,6 +55,13 @@
 ### 2. §6.2 审查节点上下文（部分）
 - 审查工作流的产物路径已含：任务目标、验收标准、变更路径与受限 diff、只读源码。
 - 尚未把上游节点的交接记录（`handoffSection`）注入 `development-workflow.ts` 的审查工单 objective；`roleContract` 的 reviewer 会话分支也还没有 `handoffSection`。
+
+### 2b. 评测暴露、尚未修的行为（观察项）
+
+- **命令审批暂停最多**：两轮各有约 2 个任务停在"非配置检查"的命令审批（模型为哈希/版本/git 状态去调 `certutil`/`git status`/`bun --version`）。`alpha_step` 已能自行算产物哈希，后续可在提示里明确"不要为交接或验证跑命令"。
+- **合规 gate 未跑到**：`content-pipeline` 两轮都在 `draft` 节点暂停，`compliance` 审查节点未执行，因此方案 §10 要求的"含一次 changes-requested 返工"在端到端评测中**尚未出现**（`cr 0`）；gate 机制本身由 `sales-question` 的 `code-review` 通过结论与单测覆盖。
+- **premise 回边未出现**：`stale-premise` 靠多次 `alpha_plan` 修订推进（修订 1–8 次），`redo` 重开各出现 1 次，但没有走 premise 回边。
+- **成本噪声**：`stale-premise` 两轮都 ~682s、16–17 轮、总 token 千万级；模型倾向用新节点重写计划而不是就地修订，是最大开销来源。
 
 ### 3. 审查者会话路径是死代码（§12 收尾）
 - `executionMode: "review"` 全仓库无生产者：`omp-runner.ts` 的 `reviewing` 分支、`session-profile.ts` 的 reviewer 提示词与工具表、`createDevelopmentReviewTool`(`alpha_review_result`) 实际都到不了。真实路径是 kind=`review` 的 work order（worker 角色，`alpha_worker_result`）。
