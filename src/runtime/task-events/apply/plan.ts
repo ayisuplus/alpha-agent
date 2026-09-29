@@ -85,6 +85,16 @@ export const planReducers: FamilyReducers = {
     if (!input.summary.trim() || !input.reason.trim() || nodes.length > 20) throw new InvariantError("apply/cognition-content-invalid", "认知修订内容无效");
     const ids = new Set(nodes.map(node => node.id));
     if (ids.size !== nodes.length || nodes.some(node => !/^[a-z][a-z0-9-]{0,31}$/.test(node.id) || ["coordinator", "final-review", "review-repair"].includes(node.id) || !node.objective.trim() || node.dependsOn.some(id => !ids.has(id) || id === node.id))) throw new InvariantError("apply/cognition-steps-invalid", "认知节点无效");
+    // §3.2: the three stages run in order, so a dependency may never point forward past the node's own stage — an
+    // execute node that depends on a review node would deadlock against the stage gate. Such returns are declared as
+    // rework/premise back-edges instead.
+    const stageOrder: PlanNodeKind[] = ["investigate", "execute", "review"];
+    for (const node of nodes) {
+      for (const dependency of node.dependsOn) {
+        const target = nodes.find(item => item.id === dependency);
+        if (target && stageOrder.indexOf(target.phase) > stageOrder.indexOf(node.phase)) throw new InvariantError("apply/plan-stage-order", `依赖不能跨阶段倒挂：${node.id}（${node.phase}）依赖 ${dependency}（${target.phase}）；需要退回时用 rework/premise 回边`);
+      }
+    }
     for (const node of nodes) {
       if (!node.expertDecision.reason.trim()) throw new InvariantError("apply/expert-decision-required", `节点必须写明专家决定与理由：${node.id}`);
       if (node.expertDecision.expertId && node.expertDecision.temporaryExpert) throw new InvariantError("apply/expert-decision-required", `节点的专家决定只能选一种：${node.id}`);

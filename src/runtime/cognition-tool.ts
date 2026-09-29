@@ -80,6 +80,13 @@ export function createCognitionTools(ledger: TaskLedger, dataRoot: string, hooks
             if (node.skillIds.some(id => !available.has(id))) throw new Error(`Skill 未安装、未启用或不属于所选专家：${node.skillIds.find(id => !available.has(id))}`);
             return { ...node, expertDecision: decision, status: "planned" as const };
           });
+          // §3.2: stages run in order (investigate → execute → review), so a dependency may not point forward past
+          // the node's stage. Rejecting it here beats recording a graph that the stage gate can never open.
+          const stageOrder = ["investigate", "execute", "review"] as const;
+          for (const node of nodes) for (const dependency of node.dependsOn) {
+            const target = nodes.find(item => item.id === dependency)!;
+            if (stageOrder.indexOf(target.phase) > stageOrder.indexOf(node.phase)) throw new Error(`依赖不能跨阶段倒挂：${node.id}（${node.phase}）依赖 ${dependency}（${target.phase}）；需要退回时在 edges 里声明 rework/premise 回边`);
+          }
           // A worker-hosted node needs alpha_spawn, which only dispatching task types expose; otherwise the node can
           // never run. Rejecting it here keeps the plan executable instead of stranding ready work.
           if (!taskProfile(ledger.state.taskType).dispatch && nodes.some(node => node.host === "worker")) throw new Error("该任务类型不派发子代理：节点必须由主会话执行（host: coordinator）");

@@ -257,6 +257,14 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
         emitRun({ type: "status", phase: "计划图停住，等待用户", runId, pending: currentLedger.completionGaps() });
         return;
       }
+      // A graph with unfinished nodes but nothing actionable is a dead end the model must resolve (usually a missing
+      // dependency or a stage gate), so it is reported instead of ending the run silently.
+      if (planCycle.blocked && currentLedger.state.status === "active" && currentLedger.state.phase === "execute") {
+        await currentLedger.recordFailure("计划图没有可推进的节点：剩余节点被依赖或阶段闸门挡住");
+        emitRun({ type: "task", task: ctx.taskView(currentLedger) });
+        emitRun({ type: "status", phase: "计划图被挡住，等待用户", runId, pending: currentLedger.completionGaps() });
+        return;
+      }
       if (planCycle.continue) {
         currentInstruction = "Continue the plan graph: exit the finished node with alpha_step (its handoff records artifacts, findings and what is unresolved), then work the next ready node. Do not re-plan unless the evidence changed the plan.";
         emitRun({ type: "status", phase: "继续计划图", runId });

@@ -57,13 +57,17 @@ export function planActionableNode(ledger: TaskLedger): string | null {
  * exit or enter continues on the next run; two consecutive runs that move neither the graph nor the evidence end the
  * loop, so a model that keeps stopping cannot spin forever. Goal mode drives its own continuation.
  */
-export function nextPlanCycle(input: { ledger: TaskLedger; graphBefore: string | null; evidenceBefore: string | null; noProgressRuns: number; cancelled: boolean; userControl: boolean }): { continue: boolean; noProgressRuns: number; stalled: boolean } {
+export function nextPlanCycle(input: { ledger: TaskLedger; graphBefore: string | null; evidenceBefore: string | null; noProgressRuns: number; cancelled: boolean; userControl: boolean }): { continue: boolean; noProgressRuns: number; stalled: boolean; blocked: boolean } {
   const { ledger } = input;
-  const quiet = { continue: false, noProgressRuns: input.noProgressRuns, stalled: false };
+  const quiet = { continue: false, noProgressRuns: input.noProgressRuns, stalled: false, blocked: false };
   if (ledger.state.goal?.enabled || input.cancelled || input.userControl) return quiet;
   if (ledger.state.status !== "active" || ledger.state.phase !== "execute") return quiet;
-  if (!planActionableNode(ledger)) return quiet;
+  // Unfinished nodes with nothing enterable anywhere are a dead end, not a finished graph.
+  if (!planActionableNode(ledger)) {
+    const unfinished = (ledger.state.cognition?.nodes ?? []).some(node => node.status !== "done" && node.status !== "cancelled");
+    return unfinished ? { ...quiet, blocked: true } : quiet;
+  }
   const advanced = input.graphBefore !== planGraphSignature(ledger) || input.evidenceBefore !== progressSignature(ledger);
   const noProgressRuns = advanced ? 0 : input.noProgressRuns + 1;
-  return noProgressRuns >= 2 ? { continue: false, noProgressRuns, stalled: true } : { continue: true, noProgressRuns, stalled: false };
+  return noProgressRuns >= 2 ? { continue: false, noProgressRuns, stalled: true, blocked: false } : { continue: true, noProgressRuns, stalled: false, blocked: false };
 }

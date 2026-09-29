@@ -190,6 +190,18 @@ test("计划图没跑完时，driver 继续推进并在两轮无进展后停下"
     await ledger.exitNode({ nodeId: "inspect-2", runId: "run-1", artifacts: [], findings: [{ claim: "checked the value", source: "app.ts" }], note: "checked", unresolved: [] });
     await ledger.reopenNode({ nodeId: "inspect-2", reason: "上游前提有误" });
     expect(planActionableNode(ledger)).toBe("inspect-2");
+    // A graph with unfinished nodes but nothing enterable (a ledger recorded before the stage-order rule) is a dead
+    // end the driver reports instead of ignoring.
+    const stale = {
+      state: {
+        status: "active", phase: "execute",
+        cognition: { nodes: [
+          { id: "work", kind: "execute", phase: "execute", status: "planned", dependsOn: ["gone"], host: "coordinator" },
+          { id: "gone", kind: "investigate", phase: "investigate", status: "cancelled", dependsOn: [], host: "coordinator" },
+        ] },
+      },
+    } as unknown as TaskLedger;
+    expect(nextPlanCycle({ ledger: stale, graphBefore: null, evidenceBefore: null, noProgressRuns: 0, cancelled: false, userControl: false })).toMatchObject({ continue: false, blocked: true });
     // Goal mode drives its own continuation.
     await ledger.setGoal(true, { maxToolCalls: 10, wallTimeMs: 1_000, maxTotalToolCalls: 20, totalWallTimeMs: 2_000 });
     expect(cycle({ noProgressRuns: 0 })).toMatchObject({ continue: false });

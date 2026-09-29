@@ -52,10 +52,16 @@ test("cognition rejects dependency cycles and keeps dispatched expert snapshots"
       { id: "change", objective: "Change app", kind: "execute", phase: "execute", dependsOn: ["scan"], expertDecision: { reason: "the coordinator changes it itself" }, host: "coordinator", skillIds: [], status: "planned" },
       { id: "check", objective: "Review app", kind: "review", phase: "review", dependsOn: ["change"], expertDecision: { reason: "the coordinator reviews itself" }, host: "coordinator", skillIds: [], status: "planned" },
     ] });
+    // A cycle needs the same stage now that backwards stage order is rejected on its own terms.
     await expect(ledger.reviseCognition({ summary: "Cycle", reason: "Invalid", candidates: [], nodes: [
       { id: "change", objective: "Change", kind: "execute", phase: "execute", dependsOn: ["check"], expertDecision: { reason: "the coordinator changes it itself" }, host: "coordinator", skillIds: [], status: "planned" },
-      { id: "check", objective: "Review", kind: "review", phase: "review", dependsOn: ["change"], expertDecision: { reason: "the coordinator reviews itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "check", objective: "Check", kind: "execute", phase: "execute", dependsOn: ["change"], expertDecision: { reason: "the coordinator checks it itself" }, host: "coordinator", skillIds: [], status: "planned" },
     ] })).rejects.toThrow("循环依赖");
+    // An execute node that depends on a review node is the backwards ordering §3.2 forbids.
+    await expect(ledger.reviseCognition({ summary: "Backwards", reason: "Invalid", candidates: [], nodes: [
+      { id: "change", objective: "Change", kind: "execute", phase: "execute", dependsOn: ["check"], expertDecision: { reason: "the coordinator changes it itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "check", objective: "Review", kind: "review", phase: "review", dependsOn: [], expertDecision: { reason: "the coordinator reviews itself" }, host: "coordinator", skillIds: [], status: "planned" },
+    ] })).rejects.toThrow("跨阶段倒挂");
     await ledger.recordDispatch({ id: "instance-1", orderId: "change", kind: "execute", expert: { id: "expert-a", name: "Expert A", hash: "abc" }, skills: [{ id: "plugin:skill", hash: "123", revision: "rev" }] });
     await ledger.finishDispatch("instance-1", "completed");
     await ledger.reviseCognition({ summary: "Change complete, add inspection", reason: "Implementation returned", candidates: [], nodes: [
@@ -376,5 +382,32 @@ test("alpha_plan rejects a worker-hosted node when the task type cannot dispatch
     ] } as never, undefined, undefined as never);
     expect(accepted.isError).toBeUndefined();
     expect(ledger.state.cognition?.nodes.every(node => node.host === "coordinator")).toBe(true);
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+});
+
+test("a plan cannot order stages backwards", async () => {
+  const { root, ledger } = await fixture();
+  try {
+    const [plan] = createCognitionTools(ledger, join(root, "state"));
+    const rejected = await plan.execute("plan", { summary: "Do the task", reason: "task start", candidates: [], nodes: [
+      { id: "scan", objective: "Scan app", kind: "investigate", phase: "investigate", dependsOn: [], host: "coordinator", expertDecision: { reason: "the coordinator scans itself" }, skillIds: [] },
+      { id: "review", objective: "Check the plan", kind: "review", phase: "review", dependsOn: ["scan"], host: "coordinator", expertDecision: { reason: "the coordinator checks itself" }, skillIds: [] },
+      { id: "work", objective: "Change app", kind: "execute", phase: "execute", dependsOn: ["review"], host: "coordinator", expertDecision: { reason: "the coordinator changes it itself" }, skillIds: [] },
+    ] } as never, undefined, undefined as never);
+    expect(rejected.isError).toBe(true);
+    expect(String(rejected.content[0].type === "text" ? rejected.content[0].text : "")).toContain("跨阶段倒挂");
+    // The same rule holds for the ledger itself (legacy callers): the reducer refuses the ordering too.
+    await expect(ledger.reviseCognition({ summary: "Backwards", reason: "invalid", candidates: [], nodes: [
+      { id: "scan", objective: "Scan app", kind: "investigate", phase: "investigate", dependsOn: [], expertDecision: { reason: "the coordinator scans itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "check", objective: "Check", kind: "review", phase: "review", dependsOn: ["scan"], expertDecision: { reason: "the coordinator checks itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "work", objective: "Change app", kind: "execute", phase: "execute", dependsOn: ["check"], expertDecision: { reason: "the coordinator changes it itself" }, host: "coordinator", skillIds: [], status: "planned" },
+    ] })).rejects.toThrow("跨阶段倒挂");
+    // A conforming order — the review stage last — records fine.
+    const accepted = await plan.execute("plan-2", { summary: "Do the task", reason: "task start", candidates: [], nodes: [
+      { id: "scan", objective: "Scan app", kind: "investigate", phase: "investigate", dependsOn: [], host: "coordinator", expertDecision: { reason: "the coordinator scans itself" }, skillIds: [] },
+      { id: "work", objective: "Change app", kind: "execute", phase: "execute", dependsOn: ["scan"], host: "coordinator", expertDecision: { reason: "the coordinator changes it itself" }, skillIds: [] },
+      { id: "review", objective: "Check the change", kind: "review", phase: "review", dependsOn: ["work"], host: "coordinator", expertDecision: { reason: "the coordinator checks itself" }, skillIds: [], gateRole: "code-review" },
+    ] } as never, undefined, undefined as never);
+    expect(accepted.isError).toBeUndefined();
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 });
