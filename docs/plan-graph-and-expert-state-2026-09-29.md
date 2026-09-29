@@ -457,9 +457,9 @@ gate 的来源与承担者：
 
 P6 端到端评测开始时，默认模型 `xiaomi-token-plan-cn/mimo-v2.6-flash`（P0 基线所用）已严重限速：同一探针从 P0 的秒级变为 **84.75s**（`bun run probe:model`，一次 ALPHA_OK），超过运行时 45s 无响应上限，5 个任务全部以 `stop.reason=model` 停止、0 次工具调用。对照：`xiaomi-token-plan-cn/mimo-v2.6-pro` 2.9s、`deepseek/deepseek-flash` 0.7s。
 
-因此 P6 各轮改用 `xiaomi-token-plan-cn/mimo-v2.6-pro`（同 provider，tokenizer 口径不变），评测命令显式带上 `--model`。**P6 与 P0 的轮次/token 对比因此带有模型差异**，小任务增量只作量级参考，不作严格同模型对比。加 `--model` 的评测入口与探针的 `PROBE_MODEL` 环境变量已入库。
+因此 P6 各轮改换模型：先换 `xiaomi-token-plan-cn/mimo-v2.6-pro`（2.9s，同 provider），后按用户指示改用 **`deepseek/deepseek-flash`**（0.7s）——xiaomi 系额度即将耗尽，不宜承担多任务长跑。评测命令显式带上 `--model deepseek/deepseek-flash`。**P6 与 P0 的轮次/token 对比因此带有模型差异**，小任务增量只作量级参考，不作严格同模型对比。加 `--model` 的评测入口与探针的 `PROBE_MODEL` 环境变量已入库。
 
-失败的整轮记录保留在 `artifacts/eval-2026-09-29-p6-round-1-provider-down/`。
+失败的整轮记录保留在 `artifacts/eval-2026-09-29-p6-round-1-provider-down/`；xiaomi pro 的半程记录保留在 `artifacts/eval-2026-09-29-p6-round-1-xiaomi-partial/`（换模型后重跑，不计入对比）。
 
 P0 交付。方法与原始数据：
 
