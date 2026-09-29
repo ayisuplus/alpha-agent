@@ -210,6 +210,12 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
         // §3.6: a node switch is a run boundary, not a finished attempt. Acceptance belongs to the node's end; without
         // this the "no reviewable output" check would fail the run and stop the loop before the cursor moves on.
         if (ledger.state.runs?.at(-1)?.outcome === "node-switch") return ledger;
+        // §3.3: acceptance judges the finished graph, so an unfinished plan (a node still active, or nodes still
+        // planned) returns without judging — otherwise a mid-graph run fails acceptance and strands the remaining work.
+        if ((ledger.state.cognition?.nodes ?? []).some(node => node.status !== "done" && node.status !== "cancelled")) {
+          emitRun({ type: "status", phase: "计划未完成", runId, pending: ledger.completionGaps() });
+          return ledger;
+        }
         if (ledger.state.phase === "plan") {
           try { await ledger.submitPlanForReview(); emitRun({ type: "status", phase: "计划待审阅", runId }); }
           catch (error) { await ledger.recordFailure(error instanceof Error ? error.message : String(error)); emitRun({ type: "status", phase: "继续规划", runId }); }
