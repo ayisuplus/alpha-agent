@@ -34,7 +34,9 @@
 
 | F7 | 图跑通后的完整轮：`content-pipeline` 与 `approval-loop` 停在 `active`——协调者做完一个节点就停了，`draft`/`apply` 一直 `ready`，没人推进；`content-pipeline` 还因为停在只读的 `research` 节点而报"会话没有写文件工具"的能力缺口 | 运行以 `returned` 结束后，非目标模式的任务没有任何继续机制（goal 模式才有 `nextGoalCycle`） | `goal-continuation.nextPlanCycle`：批准的图里还有 `active`/`ready` 的协调者节点时，driver 自动续跑并提示"用 alpha_step 结束已完成的节点，再做下一个就绪节点"；连续两轮图与证据都没变化则记失败停下（与 goal 模式同一套无进展规则）；goal 模式仍走自己的续跑 |
 
-回归测试：F1/F2 在 `test/plan-first.test.ts`（含 `settleBoundary` 的边界结算与 `nextPlanCycle` 的推进规则），F4/F6 在 `test/cognitive-workflow.test.ts`；均验证过"修复前失败、修复后通过"（`git stash` 对照）。
+| F8 | 完整轮 2：`content-pipeline` 又停在 `draft` 之前——该节点被计划为 `host: worker`，而 `general` 任务类型没有派发工具（`profile.dispatch = false`），节点永远跑不起来；`planActionableNode` 又只认协调者节点，driver 也不续跑 | 计划校验没有约束"任务类型能不能派发"；续跑判定漏了 worker 节点（派发它本来就是协调者的工作） | `alpha_plan` 在不可派发的任务类型上拒绝 `host: worker`；`planActionableNode` 把 `ready` 的 worker 节点也算作待办；冒烟与轮次验证见下 |
+
+回归测试：F1/F2/F7 在 `test/plan-first.test.ts`（`settleBoundary` 的边界结算、`nextPlanCycle` 的推进规则），F4/F6/F8 在 `test/cognitive-workflow.test.ts`；均验证过"修复前失败、修复后通过"（`git stash` 对照）。
 
 另：`totalTokens` 里 DeepSeek 会计入 prompt 缓存命中（第一轮 approval-loop 9.75M 中 7.38M 是 cacheRead），评测报告已拆成"新输入+输出 + 缓存读"两列，跨模型对比只用前者。
 
