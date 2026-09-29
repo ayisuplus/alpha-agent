@@ -6,6 +6,7 @@ import type { PreparedExtension } from "@oh-my-pi/pi-coding-agent";
 import { createCognitionTools } from "../src/runtime/cognition-tool";
 import { fileToolGuard } from "../src/runtime/file-tool-guard";
 import { hasRecordedPlan } from "../src/runtime/planning-policy";
+import { nextPlanCycle, planActionableNode, planGraphSignature, progressSignature } from "../src/runtime/goal-continuation";
 import { settleBoundary } from "../src/runtime/omp-runner";
 import { TaskLedger } from "../src/runtime/task-ledger";
 import { recordApprovedPlan } from "./support/approved-plan";
@@ -152,6 +153,41 @@ test("运行边界把节点切换记成 node-switch，并把下一轮绑到当�
     // 被中断的运行不结算边界：取消、超预算与停滞各有自己的出口。
     const aborted = await settleBoundary(ledger, { nodeSwitchReason: "节点切换：inspect", workerHandoff: false, planning: false, planRecorded: false, aborted: true, budgetReason: null, stalledReason: null });
     expect(aborted).toBeNull();
+  } finally {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
+
+test("计划图没跑完时，driver 继续推进并在两轮无进展后停下", async () => {
+  const { root, ledger } = await fixture("execute");
+  try {
+    await recordApprovedPlan(ledger);
+    const graph = planGraphSignature(ledger);
+    const evidence = progressSignature(ledger);
+    const cycle = (overrides: Partial<Parameters<typeof nextPlanCycle>[0]> = {}) => nextPlanCycle({ ledger, graphBefore: graph, evidenceBefore: evidence, noProgressRuns: 0, cancelled: false, userControl: false, ...overrides });
+    // Every fixture node is done: nothing left to drive.
+    expect(planActionableNode(ledger)).toBeNull();
+    expect(cycle()).toMatchObject({ continue: false, stalled: false });
+    // A ready node is work the runtime must not abandon.
+    // Finished nodes stay in the plan verbatim (§3.7); new work is added beside them.
+    await ledger.reviseCognition({ summary: "Add a step", reason: "more work", candidates: [], nodes: [
+      { id: "inspect", objective: "Check what the task needs", kind: "investigate", phase: "investigate", dependsOn: [], expertDecision: { reason: "the coordinator works this node itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "work", objective: "Complete the task work", kind: "execute", phase: "execute", dependsOn: ["inspect"], expertDecision: { reason: "the coordinator works this node itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "review", objective: "Check the result", kind: "review", phase: "review", dependsOn: ["work"], expertDecision: { reason: "the coordinator works this node itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "inspect-2", objective: "Check the value again", kind: "investigate", phase: "investigate", dependsOn: [], expertDecision: { reason: "the coordinator checks itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "work-2", objective: "Update app.ts again", kind: "execute", phase: "execute", dependsOn: ["inspect-2"], expertDecision: { reason: "the coordinator works itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "review-2", objective: "Check the update again", kind: "review", phase: "review", dependsOn: ["work-2"], expertDecision: { reason: "the coordinator checks itself" }, host: "coordinator", skillIds: [], status: "planned" },
+    ] });
+    expect(planActionableNode(ledger)).toBe("inspect-2");
+    expect(cycle()).toMatchObject({ continue: true, noProgressRuns: 0 });
+    // Two runs that move neither the graph nor the evidence stop the loop instead of spinning.
+    const unchanged = { graphBefore: planGraphSignature(ledger), evidenceBefore: progressSignature(ledger) };
+    expect(cycle({ ...unchanged, noProgressRuns: 1 })).toMatchObject({ continue: false, stalled: true, noProgressRuns: 2 });
+    // One silent run is tolerated; the second one stops the loop.
+    expect(cycle(unchanged)).toMatchObject({ continue: true, noProgressRuns: 1 });
+    // Goal mode drives its own continuation.
+    await ledger.setGoal(true, { maxToolCalls: 10, wallTimeMs: 1_000, maxTotalToolCalls: 20, totalWallTimeMs: 2_000 });
+    expect(cycle()).toMatchObject({ continue: false });
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }

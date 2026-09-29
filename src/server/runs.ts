@@ -5,7 +5,7 @@ import { runTask, type RunEvent, type RunOptions } from "../runtime/omp-runner";
 import { runDevelopmentWorkflow } from "../runtime/development-workflow";
 import { isModelAvailable } from "../runtime/models";
 import { TaskLedger } from "../runtime/task-ledger";
-import { goalStopReason, nextGoalCycle, progressSignature } from "../runtime/goal-continuation";
+import { goalStopReason, nextGoalCycle, nextPlanCycle, planGraphSignature, progressSignature } from "../runtime/goal-continuation";
 import { snapshotSource, snapshotSourceHashes, writeSourceReview } from "../runtime/source-review";
 import type { ClaimOptions, OperationKind, OperationLease } from "../runtime/operation-manager";
 import { createGeneralWorkspace } from "../runtime/general-work";
@@ -168,6 +168,8 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
     };
     let currentLedger = existingLedger;
     let currentInstruction = objective;
+    let planGraphBefore: string | null = currentLedger ? planGraphSignature(currentLedger) : null;
+    let planStallRuns = 0;
     while (true) {
       const beforeProgress = currentLedger ? progressSignature(currentLedger) : null;
       const cycleOptions = currentLedger ? await ctx.configuredRun(currentLedger.state.modelSelector, currentLedger) : configured;
@@ -239,6 +241,25 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
       if (currentLedger.state.runs?.at(-1)?.outcome === "node-switch") {
         currentInstruction = "Continue the task at the next plan node; the runtime moved the cursor onto it.";
         emitRun({ type: "status", phase: "切换节点", runId });
+        continue;
+      }
+      // §3.3: while the approved graph has a node to exit or enter, the driver keeps the cursor moving instead of
+      // stranding ready work when a run stops on its own. Two runs without graph or evidence progress end the loop.
+      const planCycle = nextPlanCycle({
+        ledger: currentLedger, graphBefore: planGraphBefore, evidenceBefore: beforeProgress, noProgressRuns: planStallRuns,
+        cancelled: controller.signal.aborted, userControl: webKernel.controlHolder === "user",
+      });
+      planStallRuns = planCycle.noProgressRuns;
+      planGraphBefore = planGraphSignature(currentLedger);
+      if (planCycle.stalled) {
+        await currentLedger.recordFailure("连续两轮没有推进计划图");
+        emitRun({ type: "task", task: ctx.taskView(currentLedger) });
+        emitRun({ type: "status", phase: "计划图停住，等待用户", runId, pending: currentLedger.completionGaps() });
+        return;
+      }
+      if (planCycle.continue) {
+        currentInstruction = "Continue the plan graph: exit the finished node with alpha_step (its handoff records artifacts, findings and what is unresolved), then work the next ready node. Do not re-plan unless the evidence changed the plan.";
+        emitRun({ type: "status", phase: "继续计划图", runId });
         continue;
       }
       const continuation = nextGoalCycle(currentLedger, beforeProgress, controller.signal.aborted, webKernel.controlHolder === "user");
