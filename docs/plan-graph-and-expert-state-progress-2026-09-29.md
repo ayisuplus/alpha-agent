@@ -78,6 +78,8 @@
 
 三处都有回归测试（`test/plan-first.test.ts` / `test/cognitive-workflow.test.ts`），全套 513/513。
 
+演练场景本身也改了两版：第四轮发现"初稿必须违规"与"交付版必须合规"写在同一个文件里会让模型在同一节点反复重写（不退出节点、不触发回边）；现在把初稿固定为 `outputs/script-draft.md`（合规审查对象），交付版 `outputs/script.md` 是改写结果，两个产物分开后演练目标不再自相矛盾。
+
 ### 3. 审查者会话路径是死代码（§12 收尾）
 - `executionMode: "review"` 全仓库无生产者：`omp-runner.ts` 的 `reviewing` 分支、`session-profile.ts` 的 reviewer 提示词与工具表、`createDevelopmentReviewTool`(`alpha_review_result`) 实际都到不了。真实路径是 kind=`review` 的 work order（worker 角色，`alpha_worker_result`）。
 - 按方案 §12"不保留调查、执行、审查三类子代理类型"，应删除这些分支；`test/cognitive-runtime.test.ts:76` 直接调用 `createDevelopmentReviewTool`，需要一并迁移或删除。
