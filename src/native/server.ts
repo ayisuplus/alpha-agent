@@ -105,8 +105,9 @@ async function createSession(input: { cwd?: unknown; title?: unknown; legacyTask
 async function legacy(id: string): Promise<Record<string, unknown>> {
   if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error("Invalid legacy task id");
   const value = JSON.parse(await readFile(join(dataRoot, "tasks", `${id}.json`), "utf8"));
-  if (!value?.state?.objective) throw new Error("Legacy task record is invalid");
-  return value.state;
+  const state = value?.state?.objective ? value.state : value;
+  if (!state?.objective) throw new Error("Legacy task record is invalid");
+  return state;
 }
 async function legacyList(): Promise<unknown[]> {
   const names = (await readdir(join(dataRoot, "tasks")).catch(() => [] as string[])).filter(name => /^[0-9a-f-]{36}\.json$/.test(name));
