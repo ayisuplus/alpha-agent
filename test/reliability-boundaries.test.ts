@@ -7,6 +7,7 @@ import { BrowserLock, OperationManager } from "../src/runtime/operation-manager"
 import { SettingsStore, WorkbenchMeta } from "../src/runtime/settings";
 import { TaskLedger } from "../src/runtime/task-ledger";
 import { uiHashes, verifyUiHashes } from "../scripts/portable-ui";
+import { recordApprovedPlan } from "./support/approved-plan";
 
 test("operations on different tasks run side by side; shared tasks, folders and projects are refused", () => {
   const seen: number[] = [];
@@ -118,6 +119,7 @@ test("changed source cannot complete against earlier build and browser evidence"
     const ledger = await TaskLedger.create(join(root, "state"), { objective: "Product", projectRoot: product, criteria: [
       { id: "build", description: "Build", kind: "build" }, { id: "user-path", description: "Browser", kind: "browser" },
     ] });
+    await recordApprovedPlan(ledger);
     const revision = ledger.state.revision!;
     await ledger.recordEvidence({ criterionId: "build", kind: "build", revision, passed: true, source: "build.log" });
     await ledger.recordPreview({ id: "preview", revision, path: join(root, "preview"), url: "http://127.0.0.1:3456" });

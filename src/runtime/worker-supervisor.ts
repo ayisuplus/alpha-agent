@@ -2,9 +2,9 @@ import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { createTwoFilesPatch } from "diff";
 import { runModelWorkOrders } from "./model-workers";
-import { integratePreparedWorkOrder, orderExpert, prepareAgentWorkspace, validateOrders, type WorkBatchReport, type WorkOrder } from "./work-orders";
+import { integratePreparedWorkOrder, orderExpert, orderKind, prepareAgentWorkspace, validateOrders, type WorkBatchReport, type WorkOrder } from "./work-orders";
 import { randomUUID } from "node:crypto";
-import { fingerprintSource, type TaskLedger } from "./task-ledger";
+import { fingerprintSource, type PlanNodeKind, type TaskLedger } from "./task-ledger";
 import type { BrowserSession } from "./visible-browser";
 import { AgentMailbox } from "./agent-mailbox";
 import { SettingsStore } from "./settings";
@@ -18,6 +18,8 @@ import type { WorkerStopReason } from "./task-events";
 
 const workerToolCalls = 80;
 const workerWallTimeMs = 600_000; // The supervisor budget; model-workers kills the subprocess at +10s so a finished result can still be written.
+/** Settings keep their historical per-mode keys; node kinds map onto them (§7 兼容). */
+const WORKER_MODEL_KEY: Record<PlanNodeKind, "investigate" | "implement" | "review"> = { investigate: "investigate", execute: "implement", review: "review" };
 
 async function ensureWorktreeBase(projectRoot: string, managed: boolean): Promise<void> {
   const git = async (...args: string[]) => {
@@ -172,13 +174,13 @@ export class WorkerSupervisor {
       if (!capability && !(order.capabilitySnapshots?.some(item => item.id === id && item.kind === "skill"))) throw new Error(`Capability is unavailable: ${id}`);
       if (!capability) continue;
       if (capability.kind === "builtin-tool" && this.input.plugins?.[capability.source as "comfyui"] === false) throw new Error(`Built-in plugin is disabled: ${capability.source}`);
-      if (order.mode !== "implement" && capability.kind === "builtin-tool") throw new Error(`Read-only worker cannot use ${id}`);
-      if (order.mode !== "implement" && capability.kind === "mcp-server") throw new Error(`Read-only worker needs individual MCP tool bindings: ${id}`);
-      if (order.mode !== "implement" && capability.kind === "mcp-tool" && mcpPermissions[id] !== "read") throw new Error(`Read-only worker requires read permission for ${id}`);
+      if (orderKind(order) !== "execute" && capability.kind === "builtin-tool") throw new Error(`Read-only worker cannot use ${id}`);
+      if (orderKind(order) !== "execute" && capability.kind === "mcp-server") throw new Error(`Read-only worker needs individual MCP tool bindings: ${id}`);
+      if (orderKind(order) !== "execute" && capability.kind === "mcp-tool" && mcpPermissions[id] !== "read") throw new Error(`Read-only worker requires read permission for ${id}`);
     }
     const ids = new Set(orders.map(order => order.id));
     for (const order of orders) for (const dep of order.dependsOn ?? []) {
-      if (!ids.has(dep) && this.ledger.state.cognition?.steps.find(step => step.id === dep)?.status !== "complete") throw new Error(`Unknown or incomplete dependency: ${order.id} -> ${dep}`);
+      if (!ids.has(dep) && this.ledger.state.cognition?.nodes.find(node => node.id === dep)?.status !== "done") throw new Error(`Unknown or incomplete dependency: ${order.id} -> ${dep}`);
     }
     if (this.input.remainingCalls() - this.reservedCalls < orders.length * workerToolCalls) throw new Error("Task-wide tool budget cannot reserve these workers");
     if (this.input.remainingTimeMs && this.input.remainingTimeMs() - this.reservedTimeMs < orders.length * workerWallTimeMs) throw new Error("Task-wide time budget cannot reserve these workers");
@@ -190,7 +192,7 @@ export class WorkerSupervisor {
     this.releaseBrowser("coordinator");
     const assigned: string[] = [];
     for (const requested of orders) {
-      const order = { ...requested, modelSelector: workerModels[requested.mode ?? "implement"] ?? this.input.modelSelector };
+      const order = { ...requested, kind: orderKind(requested), modelSelector: workerModels[WORKER_MODEL_KEY[orderKind(requested)]] ?? this.input.modelSelector };
       const id = order.instanceId!;
       if (!id) throw new Error("Worker instance ID is required");
       const bound = orderExpert(order);
@@ -205,9 +207,9 @@ export class WorkerSupervisor {
     return assigned;
   }
 
-  async continue(agentId: string, instruction: string, mode?: WorkOrder["mode"], addedCapabilities: string[] = [], install?: WorkOrder["install"]): Promise<string> {
+  async continue(agentId: string, instruction: string, kind?: PlanNodeKind, addedCapabilities: string[] = [], install?: WorkOrder["install"]): Promise<string> {
     if (!instruction.trim()) throw new Error("Continuation instruction is required");
-    if (mode && !["investigate", "implement", "review"].includes(mode)) throw new Error("Invalid subagent mode");
+    if (kind && !["investigate", "execute", "review"].includes(kind)) throw new Error("Invalid subagent kind");
     const agent = this.ledger.state.cognition?.agents?.find(item => item.id === agentId);
     if (!agent) throw new Error("Persistent subagent not found");
     const prior = this.instance(agent.lastAttemptId);
@@ -216,10 +218,11 @@ export class WorkerSupervisor {
     for (const capability of addedCapabilities) if (!catalog.some(item => item.id === capability && item.enabled)) throw new Error(`Capability is unavailable: ${capability}`);
     const capabilityIds = [...new Set([...(agent.capabilityIds ?? prior.order.capabilityIds ?? []), ...addedCapabilities])];
     const id = randomUUID();
-    const order: WorkOrder = { ...prior.order, agentId, instanceId: id, mode: mode ?? agent.mode,
+    const { mode: _legacyMode, ...priorOrder } = prior.order; // continued orders carry `kind` only
+    const order: WorkOrder = { ...priorOrder, agentId, instanceId: id, kind: kind ?? agent.kind,
       objective: `${prior.order.objective}\nFollow-up: ${instruction.trim()}`,
       decisionReason: `Continue the assigned result: ${instruction.trim()}`.slice(0, 500),
-      ownedPaths: mode && mode !== "implement" ? [] : prior.order.ownedPaths,
+      ownedPaths: kind && kind !== "execute" ? [] : prior.order.ownedPaths,
       readPaths: [...new Set(prior.order.readPaths ?? [])],
       skillIds: [...agent.skillIds], skillSnapshots: agent.skillSnapshots?.map(item => ({ ...item })), expert: agent.expert,
       capabilityIds, capabilitySnapshots: agent.capabilitySnapshots?.map(item => ({ ...item })), contextRevision: (agent.contextRevision ?? 1) + (install || addedCapabilities.some(item => !(agent.capabilityIds ?? []).includes(item)) ? 1 : 0),
@@ -229,7 +232,7 @@ export class WorkerSupervisor {
       baseRevision: this.ledger.state.revision ?? undefined,
     };
     const report = prior.workRoot ? await readFile(join(prior.workRoot, "merge.json"), "utf8").then(value => JSON.parse(value) as WorkBatchReport).catch(() => null) : null;
-    if (order.mode !== "implement" && prior.integration !== "merged" && report?.changes[prior.orderId]?.length) throw new Error("Integrate or discard prior source edits before switching this subagent to a read-only mode");
+    if (orderKind(order) !== "execute" && prior.integration !== "merged" && report?.changes[prior.orderId]?.length) throw new Error("Integrate or discard prior source edits before switching this subagent to a read-only mode");
     order.readPaths = [...new Set([...(order.readPaths ?? []), ...(prior.integration === "merged" ? [] : report?.results[prior.orderId]?.readPaths ?? []).map(stripReadSelector)])];
     await this.spawn([order], this.maxParallel);
     return id;
@@ -250,7 +253,7 @@ export class WorkerSupervisor {
       return { status: "rejected" };
     }
     if (action === "install") {
-      if (request.kind !== "dependency" || agent.mode !== "implement") throw new Error("Dependency installation requires an implementing worker request");
+      if (request.kind !== "dependency" || agent.kind !== "execute") throw new Error("Dependency installation requires an implementing worker request");
       const argv = request.installArgv ?? options.argv ?? request.proposedArgv;
       const cwdRelative = request.cwdRelative ?? options.targetEnvironment ?? request.targetEnvironment ?? ".";
       const availabilityPath = request.availabilityPath ?? options.availabilityPath;
@@ -275,7 +278,7 @@ export class WorkerSupervisor {
       if (approval.status === "denied") { await this.ledger.updateWorkerRequest(request.id, { status: "rejected", reason: "Installation approval denied" }); await this.mailbox.inbox([request.id]); return { status: "rejected", approvalId: approval.id }; }
       if (["running", "uncertain"].includes(approval.status) || approval.status === "complete" && (approval.result?.exitCode !== 0 || approval.result.revision !== await fingerprintSource(target))) { await this.ledger.updateWorkerRequest(request.id, { status: "uncertain", reason: "Installation receipt requires inspection", commandReceipt: { id: approval.id, status: approval.status, exitCode: approval.result?.exitCode, logPath: approval.result?.logPath, revision: approval.result?.revision } }); return { status: "uncertain", approvalId: approval.id }; }
       await this.mailbox.send(request.agentId, "decision", reason, request.id, request.id);
-      const runId = await this.continue(request.agentId, `Dependency request ${request.id}: ${reason}`, "implement", [], { requestId: request.id, approvalId: approval.id, argv, cwdRelative, availabilityPath, network });
+      const runId = await this.continue(request.agentId, `Dependency request ${request.id}: ${reason}`, "execute", [], { requestId: request.id, approvalId: approval.id, argv, cwdRelative, availabilityPath, network });
       await this.ledger.updateWorkerRequest(request.id, { status: "awaiting-approval", reason, resolutionRunId: runId });
       await this.mailbox.inbox([request.id]);
       return { status: "running", runId, approvalId: approval.id };
@@ -303,14 +306,14 @@ export class WorkerSupervisor {
       const dependencies = attempt.order.dependsOn ?? [];
       const states = dependencies.map(dep => {
         const attempt = [...this.attempts.entries()].findLast(([, value]) => value.order.id === dep);
-        if (attempt) return this.instance(attempt[0])?.status === "completed" ? "complete" : ["failed", "blocked", "cancelled"].includes(this.instance(attempt[0])?.status ?? "") ? "blocked" : "running";
-        return this.ledger.state.cognition?.steps.find(step => step.id === dep)?.status;
+        if (attempt) return this.instance(attempt[0])?.status === "completed" ? "done" : ["failed", "blocked", "cancelled"].includes(this.instance(attempt[0])?.status ?? "") ? "waiting" : "active";
+        return this.ledger.state.cognition?.nodes.find(node => node.id === dep)?.status;
       });
-      if (states.some(state => state === "blocked" || state === "cancelled")) {
+      if (states.some(state => state === "waiting" || state === "cancelled")) {
         attempt.settling = this.ledger.updateWorker(id, "blocked", { findings: ["Dependency did not complete"] }).then(() => { this.releaseReservation(attempt); this.notify(); });
         continue;
       }
-      if (states.some(state => state !== "complete")) continue;
+      if (states.some(state => state !== "done")) continue;
       this.active.add(id);
       attempt.promise = this.execute(id, attempt).finally(() => { this.active.delete(id); this.pump(); this.notify(); });
     }

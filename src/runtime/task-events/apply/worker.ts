@@ -1,4 +1,6 @@
+import type { ExpertSnapshot } from "../../experts";
 import type { CognitionState, TaskState } from "../../task-ledger";
+import { orderKind } from "../../plan-kind";
 import { InvariantError } from "../errors";
 import type { FamilyReducers } from "../types";
 
@@ -15,7 +17,7 @@ function assertActive(state: TaskState): void {
 }
 
 function ensureCognition(state: TaskState): CognitionState {
-  state.cognition ??= { revision: 1, recipeVersion: 1, summary: state.objective, candidates: [], steps: [], gaps: [], amendments: [] };
+  state.cognition ??= { revision: 1, recipeVersion: 1, summary: state.objective, candidates: [], nodes: [], gaps: [], amendments: [] };
   return state.cognition;
 }
 
@@ -26,15 +28,16 @@ export const workerReducers: FamilyReducers = {
     const { startedAt, ...input } = event.payload;
     if (cognition.instances?.some(item => item.id === input.id)) return;
     (cognition.instances ??= []).push({ ...input, skills: input.skills.map(item => ({ ...item })), contractVersion: state.contractVersion ?? 1, cognitionRevision: cognition.revision, baseRevision: state.revision, status: "running", startedAt });
-    const step = RESERVED_ORDER_IDS[input.orderId] ? undefined : cognition.steps.find(item => item.id === input.orderId);
-    if (step) { step.status = "running"; step.statusReason = `工单 ${input.id} 运行中`; }
+    const step = RESERVED_ORDER_IDS[input.orderId] ? undefined : cognition.nodes.find(item => item.id === input.orderId);
+    if (step) { step.status = "active"; step.statusReason = `工单 ${input.id} 运行中`; }
   },
 
   "worker/queued": (state, event) => {
     assertActive(state);
     const cognition = ensureCognition(state);
     const { attemptId, parentId, order, expert, startedAt } = event.payload;
-    const preset = event.payload.expertSnapshot ?? (event.payload as { preset?: import("../../experts").ExpertSnapshot }).preset;
+    const legacyPreset = "preset" in event.payload ? event.payload.preset as ExpertSnapshot | undefined : undefined; // pre-rename payload spelling
+    const preset = event.payload.expertSnapshot ?? legacyPreset;
     if (cognition.instances?.some(item => item.id === attemptId)) throw new InvariantError("apply/worker-attempt-exists", "Worker attempt already exists");
     if (order.agentId) {
       if (!preset && (!order.acceptance?.some(item => item.trim()) || !(order.ownedPaths.length || order.readPaths?.length))) throw new InvariantError("apply/neutral-subagent-underspecified", "Neutral subagent requires acceptance criteria and source scope");
@@ -46,15 +49,15 @@ export const workerReducers: FamilyReducers = {
         const previous = (cognition.instances ?? []).find(item => item.id === existing.lastAttemptId);
         if (previous?.status === "returned") { previous.status = "cancelled"; previous.findings = [...(previous.findings ?? []), "Superseded by continuation"]; previous.endedAt = startedAt; }
         existing.lastAttemptId = attemptId;
-        existing.mode = order.mode ?? "implement";
+        existing.kind = orderKind(order);
         existing.capabilityIds = [...(order.capabilityIds ?? [])];
         existing.contextRevision = order.contextRevision ?? existing.contextRevision ?? 1;
         existing.status = "queued";
-      } else agents.push({ id: order.agentId, ...(preset ? { expert: preset } : {}), skillIds: [...(order.skillIds ?? [])], capabilityIds: [...(order.capabilityIds ?? [])], contextRevision: order.contextRevision ?? 1, mode: order.mode ?? "implement", orderId: order.id, lastAttemptId: attemptId, status: "queued" });
+      } else agents.push({ id: order.agentId, ...(preset ? { expert: preset } : {}), skillIds: [...(order.skillIds ?? [])], capabilityIds: [...(order.capabilityIds ?? [])], contextRevision: order.contextRevision ?? 1, kind: orderKind(order), orderId: order.id, lastAttemptId: attemptId, status: "queued" });
     }
-    (cognition.instances ??= []).push({ id: attemptId, agentId: order.agentId, parentId, orderId: order.id, order, decisionReason: order.decisionReason, mode: order.mode ?? "implement", expert, skills: [], contractVersion: state.contractVersion ?? 1, cognitionRevision: cognition.revision, baseRevision: state.revision, status: "queued", startedAt });
-    const step = cognition.steps.find(item => item.id === order.id);
-    if (step) { step.status = "running"; step.statusReason = `工单 ${attemptId} 排队中`; }
+    (cognition.instances ??= []).push({ id: attemptId, agentId: order.agentId, parentId, orderId: order.id, order, decisionReason: order.decisionReason, kind: orderKind(order), expert, skills: [], contractVersion: state.contractVersion ?? 1, cognitionRevision: cognition.revision, baseRevision: state.revision, status: "queued", startedAt });
+    const step = cognition.nodes.find(item => item.id === order.id);
+    if (step) { step.status = "active"; step.statusReason = `工单 ${attemptId} 排队中`; }
   },
 
   "worker/updated": (state, event) => {
@@ -78,8 +81,8 @@ export const workerReducers: FamilyReducers = {
       }
     }
     if (status !== "running") instance.endedAt = endedAt;
-    const step = state.cognition?.steps.find(item => item.id === instance.orderId);
-    if (step) { step.status = status === "completed" ? "complete" : ["blocked", "failed", "cancelled"].includes(status) ? "blocked" : "running"; step.statusReason = `工单 ${id} ${status}${patch.integration ? ` / ${patch.integration}` : ""}`; }
+    const step = state.cognition?.nodes.find(item => item.id === instance.orderId);
+    if (step) { step.status = status === "completed" ? "done" : ["blocked", "failed", "cancelled"].includes(status) ? "waiting" : "active"; step.statusReason = `工单 ${id} ${status}${patch.integration ? ` / ${patch.integration}` : ""}`; }
   },
 
   // The ledger method computes `sourceRevision` via fingerprintSource and folds revision/updatedAt in before
@@ -134,8 +137,8 @@ export const workerReducers: FamilyReducers = {
     instance.status = status;
     instance.findings = findings;
     instance.endedAt = endedAt;
-    const step = RESERVED_ORDER_IDS[instance.orderId] ? undefined : state.cognition?.steps.find(item => item.id === instance.orderId);
-    if (step) { step.status = status === "completed" ? "complete" : status === "cancelled" ? "cancelled" : "blocked"; step.statusReason = findings.join("；") || `工单 ${id} ${status}`; }
+    const step = RESERVED_ORDER_IDS[instance.orderId] ? undefined : state.cognition?.nodes.find(item => item.id === instance.orderId);
+    if (step) { step.status = status === "completed" ? "done" : status === "cancelled" ? "cancelled" : "waiting"; step.statusReason = findings.join("；") || `工单 ${id} ${status}`; }
   },
 
   "workers/reconciled": (state, event) => {
@@ -147,8 +150,8 @@ export const workerReducers: FamilyReducers = {
       instance.endedAt = event.payload.endedAt;
       // An interrupted attempt never submitted a result; recovery says so per attempt instead of only in the batch reason.
       instance.stopReason = "no-result";
-      const step = state.cognition?.steps.find(item => item.id === instance.orderId);
-      if (step) { step.status = "blocked"; step.revision = (step.revision ?? 0) + 1; }
+      const step = state.cognition?.nodes.find(item => item.id === instance.orderId);
+      if (step) { step.status = "waiting"; step.revision = (step.revision ?? 0) + 1; }
     }
   },
 
@@ -179,9 +182,9 @@ export const workerReducers: FamilyReducers = {
     instance.status = stopReason === "completed" ? "returned" : stopReason === "needs-input" ? "blocked" : "failed";
     if (findings.length) instance.findings = findings;
     instance.endedAt = recordedAt;
-    const step = RESERVED_ORDER_IDS[instance.orderId] ? undefined : state.cognition?.steps.find(item => item.id === instance.orderId);
+    const step = RESERVED_ORDER_IDS[instance.orderId] ? undefined : state.cognition?.nodes.find(item => item.id === instance.orderId);
     if (step) {
-      step.status = instance.status === "returned" ? "running" : "blocked";
+      step.status = instance.status === "returned" ? "active" : "waiting";
       step.statusReason = findings.join("；") || `工单 ${attemptId} ${stopReason}`;
       step.revision = (step.revision ?? 0) + 1;
     }

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { Skill } from "@oh-my-pi/pi-coding-agent";
-import { createExpertPackage, loadExpertPackageSkills, personaText, type ExpertPackage } from "./expert-package";
+import { createExpertPackage, loadExpertPackageSkills, packageRevisionHash, personaText, validateHandoff, type ExpertHandoff, type ExpertMounts, type ExpertPackage } from "./expert-package";
 import { warnUnknownStoreVersion } from "./store-tag";
 
 const builtinRoot = resolve(import.meta.dir, "..", "..", "presets", "agents");
@@ -38,10 +38,30 @@ export interface LocalExpertImport {
   instructions: string;
   source: { url: string; revision: string; path: string };
   skills: Array<{ id: string; source: string }>;
+  handoff?: ExpertHandoff;
 }
 
 type Stored = { enabled: Record<string, boolean>; custom: ExpertSnapshot[] };
-type BuiltinIndex = { revision: string; presets: Array<{ id: string; name: string; description: string; line?: ExpertLine; file: string; sourcePath?: string; skill?: string }> };
+type BuiltinIndex = { revision: string; presets: Array<{ id: string; name: string; description: string; line?: ExpertLine; file: string; sourcePath?: string; primarySkill?: string; handoff?: ExpertHandoff }> };
+
+/** Without a written declaration every bundled Skill mounts and the first one is the primary method (§5 兼容). */
+function defaultMounts(skillIds: string[] | undefined): ExpertMounts {
+  return { skills: [...(skillIds ?? [])], ...(skillIds?.length ? { primarySkill: skillIds[0] } : {}), mcp: [] };
+}
+
+function serviceNames(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.length > 20 || !value.every(item => typeof item === "string" && /^[a-z][a-z0-9_-]{0,63}$/.test(item)) || new Set(value).size !== value.length) throw new Error(`${label}无效`);
+  return [...value];
+}
+
+/** A written declaration (§5); createExpertPackage re-checks it against the bundled Skill list. */
+function declaredMounts(value: unknown, bundled: string[]): ExpertMounts {
+  const record = value as { skills?: unknown; primarySkill?: unknown; mcp?: unknown } | null;
+  if (!record || typeof record !== "object") throw new Error("专家装载声明无效");
+  const skills = record.skills === undefined ? bundled : skillIds(record.skills);
+  const primarySkill = record.primarySkill === undefined ? undefined : skillIds([record.primarySkill])[0];
+  return { skills, ...(primarySkill ? { primarySkill } : {}), mcp: serviceNames(record.mcp ?? [], "MCP 服务列表") };
+}
 
 function hash(name: string, description: string, instructions: string, skillIds?: string[], bundle?: ExpertPackage): string {
   return createHash("sha256").update(JSON.stringify(bundle ? [name, description, instructions, skillIds ?? [], bundle] : skillIds ? [name, description, instructions, skillIds] : [name, description, instructions])).digest("hex");
@@ -54,14 +74,18 @@ function field(value: unknown, label: string, max: number): string {
 
 export function snapshotExpert(preset: Expert): ExpertSnapshot {
   const { id, name, description, instructions, skillIds, hash, source, basedOn, package: bundle } = preset;
-  return { id, name, description, instructions, ...(skillIds ? { skillIds: [...skillIds] } : {}), ...(bundle ? { package: { revision: bundle.revision, skills: bundle.skills.map(item => ({ ...item })) } } : {}), hash, ...(source ? { source } : {}), ...(basedOn ? { basedOn } : {}) };
+  const mounts = bundle?.mounts;
+  const handoff = bundle?.handoff;
+  return { id, name, description, instructions, ...(skillIds ? { skillIds: [...skillIds] } : {}), ...(bundle ? { package: { revision: bundle.revision, skills: bundle.skills.map(item => ({ ...item })), ...(mounts ? { mounts: { skills: [...mounts.skills], ...(mounts.primarySkill ? { primarySkill: mounts.primarySkill } : {}), mcp: [...mounts.mcp] } } : {}), ...(handoff ? { handoff: { role: handoff.role, consumes: [...handoff.consumes], produces: [...handoff.produces], next: [...handoff.next], gate: [...handoff.gate] } } : {}) } } : {}), hash, ...(source ? { source } : {}), ...(basedOn ? { basedOn } : {}) };
 }
 
 export function verifyExpertSnapshot(preset: ExpertSnapshot): void {
   if (preset.package) {
-    const skills = preset.package.skills;
+    const { skills, mounts, handoff } = preset.package;
     if (!Array.isArray(skills) || skills.some(item => !item || typeof item.id !== "string" || typeof item.hash !== "string" || !/^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$/.test(item.id) || !/^[0-9a-f]{64}$/.test(item.hash))) throw new Error(`专家包清单无效：${preset.id}`);
-    const packageHash = createHash("sha256").update(JSON.stringify([personaText(preset.name, preset.description, preset.instructions), skills.map(item => [item.id, item.hash])])).digest("hex");
+    if (mounts && ((mounts.primarySkill && !mounts.skills.includes(mounts.primarySkill)) || mounts.skills.some(id => !skills.some(item => item.id === id)))) throw new Error(`专家包清单无效：${preset.id}`);
+    if (handoff) validateHandoff(handoff);
+    const packageHash = packageRevisionHash(personaText(preset.name, preset.description, preset.instructions, handoff), skills.map(item => ({ id: item.id, hash: item.hash })), mounts);
     if (skills.length !== (preset.skillIds?.length ?? 0) || JSON.stringify(skills.map(item => item.id)) !== JSON.stringify(preset.skillIds ?? []) || packageHash !== preset.package.revision) throw new Error(`专家包清单无效：${preset.id}`);
   }
   if (!idPattern.test(preset.id) || hash(preset.name, preset.description, preset.instructions, preset.skillIds, preset.package) !== preset.hash) throw new Error(`专家快照无效：${preset.id}`);
@@ -119,9 +143,11 @@ export class ExpertStore {
     return Promise.all(index.presets.map(async item => {
       if (!idPattern.test(item.id) || !/^[a-z0-9-]+\.md$/.test(item.file)) throw new Error("内置角色清单格式无效");
       const instructions = (await readFile(join(this.root, item.file), "utf8")).trim();
-      if (item.skill && !idPattern.test(item.skill)) throw new Error("内置 Skill 名称无效");
-      const skills = item.skill ? [`alpha-core:${item.skill}`] : undefined;
-      const bundle = item.skill ? await createExpertPackage(this.dataRoot, item.id, item.name, item.description, instructions, skills!, undefined, [{ id: skills![0], source: join(this.root, "skills", item.skill) }]) : undefined;
+      if (item.primarySkill && !idPattern.test(item.primarySkill)) throw new Error("内置 Skill 名称无效");
+      // The registration's primarySkill is the package's primary method; it also lists as the bundled Skill (§5).
+      const skills = item.primarySkill ? [`alpha-core:${item.primarySkill}`] : undefined;
+      const mounts = defaultMounts(skills);
+      const bundle = item.primarySkill ? await createExpertPackage(this.dataRoot, item.id, item.name, item.description, instructions, skills!, undefined, [{ id: skills![0], source: join(this.root, "skills", item.primarySkill) }], mounts, item.handoff) : undefined;
       return {
         id: item.id, name: item.name, description: item.description, instructions, ...(skills ? { skillIds: skills, package: bundle } : {}), hash: hash(item.name, item.description, instructions, skills, bundle),
         ...(item.sourcePath ? { source: { url: sourceUrl, revision: index.revision, path: item.sourcePath } } : {}),
@@ -248,21 +274,23 @@ export class ExpertStore {
       if (!base) throw new Error(`角色预设不存在：${id}`);
       verifyExpertSnapshot(base);
       const copy: ExpertSnapshot = { ...snapshotExpert(base), id: `custom-${randomUUID()}`, name: `${base.name} 副本`, basedOn: id };
-      copy.package = await createExpertPackage(this.dataRoot, copy.id, copy.name, copy.description, copy.instructions, copy.skillIds ?? [], base);
+      copy.package = await createExpertPackage(this.dataRoot, copy.id, copy.name, copy.description, copy.instructions, copy.skillIds ?? [], base, [], base.package?.mounts ?? defaultMounts(copy.skillIds), base.package?.handoff);
       copy.hash = hash(copy.name, copy.description, copy.instructions, copy.skillIds, copy.package);
       stored.custom.push(copy);
       return { ...copy, builtin: false, enabled: true };
     });
   }
 
-  create(input: { name?: unknown; description?: unknown; instructions?: unknown; skillIds?: unknown }): Promise<Expert> {
+  create(input: { name?: unknown; description?: unknown; instructions?: unknown; skillIds?: unknown; mounts?: unknown; handoff?: unknown }): Promise<Expert> {
     return this.mutate(async stored => {
       const name = field(input.name, "专家名称", 80);
       const description = field(input.description, "适用范围", 240);
       const instructions = field(input.instructions, "专业方法", 20_000);
       const skills = input.skillIds === undefined ? undefined : skillIds(input.skillIds);
+      const mounts = input.mounts === undefined ? defaultMounts(skills) : declaredMounts(input.mounts, skills ?? []);
+      const declaration = input.handoff === undefined ? undefined : validateHandoff(input.handoff as ExpertHandoff); // shape checked by validateHandoff
       const id = `expert-${randomUUID()}`;
-      const bundle = await createExpertPackage(this.dataRoot, id, name, description, instructions, skills ?? []);
+      const bundle = await createExpertPackage(this.dataRoot, id, name, description, instructions, skills ?? [], undefined, [], mounts, declaration);
       const item: ExpertSnapshot = { id, name, description, instructions, ...(skills ? { skillIds: skills } : {}), package: bundle, hash: hash(name, description, instructions, skills, bundle) };
       stored.custom.push(item);
       return { ...item, builtin: false, enabled: true };
@@ -286,7 +314,7 @@ export class ExpertStore {
           imported.push({ ...existing, enabled: stored.enabled[existing.id] !== false, builtin: false });
           continue;
         }
-        const bundle = await createExpertPackage(this.dataRoot, record.id, name, description, instructions, ids, existing, record.skills);
+        const bundle = await createExpertPackage(this.dataRoot, record.id, name, description, instructions, ids, existing, record.skills, defaultMounts(ids), record.handoff);
         const item: ExpertSnapshot = { id: record.id, name, description, instructions, skillIds: ids, package: bundle, source: record.source, hash: hash(name, description, instructions, ids, bundle) };
         stored.custom.push(item);
         imported.push({ ...item, enabled: stored.enabled[item.id] !== false, builtin: false });
@@ -316,7 +344,9 @@ export class ExpertStore {
       if (patch.description !== undefined) item.description = field(patch.description, "适用说明", 240);
       if (patch.instructions !== undefined) item.instructions = field(patch.instructions, "角色指令", 20_000);
       if (patch.skillIds !== undefined) item.skillIds = skillIds(patch.skillIds);
-      item.package = await createExpertPackage(this.dataRoot, item.id, item.name, item.description, item.instructions, item.skillIds ?? [], current);
+      // A Skill list change re-derives the declaration; otherwise the written declaration survives the edit.
+      const mounts = patch.skillIds !== undefined ? defaultMounts(item.skillIds) : item.package?.mounts ?? defaultMounts(item.skillIds);
+      item.package = await createExpertPackage(this.dataRoot, item.id, item.name, item.description, item.instructions, item.skillIds ?? [], current, [], mounts, item.package?.handoff);
       item.hash = hash(item.name, item.description, item.instructions, item.skillIds, item.package);
       return { ...item, builtin: false, enabled: stored.enabled[id] !== false };
     });

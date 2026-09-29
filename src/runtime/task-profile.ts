@@ -41,8 +41,8 @@ export interface TaskProfile {
   thirdParty: boolean;
   /** Office document tools (read and edit DOCX, XLSX, PPTX, PDF) are available. */
   officeTools: boolean;
-  /** An independent development review runs before acceptance. */
-  developmentReview: boolean;
+  /** Gate roles this task type requires in its review stage (§6.2); `code-review` falls back to a neutral reviewer. */
+  defaultGates: string[];
   /** Configured checks over a recorded source baseline can accept the task. */
   codeAcceptance: boolean;
 }
@@ -50,23 +50,23 @@ export interface TaskProfile {
 const PROFILES: Record<TaskType, TaskProfile> = {
   "web-product": {
     writesCode: true, acceptance: "web-preview", deliveryTools: () => ["alpha_build"], uploads: false, attachments: false, commands: false,
-    dispatch: true, expertPerspective: false, thirdParty: true, officeTools: false, developmentReview: true, codeAcceptance: false,
+    dispatch: true, expertPerspective: false, thirdParty: true, officeTools: false, defaultGates: ["code-review"], codeAcceptance: false,
   },
   "code-change": {
     writesCode: true, acceptance: "code-checks", deliveryTools: () => ["alpha_check"], uploads: false, attachments: false, commands: true,
-    dispatch: true, expertPerspective: true, thirdParty: false, officeTools: false, developmentReview: true, codeAcceptance: true,
+    dispatch: true, expertPerspective: true, thirdParty: false, officeTools: false, defaultGates: ["code-review"], codeAcceptance: true,
   },
   research: {
     writesCode: false, acceptance: "deliverable", deliveryTools: () => ["alpha_document"], uploads: true, attachments: false, commands: false,
-    dispatch: false, expertPerspective: true, thirdParty: true, officeTools: false, developmentReview: false, codeAcceptance: false,
+    dispatch: false, expertPerspective: true, thirdParty: true, officeTools: false, defaultGates: [], codeAcceptance: false,
   },
   "file-work": {
     writesCode: false, acceptance: "deliverable", deliveryTools: () => ["alpha_document"], uploads: true, attachments: false, commands: false,
-    dispatch: false, expertPerspective: true, thirdParty: true, officeTools: true, developmentReview: false, codeAcceptance: false,
+    dispatch: false, expertPerspective: true, thirdParty: true, officeTools: true, defaultGates: [], codeAcceptance: false,
   },
   general: {
     writesCode: false, acceptance: "adaptive", deliveryTools: direct => direct ? ["alpha_check"] : ["alpha_check", "alpha_document", "alpha_build"],
-    uploads: true, attachments: true, commands: true, dispatch: false, expertPerspective: true, thirdParty: true, officeTools: true, developmentReview: false, codeAcceptance: true,
+    uploads: true, attachments: true, commands: true, dispatch: false, expertPerspective: true, thirdParty: true, officeTools: true, defaultGates: [], codeAcceptance: true,
   },
 };
 

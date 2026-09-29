@@ -19,7 +19,7 @@ test("subagent messages pass through the primary mailbox with durable IDs and ex
     const agentId = crypto.randomUUID();
     const runId = crypto.randomUUID();
     const preset = { id: "test-expert", name: "Test expert", description: "Test", instructions: "Test", hash: "a".repeat(64), skillIds: ["test:skill"], package: { revision: "b".repeat(64), skills: [{ id: "test:skill", hash: "c".repeat(64) }] } };
-    const order: WorkOrder = { id: "research", objective: "Investigate", mode: "investigate", ownedPaths: [], readPaths: ["."], resources: ["research"], agentId, instanceId: runId, fullAccess: true, skillIds: ["test:skill"], expert: preset };
+    const order: WorkOrder = { id: "research", objective: "Investigate", kind: "investigate", ownedPaths: [], readPaths: ["."], resources: ["research"], agentId, instanceId: runId, fullAccess: true, skillIds: ["test:skill"], expert: preset };
     const reads: string[] = [];
     await checkFileToolCall("alpha_send", {}, projectRoot, order, [], false, undefined, path => reads.push(path));
     await checkFileToolCall("alpha_inbox", {}, projectRoot, order, [], false, undefined, path => reads.push(path));
@@ -61,7 +61,7 @@ test("a worker escalates a false premise with a receipt and cannot complete befo
     const parent = await TaskLedger.create(dataRoot, { objective: "Use the actual input", projectRoot, taskType: "code-change", criteria: [{ id: "check", description: "Checked output", kind: "test" }] });
     const agentId = crypto.randomUUID();
     const runId = crypto.randomUUID();
-    const order: WorkOrder = { id: "inspect", objective: "Assume entry.txt contains old input", decisionReason: "Inspect an independent premise", mode: "investigate", ownedPaths: [], readPaths: ["entry.txt"], acceptance: ["Report the actual input"], resources: ["input"], agentId, instanceId: runId, fullAccess: true, contractVersion: 1, baseRevision: parent.state.revision ?? undefined };
+    const order: WorkOrder = { id: "inspect", objective: "Assume entry.txt contains old input", decisionReason: "Inspect an independent premise", kind: "investigate", ownedPaths: [], readPaths: ["entry.txt"], acceptance: ["Report the actual input"], resources: ["input"], agentId, instanceId: runId, fullAccess: true, contractVersion: 1, baseRevision: parent.state.revision ?? undefined };
     await parent.queueWorker({ id: runId, order });
     const stateRoot = join(dataRoot, "worker-agents", parent.state.id, agentId, "state");
     const worker = await TaskLedger.create(stateRoot, { objective: order.objective, projectRoot, taskType: "code-change", criteria: [{ id: "finding", description: "Report the actual input", kind: "asset" }] });
@@ -82,7 +82,14 @@ test("a worker escalates a false premise with a receipt and cannot complete befo
     const result = createWorkerResultTool(worker, order);
     expect((await result.execute("too-early", { status: "completed", findings: ["Found actual input"] }, undefined, undefined as never)).isError).toBe(true);
     expect((await result.execute("escalated", { status: "needs-context", findings: ["Premise changed; coordinator decision required"] }, undefined, undefined as never)).isError).toBeUndefined();
-    await parent.reviseCognition({ summary: "Use actual input", reason: message.body, candidates: [], steps: [{ id: "recheck", objective: "Recheck against actual input", mode: "investigate", dependsOn: [], skillIds: [], status: "planned" }] });
+    await parent.reviseCognition({
+      summary: "Use actual input", reason: message.body, candidates: [],
+      nodes: [
+        { id: "recheck", kind: "investigate", phase: "investigate", objective: "Recheck against actual input", dependsOn: [], expertDecision: { reason: "the coordinator rechecks the premise itself" }, host: "coordinator", skillIds: [], status: "planned" },
+        { id: "fill", kind: "execute", phase: "execute", objective: "Apply the fix against the actual input", dependsOn: ["recheck"], expertDecision: { reason: "the coordinator works this node itself" }, host: "coordinator", skillIds: [], status: "planned" },
+        { id: "check", kind: "review", phase: "review", objective: "Verify the output", dependsOn: ["fill"], expertDecision: { reason: "the coordinator works this node itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      ],
+    });
     expect(parent.state.cognition?.amendments.at(-1)?.reason).toBe(message.body);
     expect(parent.completionGaps()).toContain("check");
     const replyId = await mailbox.send(agentId, "decision", "Use the revised plan", "reply", message.id);
@@ -101,7 +108,7 @@ test("distinct coordinator decisions under one tool call id are all recorded and
     const ledger = await TaskLedger.create(dataRoot, { objective: "Coordinate agents", projectRoot, taskType: "code-change", criteria: [{ id: "source", description: "Source", kind: "asset" }] });
     const agentId = crypto.randomUUID();
     const runId = crypto.randomUUID();
-    const order: WorkOrder = { id: "job", objective: "Implement", mode: "implement", ownedPaths: [], readPaths: ["entry.txt"], resources: ["job"], acceptance: ["Implement the job"], agentId, instanceId: runId, fullAccess: true };
+    const order: WorkOrder = { id: "job", objective: "Implement", kind: "execute", ownedPaths: [], readPaths: ["entry.txt"], resources: ["job"], acceptance: ["Implement the job"], agentId, instanceId: runId, fullAccess: true };
     await ledger.queueWorker({ id: runId, order });
     const mailbox = new AgentMailbox(dataRoot, ledger);
     const proceed = await mailbox.send(agentId, "decision", "Proceed with the install", "call-1");

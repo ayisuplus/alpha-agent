@@ -32,17 +32,25 @@ Skill 可以在 frontmatter 中声明 `requires-tools`、`requires-services` 和
 
 内置开发流程借鉴了 [Superpowers 的 subagent-driven-development](https://github.com/obra/superpowers/blob/main/skills/subagent-driven-development/SKILL.md)：给独立任务清晰的工单、由主代理处理中途问题、每轮检查结果并在集成前审查。参考的本地版本为提交 `5bf4e78011075bcfc0dc295f0724994cd123ee71`，其许可证为 MIT、Copyright © 2025 Jesse Vincent。Alpha 没有复制它的固定 Subagent 设定、Hook 或提示模板；已安装的历史包仍保留在原位置，但新任务不装载其外部流程。
 
-## 术语表（2026-09-29 梳理）
+## 术语表（2026-09-29 梳理；同日按《[计划图与专家状态](plan-graph-and-expert-state-2026-09-29.md)》更新）
 
-子代理与专家的边界只有一条：**专家提供知识，子代理负责执行，交点只有派发工单时的一次绑定**。统一词汇：
+> 更新留痕（2026-09-29）：上文历史段落保留原意，但两处约定已被计划图方案取代，以方案为准——(1) "随包 Skill 只是推荐组合、从不隐式加载"推翻为**专家激活即装载**（人设 + 随包 Skill + 声明的 MCP；显式选择只用于追加，主方法 `primarySkill` 正文直接注入）；(2) "执行模式"一词退役，权限改由**节点类型 + 访问权限**两档推导。下表为当前词汇。
 
-| 术语 | 含义 | 曾用名 / 历史拼法 |
+子代理与专家的边界：**专家提供知识（激活即装载），子代理负责执行，交点是计划图节点上的一次专家决定**。统一词汇：
+
+|术语|含义|曾用名 / 历史拼法|
 |---|---|---|
-| 专家（expert） | 版本化知识包：人设 + 方法 + 随包 Skill 快照。绑定专家只装载其人设；Skill 与能力（MCP/内置工具）一律显式选择 | 代码旧名 `AgentPreset*` 已统一为 `Expert*`；`preset`/`agent-preset` 皆指专家 |
-| 子代理（worker） | 任务级执行身份：稳定 `agentId` + 执行模式 + 绑定的专家快照 + 轮次（`instanceId`）+ 结果与消息 | 旧文档混用 worker/subagent/agent/instance：instance 现在只指一轮执行 |
-| 执行模式（mode） | 权限：`investigate`/`review` 只读，`implement` 可写源码 | 原与"角色"混用 |
-| 会话角色（session role） | 运行形态：`coordinator`/`worker`/`reviewer`/`planner`/`answer` | 原与"角色"混用；worker 提示词里的 "Selected role" 已改为 "Assigned expert" |
-| 绑定契约 | 同一个"指定专家"入口，两种契约：`web-product`/`code-change` 是**执行契约**（必须有该专家完成的实例，`task-completion` 的 `designated-expert` 缺口 + `worker-binding` 的分配守卫）；其余类型是**专家视角**（仅作主代理人设，不要求实例） | 见 `task-profile.ts` 的 `expertPerspective` 注释 |
-| 派发 | 单一入口 `alpha_spawn` → `worker-binding.ts`（计划一致性 → 指定专家分配 → 绑定 → Skill 要求校验） | 旧的 `alpha_delegate` 双轨已删除 |
+|计划图（plan graph）|任务的状态机拓扑：三阶段骨架（调查/执行/审查）+ 模型填入的节点与边；任务状态是指向它的游标|原"CognitionStep 看板"|
+|节点（node）|图中的一项工作：类型 `kind`、阶段 `phase`、目标、依赖、专家决定、执行位置、产物声明、gate 角色；`CognitionStep` 演进而来（`mode` → `kind`）|原"步骤（step）"|
+|游标（cursor）|每个执行位置当前所在的节点（并行时为集合）；每次运行记录 `nodeId`，切换节点即运行边界（`node-switch`）|新增|
+|专家（expert）|版本化知识包：人设 + 方法 + 随包 Skill 快照 + 装载声明（`mounts`）与交接声明（`handoff`）。**激活即装载**其人设、随包 Skill 与声明的 MCP；显式选择只用于追加|代码旧名 `AgentPreset*` 已统一为 `Expert*`；`preset`/`agent-preset` 皆指专家|
+|子代理（worker）|任务级执行身份：稳定 `agentId` + 节点类型 + 绑定的专家快照 + 轮次（`instanceId`）+ 结果与消息；与其节点一一对应|旧文档混用 worker/subagent/agent/instance：instance 现在只指一轮执行|
+|节点类型（kind）|`investigate`/`execute`/`review`；决定访问权限与出口条件|原"执行模式（mode）"的 `implement` 改拼 `execute`；`alpha_spawn` 过渡期仍接受旧取值并映射|
+|访问权限（access）|`read-only` 或 `write`，由节点类型推导（`execute` → write），运行时决定，不由模型或专家选择|原由"执行模式"隐含|
+|会话角色（session role）|运行形态：`coordinator`/`worker`/`reviewer`/`planner`/`answer`|原与"角色"混用；worker 提示词里的 "Selected role" 已改为 "Assigned expert"|
+|交接（handoff）|节点退出记录（`node/exited`）：产物与哈希、发现与依据、gate 结论、待解决事项；下游节点只看交接与产物，不看对话|新增|
+|gate|审查类节点：由 `gateRole` 指定角色独立审查，结论 `pass`/`changes-requested`/`inconclusive`，绑定契约版本与产物哈希，变更即过期|原"独立审查（development review）"泛化|
+|绑定契约|"指定专家"统一为图约束：**图中至少有一个使用该专家的节点且已完成**；派发与非派发类型不再各有一套契约|原两种契约（执行契约/专家视角），见 `task-profile.ts` 的 `expertPerspective` 注释（待退役）|
+|派发|单一入口 `alpha_spawn` → `worker-binding.ts`（计划一致性 → 指定专家分配 → 节点激活（随包 Skill ∪ 显式追加）→ Skill 要求校验）|旧的 `alpha_delegate` 双轨已删除|
 
 存储与数据的历史拼法（有意保留）：`.alpha/agent-presets.json` 文件名与其 `format: "agent-presets"` 标记、`presets/agents/index.json` 的 `presets` 键、`.alpha/expert-packs/`（专家包只做版本快照，人设以注册表数据为准）。

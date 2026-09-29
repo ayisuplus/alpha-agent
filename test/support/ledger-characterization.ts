@@ -1,10 +1,11 @@
 // Characterization harness for the task ledger: replays every mutating method against a ledger copy and records the
 // normalized before/after state of each call. The recorded output is the P1 refactor's byte-for-byte baseline
 // (docs/cognitive-state-machine-plan-2026-09-28.md P0/P1); volatile values are interned so runs are reproducible.
+import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { TaskLedger, type CognitionStep, type TaskState } from "../../src/runtime/task-ledger";
+import { TaskLedger, type PlanNode, type TaskState } from "../../src/runtime/task-ledger";
 import type { WorkOrder } from "../../src/runtime/work-orders";
 
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
@@ -68,7 +69,7 @@ export function diffStates(before: Map<string, unknown>, after: Map<string, unkn
 }
 
 /** Ids the probe created earlier and later steps need; populated while the probe runs. */
-export interface ProbeContext { root: string; guidanceId?: string; proposalId?: string; receiptId?: string; requestId?: string }
+export interface ProbeContext { root: string; guidanceId?: string; proposalId?: string; expertProposalId?: string; receiptId?: string; requestId?: string }
 
 export interface ProbeStep { name: string; run(ledger: TaskLedger, context: ProbeContext): Promise<unknown> | unknown }
 
@@ -79,19 +80,34 @@ export interface Characterization { scenario: string; steps: StepRecord[]; final
 const budget = { maxToolCalls: 40, wallTimeMs: 600_000, maxTotalToolCalls: 120, totalWallTimeMs: 1_800_000 };
 const recordedAt = "2026-09-28T09:00:00.000Z";
 
-function planSteps(expertId: string): CognitionStep[] {
+/** The artifact every scenario's project root carries: the execute node declares and hands it off (§6.1). */
+const ARTIFACT_FILE = "deliverable.txt";
+
+/**
+ * A plan-graph plan (§3.2): one node per skeleton stage plus an execute-stage review gate. Every node carries its
+ * expert decision (§4.3) and starts un-entered; the probe drives the lifecycle from there (§3.4).
+ */
+function planSteps(expertId: string): PlanNode[] {
   return [
-    { id: "s1", objective: "Read the cart code and list the rounding paths", mode: "investigate", dependsOn: [], skillIds: [], status: "planned" },
-    { id: "s2", objective: "Fix the rounding and add a regression test", mode: "implement", dependsOn: ["s1"], skillIds: [], expertId, status: "planned" },
+    { id: "s1", kind: "investigate", phase: "investigate", objective: "Read the cart code and list the rounding paths", dependsOn: [], expertDecision: { reason: "the coordinator reads the code itself" }, host: "coordinator", skillIds: [], status: "planned" },
+    { id: "s2", kind: "execute", phase: "execute", objective: "Fix the rounding and add a regression test", dependsOn: ["s1"], expertDecision: { expertId, reason: "the named expert owns the implementation" }, host: "worker", produces: ["patch"], ownedPaths: ["src"], skillIds: [], status: "planned" },
+    { id: "gate", kind: "review", phase: "execute", objective: "Gate the fix before the final review", dependsOn: [], expertDecision: { reason: "the coordinator gates the integration itself" }, host: "coordinator", gateRole: "integration-gate", skillIds: [], status: "planned" },
+    { id: "s3", kind: "review", phase: "review", objective: "Check the result against the objective", dependsOn: ["s2", "gate"], expertDecision: { reason: "the coordinator reviews the result itself" }, host: "coordinator", skillIds: [], status: "planned" },
   ];
 }
 
 function workOrder(): WorkOrder {
   return {
     id: "s2", objective: "Fix the rounding and add a regression test", ownedPaths: ["src"], resources: [],
-    mode: "implement", agentId: "agent-1", acceptance: ["Configured checks pass"], skillIds: [], contextRevision: 1,
+    kind: "execute", agentId: "agent-1", acceptance: ["Configured checks pass"], skillIds: [], contextRevision: 1,
     decisionReason: "Probe dispatch for characterization",
   };
+}
+
+/** The execute node's declared artifact, hashed from the real file at handoff time (§6.1). */
+async function patchArtifact(ledger: TaskLedger) {
+  const contents = await readFile(join(ledger.state.projectRoot, ARTIFACT_FILE));
+  return [{ path: ARTIFACT_FILE, hash: createHash("sha256").update(contents).digest("hex"), kind: "patch" }];
 }
 
 /**
@@ -111,18 +127,54 @@ export const probeSteps: ProbeStep[] = [
   { name: "enterPlan", run: ledger => ledger.enterPlan() },
   { name: "reviseCognition", run: ledger => {
     const expertId = ledger.state.designatedExpertId ?? "backend";
-    return ledger.reviseCognition({ summary: "Fix cart rounding in two steps", candidates: [expertId, "backend"], steps: planSteps(expertId), reason: "Initial plan", scope: ["src/cart.ts"], constraints: ["No API change"] });
+    return ledger.reviseCognition({ summary: "Fix cart rounding in two steps", candidates: [expertId, "backend"], nodes: planSteps(expertId), edges: [{ from: "s3", to: "s2", kind: "rework" }], reason: "Initial plan", scope: ["src/cart.ts"], constraints: ["No API change"] });
   } },
-  { name: "reviseCognition:invalid-step-id", run: ledger => ledger.reviseCognition({ summary: "Bad plan", candidates: [], steps: [{ id: "Bad ID", objective: "x", mode: "implement", dependsOn: [], skillIds: [], status: "planned" }], reason: "probe" }) },
-  { name: "reviseCognition:cycle", run: ledger => ledger.reviseCognition({ summary: "Cyclic", candidates: [], steps: [{ id: "a", objective: "x", mode: "implement", dependsOn: ["b"], skillIds: [], status: "planned" }, { id: "b", objective: "y", mode: "implement", dependsOn: ["a"], skillIds: [], status: "planned" }], reason: "probe" }) },
-  { name: "updateStep:implement-during-plan", run: ledger => ledger.updateStep("s2", "complete", "Not allowed while planning") },
+  { name: "reviseCognition:invalid-step-id", run: ledger => ledger.reviseCognition({ summary: "Bad plan", candidates: [], reason: "probe", nodes: [{ id: "Bad ID", kind: "execute", phase: "execute", objective: "x", dependsOn: [], expertDecision: { reason: "probe" }, host: "coordinator", skillIds: [], status: "planned" }] }) },
+  { name: "reviseCognition:cycle", run: ledger => ledger.reviseCognition({ summary: "Cyclic", candidates: [], reason: "probe", nodes: [
+    { id: "probe-in", kind: "investigate", phase: "investigate", objective: "Look around", dependsOn: [], expertDecision: { reason: "probe" }, host: "coordinator", skillIds: [], status: "planned" },
+    { id: "a", kind: "execute", phase: "execute", objective: "Do a", dependsOn: ["b"], expertDecision: { reason: "probe" }, host: "coordinator", skillIds: [], status: "planned" },
+    { id: "b", kind: "execute", phase: "execute", objective: "Do b", dependsOn: ["a"], expertDecision: { reason: "probe" }, host: "coordinator", skillIds: [], status: "planned" },
+    { id: "probe-review", kind: "review", phase: "review", objective: "Check it", dependsOn: [], expertDecision: { reason: "probe" }, host: "coordinator", skillIds: [], status: "planned" },
+  ] }) },
+  { name: "enterNode:s2-early", run: ledger => ledger.enterNode({ nodeId: "s2", host: "worker", runId: "run-s2" }) },
+  { name: "enterNode:gate-early", run: ledger => ledger.enterNode({ nodeId: "gate", host: "coordinator", runId: "run-gate" }) },
   { name: "submitPlanForReview", run: ledger => ledger.submitPlanForReview() },
-  { name: "updateStep:during-plan-review", run: ledger => ledger.updateStep("s1", "complete", "Rejected while the plan awaits review") },
+  { name: "enterNode:s1", run: ledger => ledger.enterNode({ nodeId: "s1", host: "coordinator", runId: "run-s1" }) },
   { name: "approvePlan", run: ledger => ledger.approvePlan({ contractVersion: ledger.state.contractVersion ?? 1, cognitionRevision: ledger.state.cognition?.revision ?? 1, sourceRevision: ledger.state.revision ?? "" }) },
   { name: "approvePlan:stale", run: ledger => ledger.approvePlan({ contractVersion: 99, cognitionRevision: 99, sourceRevision: "stale" }) },
-  { name: "updateStep:investigate-complete", run: ledger => ledger.updateStep("s1", "complete", "Read src/cart.ts and the existing tests") },
-  { name: "updateStep:finished-step", run: ledger => ledger.updateStep("s1", "blocked", "Rewrite a finished step") },
-  { name: "updateStep:unknown", run: ledger => ledger.updateStep("missing", "complete", "No such step") },
+  { name: "exitNode:blank-note", run: ledger => ledger.exitNode({ nodeId: "s1", runId: "run-s1", artifacts: [], findings: [{ claim: "Rounding happens in two places", source: "src/cart.ts" }], note: "  ", unresolved: [] }) },
+  { name: "exitNode:s1-no-findings", run: ledger => ledger.exitNode({ nodeId: "s1", runId: "run-s1", artifacts: [], note: "Read the code", unresolved: [] }) },
+  { name: "exitNode:s1", run: ledger => ledger.exitNode({ nodeId: "s1", runId: "run-s1", artifacts: [], findings: [{ claim: "Rounding happens in two places", source: "src/cart.ts:3" }], note: "Read src/cart.ts and listed the rounding paths", unresolved: [] }) },
+  { name: "exitNode:finished", run: ledger => ledger.exitNode({ nodeId: "s1", runId: "run-s1", artifacts: [], findings: [{ claim: "Rewrite a finished node", source: "src/cart.ts" }], note: "Rewrite a finished node", unresolved: [] }) },
+  { name: "enterNode:done", run: ledger => ledger.enterNode({ nodeId: "s1", host: "coordinator", runId: "run-s1" }) },
+  { name: "enterNode:missing", run: ledger => ledger.enterNode({ nodeId: "missing", host: "coordinator", runId: "run-missing" }) },
+  { name: "exitNode:missing", run: ledger => ledger.exitNode({ nodeId: "missing", runId: "run-missing", artifacts: [], note: "No such node", unresolved: [] }) },
+  { name: "waitNode:missing", run: ledger => ledger.waitNode("missing", "approval") },
+  { name: "exitNode:s2-not-entered", run: async ledger => ledger.exitNode({ nodeId: "s2", runId: "run-s2", artifacts: await patchArtifact(ledger), note: "Exit a node that was never entered", unresolved: [] }) },
+  { name: "enterNode:host-mismatch", run: ledger => ledger.enterNode({ nodeId: "s2", host: "coordinator", runId: "run-s2" }) },
+  { name: "enterNode:s2", run: ledger => ledger.enterNode({ nodeId: "s2", host: "worker", runId: "run-s2", expert: { id: ledger.state.designatedExpertId ?? "backend", name: "后端工程师", description: "Owns backend fixes", instructions: "Fix backend code", hash: "f".repeat(64) } }) },
+  { name: "enterNode:s2-again", run: ledger => ledger.enterNode({ nodeId: "s2", host: "worker", runId: "run-s2" }) },
+  { name: "waitNode:s2", run: ledger => ledger.waitNode("s2", "approval") },
+  { name: "waitNode:s2-again", run: ledger => ledger.waitNode("s2", "question") },
+  { name: "enterNode:s2-resume", run: ledger => ledger.enterNode({ nodeId: "s2", host: "worker", runId: "run-s2" }) },
+  { name: "exitNode:s2-no-artifact", run: ledger => ledger.exitNode({ nodeId: "s2", runId: "run-s2", artifacts: [], note: "Fix submitted without the declared artifact", unresolved: [] }) },
+  { name: "exitNode:s2", run: async ledger => ledger.exitNode({ nodeId: "s2", runId: "run-s2", expert: { id: ledger.state.designatedExpertId ?? "backend", hash: "f".repeat(64) }, artifacts: await patchArtifact(ledger), note: "Rounding fixed and a regression test added", unresolved: [] }) },
+  { name: "reopenNode:missing", run: ledger => ledger.reopenNode({ nodeId: "missing", reason: "probe" }) },
+  { name: "reopenNode:s2-undeclared-edge", run: ledger => ledger.reopenNode({ nodeId: "s2", edge: "premise", sourceNodeId: "s3", reason: "probe" }) },
+  { name: "reopenNode:s2-rework", run: ledger => ledger.reopenNode({ nodeId: "s2", edge: "rework", sourceNodeId: "s3", reason: "审查退回：补回归测试" }) },
+  { name: "reopenNode:s2-open", run: ledger => ledger.reopenNode({ nodeId: "s2", reason: "probe" }) },
+  { name: "enterNode:s2-redo", run: ledger => ledger.enterNode({ nodeId: "s2", host: "worker", runId: "run-s2-redo" }) },
+  { name: "exitNode:s2-redo", run: async ledger => ledger.exitNode({ nodeId: "s2", runId: "run-s2-redo", artifacts: await patchArtifact(ledger), note: "Regression test added after review", unresolved: [] }) },
+  { name: "reopenNode:s2-rework-2", run: ledger => ledger.reopenNode({ nodeId: "s2", edge: "rework", sourceNodeId: "s3", reason: "审查退回：补边界测试" }) },
+  { name: "enterNode:s2-redo-2", run: ledger => ledger.enterNode({ nodeId: "s2", host: "worker", runId: "run-s2-redo-2" }) },
+  { name: "exitNode:s2-redo-2", run: async ledger => ledger.exitNode({ nodeId: "s2", runId: "run-s2-redo-2", artifacts: await patchArtifact(ledger), note: "Boundary tests added after review", unresolved: [] }) },
+  { name: "reopenNode:s2-rework-exhausted", run: ledger => ledger.reopenNode({ nodeId: "s2", edge: "rework", sourceNodeId: "s3", reason: "第三次审查退回" }) },
+  { name: "enterNode:gate", run: ledger => ledger.enterNode({ nodeId: "gate", host: "coordinator", runId: "run-gate" }) },
+  { name: "exitNode:gate-no-verdict", run: ledger => ledger.exitNode({ nodeId: "gate", runId: "run-gate", artifacts: [], findings: [{ claim: "The fix matches the objective", source: ARTIFACT_FILE }], note: "Gate without a verdict", unresolved: [] }) },
+  { name: "exitNode:gate", run: ledger => ledger.exitNode({ nodeId: "gate", runId: "run-gate", artifacts: [], findings: [{ claim: "The fix matches the objective", source: ARTIFACT_FILE }], verdict: "pass", note: "Integration gate passed", unresolved: [] }) },
+  { name: "enterNode:s3", run: ledger => ledger.enterNode({ nodeId: "s3", host: "coordinator", runId: "run-s3" }) },
+  { name: "exitNode:s3-ungrounded", run: ledger => ledger.exitNode({ nodeId: "s3", runId: "run-s3", artifacts: [], verdict: "pass", note: "Looks fine to me", unresolved: [] }) },
+  { name: "exitNode:s3", run: ledger => ledger.exitNode({ nodeId: "s3", runId: "run-s3", artifacts: [], findings: [{ claim: "The result matches the objective", source: "src/cart.ts" }], verdict: "pass", note: "Final review passed", unresolved: [] }) },
   { name: "setInitialCandidates", run: ledger => ledger.setInitialCandidates(["backend", "test-automation"]) },
   { name: "enableDevelopmentWorkflow", run: ledger => ledger.enableDevelopmentWorkflow() },
   { name: "recordCapabilityGap", run: ledger => ledger.recordCapabilityGap("tool", "No CSV fixture generator") },
@@ -134,9 +186,14 @@ export const probeSteps: ProbeStep[] = [
   { name: "recordSkillSearch:repeat", run: ledger => ledger.recordSkillSearch({ key: "csv-fixtures", gapDescription: "No CSV fixture generator", query: "csv fixture", proposals: [] }) },
   { name: "decideSkillProposal:installed", run: (ledger, context) => ledger.decideSkillProposal(context.proposalId!, "installed", "csv-fixtures") },
   { name: "decideSkillProposal:again", run: (ledger, context) => ledger.decideSkillProposal(context.proposalId!, "rejected") },
+  { name: "proposeTemporaryExpert", run: async (ledger, context) => {
+    context.expertProposalId = await ledger.proposeTemporaryExpert({ name: "任务内专家", description: "仅本任务", instructions: "只在本任务使用", skillIds: [] });
+  } },
+  { name: "decideExpertProposal:installed", run: (ledger, context) => ledger.decideExpertProposal(context.expertProposalId!, "installed", "expert-local") },
+  { name: "decideExpertProposal:again", run: (ledger, context) => ledger.decideExpertProposal(context.expertProposalId!, "rejected") },
   { name: "resolveCapabilityGap", run: ledger => ledger.resolveCapabilityGap("tool", "No CSV fixture generator", "Wrote the fixture by hand") },
   { name: "resolveCapabilityGap:missing", run: ledger => ledger.resolveCapabilityGap("tool", "Unknown gap", "probe") },
-  { name: "recordDispatch", run: ledger => ledger.recordDispatch({ id: "attempt-coordinator", orderId: "coordinator", mode: "investigate", skills: [], decisionReason: "Coordinator inspects first" }) },
+  { name: "recordDispatch", run: ledger => ledger.recordDispatch({ id: "attempt-coordinator", orderId: "coordinator", kind: "investigate", skills: [], decisionReason: "Coordinator inspects first" }) },
   { name: "queueWorker", run: ledger => ledger.queueWorker({ id: "attempt-worker", order: workOrder(), expert: { id: "backend", name: "后端工程师", hash: "f".repeat(64) } }) },
   { name: "queueWorker:duplicate", run: ledger => ledger.queueWorker({ id: "attempt-worker", order: workOrder() }) },
   { name: "recordWorkerActivation", run: ledger => ledger.recordWorkerActivation({ attemptId: "attempt-worker", orderId: "s2", agentId: "agent-1", pid: 4242, workRoot: "workers/attempt-worker", worktreePath: "worker-agents/agent-1/project" }) },
@@ -265,7 +322,7 @@ export const scenarios: Scenario[] = [
   {
     name: "web-product",
     async create(root) {
-      const projectRoot = await project(root, "web-product", { "index.html": "<h1>Cart</h1>" });
+      const projectRoot = await project(root, "web-product", { "index.html": "<h1>Cart</h1>", [ARTIFACT_FILE]: "Probe deliverable\n" });
       const ledger = await TaskLedger.create(join(root, "web-product", "data"), {
         objective: "Build a cart page that shows totals in cents", projectRoot, taskType: "web-product",
         criteria: [{ id: "build", description: "Build succeeds", kind: "build" }, { id: "user-path", description: "Total visible", kind: "browser" }],
@@ -277,7 +334,7 @@ export const scenarios: Scenario[] = [
   {
     name: "code-change-plan",
     async create(root) {
-      const projectRoot = await project(root, "code-change-plan", { "src/cart.ts": "export const total = (items: number[]) => items.reduce((sum, item) => sum + item, 0);\n" });
+      const projectRoot = await project(root, "code-change-plan", { "src/cart.ts": "export const total = (items: number[]) => items.reduce((sum, item) => sum + item, 0);\n", [ARTIFACT_FILE]: "Probe deliverable\n" });
       const ledger = await TaskLedger.create(join(root, "code-change-plan", "data"), {
         objective: "Fix cart rounding", projectRoot, taskType: "code-change", startMode: "plan",
         criteria: [{ id: "check", description: "Configured checks pass", kind: "test" }],
@@ -289,7 +346,7 @@ export const scenarios: Scenario[] = [
   {
     name: "general-needs-input",
     async create(root) {
-      const projectRoot = await project(root, "general-needs-input", { "sales.csv": "region,total\nnorth,10\n" });
+      const projectRoot = await project(root, "general-needs-input", { "sales.csv": "region,total\nnorth,10\n", [ARTIFACT_FILE]: "Probe deliverable\n" });
       const ledger = await TaskLedger.create(join(root, "general-needs-input", "data"), {
         objective: "Summarize the sales CSV", projectRoot, taskType: "general", criteria: [],
         designatedExpertId: "data-analyst",

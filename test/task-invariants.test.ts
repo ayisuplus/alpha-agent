@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { checkTaskInvariants, KNOWN_PAUSE_REASONS } from "../src/runtime/task-invariants";
-import type { CognitionState, Evidence, TaskState } from "../src/runtime/task-ledger";
+import type { CognitionState, Evidence, PlanNode, TaskState } from "../src/runtime/task-ledger";
 
 const revision = "a".repeat(64);
 const otherRevision = "b".repeat(64);
@@ -12,9 +12,9 @@ function cognition(overrides: Partial<CognitionState> = {}): CognitionState {
     recipeVersion: 1,
     summary: "Inspect the cart total, then fix rounding",
     candidates: ["backend"],
-    steps: [],
+    nodes: [],
     gaps: [],
-    amendments: [{ revision: 2, reason: "Split the fix into two steps", affectedSteps: ["s1"], recordedAt: now }],
+    amendments: [{ revision: 2, reason: "Split the fix into two steps", affectedNodes: ["s1"], recordedAt: now }],
     ...overrides,
   };
 }
@@ -128,10 +128,10 @@ test("contract versions must increase by one and never come from the future", ()
 
 test("worker records must point at real, ended attempts", () => {
   const instance = {
-    id: "attempt-1", agentId: "agent-1", orderId: "s1", mode: "implement" as const, skills: [], contractVersion: 1,
+    id: "attempt-1", agentId: "agent-1", orderId: "s1", kind: "execute" as const, skills: [], contractVersion: 1,
     cognitionRevision: 2, baseRevision: revision, status: "completed" as const, startedAt: now, endedAt: now,
   };
-  const state = cleanState({ cognition: cognition({ steps: [{ id: "s1", objective: "fix", mode: "implement", dependsOn: [], skillIds: [], status: "complete", statusReason: "done" }], instances: [instance], agents: [{ id: "agent-1", skillIds: [], mode: "implement", orderId: "s1", lastAttemptId: "attempt-1", status: "completed" }] }) });
+  const state = cleanState({ cognition: cognition({ nodes: [{ id: "s1", kind: "execute", phase: "execute", objective: "fix", dependsOn: [], expertDecision: { reason: "the fix is delegated to one worker" }, host: "worker", skillIds: [], status: "done", statusReason: "done" }], instances: [instance], agents: [{ id: "agent-1", skillIds: [], kind: "execute", orderId: "s1", lastAttemptId: "attempt-1", status: "completed" }] }) });
   expect(checkTaskInvariants(state)).toEqual([]);
 
   const request = { id: "req-1", agentId: "agent-1", runId: "attempt-x", orderId: "s1", kind: "capability" as const, blockedStep: "s1", capabilityIds: [], contractVersion: 1, sourceRevision: revision, status: "open" as const, recordedAt: now };
@@ -143,11 +143,11 @@ test("worker records must point at real, ended attempts", () => {
   const returned = { ...instance, status: "returned" as const, integration: "pending" as const };
   expect(checkTaskInvariants(cleanState({ cognition: cognition({ instances: [returned] }) })).map(item => item.code)).not.toContain("I5/integration-without-result");
 
-  const unknownAgent = cleanState({ cognition: cognition({ agents: [{ id: "agent-1", skillIds: [], mode: "implement", orderId: "s1", lastAttemptId: "missing", status: "completed" }] }) });
+  const unknownAgent = cleanState({ cognition: cognition({ agents: [{ id: "agent-1", skillIds: [], kind: "execute", orderId: "s1", lastAttemptId: "missing", status: "completed" }] }) });
   expect(checkTaskInvariants(unknownAgent).map(item => item.code)).toContain("I5/agent-attempt-unknown");
-  const mismatched = cleanState({ cognition: cognition({ instances: [instance], agents: [{ id: "agent-1", skillIds: [], mode: "implement", orderId: "s1", lastAttemptId: "attempt-1", status: "running" }] }) });
+  const mismatched = cleanState({ cognition: cognition({ instances: [instance], agents: [{ id: "agent-1", skillIds: [], kind: "execute", orderId: "s1", lastAttemptId: "attempt-1", status: "running" }] }) });
   expect(checkTaskInvariants(mismatched).map(item => item.code)).toContain("I5/agent-status-mismatch");
-  const blocked = cleanState({ cognition: cognition({ instances: [{ ...instance, status: "blocked" as const }], agents: [{ id: "agent-1", skillIds: [], mode: "implement", orderId: "s1", lastAttemptId: "attempt-1", status: "waiting-primary" }] }) });
+  const blocked = cleanState({ cognition: cognition({ instances: [{ ...instance, status: "blocked" as const }], agents: [{ id: "agent-1", skillIds: [], kind: "execute", orderId: "s1", lastAttemptId: "attempt-1", status: "waiting-primary" }] }) });
   expect(checkTaskInvariants(blocked)).toEqual([]);
 
   const reviewed = cleanState({ development: { enabled: true, repairAttempts: 0, review: { verdict: "pass", findings: [], revision, contractVersion: 1, instanceId: "attempt-x", recordedAt: now } } });
@@ -155,11 +155,11 @@ test("worker records must point at real, ended attempts", () => {
 });
 
 test("cognition and plan revisions never run ahead of the ledger", () => {
-  expect(checkTaskInvariants(cleanState({ cognition: cognition({ revision: 2, amendments: [{ revision: 3, reason: "later", affectedSteps: [], recordedAt: now }] }) })).map(item => item.code))
+  expect(checkTaskInvariants(cleanState({ cognition: cognition({ revision: 2, amendments: [{ revision: 3, reason: "later", affectedNodes: [], recordedAt: now }] }) })).map(item => item.code))
     .toContain("I7/amendment-ahead-of-cognition");
-  expect(checkTaskInvariants(cleanState({ cognition: cognition({ revision: 3, amendments: [{ revision: 3, reason: "a", affectedSteps: [], recordedAt: now }, { revision: 2, reason: "b", affectedSteps: [], recordedAt: now }] }) })).map(item => item.code))
+  expect(checkTaskInvariants(cleanState({ cognition: cognition({ revision: 3, amendments: [{ revision: 3, reason: "a", affectedNodes: [], recordedAt: now }, { revision: 2, reason: "b", affectedNodes: [], recordedAt: now }] }) })).map(item => item.code))
     .toContain("I7/amendment-revision-not-monotonic");
-  const instance = { id: "attempt-1", orderId: "s1", mode: "implement" as const, skills: [], contractVersion: 1, cognitionRevision: 7, baseRevision: revision, status: "completed" as const, startedAt: now };
+  const instance = { id: "attempt-1", orderId: "s1", kind: "execute" as const, skills: [], contractVersion: 1, cognitionRevision: 7, baseRevision: revision, status: "completed" as const, startedAt: now };
   expect(checkTaskInvariants(cleanState({ cognition: cognition({ instances: [instance] }) })).map(item => item.code))
     .toContain("I7/instance-ahead-of-cognition");
   expect(checkTaskInvariants(cleanState({ goal: { enabled: true, noProgressRuns: -1 } })).map(item => item.code))
@@ -175,18 +175,18 @@ test("a plan approval belongs to the current execute phase, revision and contrac
 });
 
 test("steps that claim work without a live attempt, or finish before their dependencies, are reported", () => {
-  const running = { id: "s1", objective: "fix", mode: "implement" as const, dependsOn: [], skillIds: [], status: "running" as const, statusReason: "dispatched" };
-  expect(checkTaskInvariants(cleanState({ cognition: cognition({ steps: [running] }) })).map(item => item.code)).toContain("S/step-running-without-instance");
+  const running: PlanNode = { id: "s1", kind: "execute", phase: "execute", objective: "fix", dependsOn: [], expertDecision: { reason: "the fix is delegated to one worker" }, host: "worker", skillIds: [], status: "active", statusReason: "dispatched" };
+  expect(checkTaskInvariants(cleanState({ cognition: cognition({ nodes: [running] }) })).map(item => item.code)).toContain("S/step-running-without-instance");
   const withInstance = cleanState({
     cognition: cognition({
-      steps: [running],
-      instances: [{ id: "attempt-1", orderId: "s1", mode: "implement", skills: [], contractVersion: 1, cognitionRevision: 2, baseRevision: revision, status: "running", startedAt: now }],
+      nodes: [running],
+      instances: [{ id: "attempt-1", orderId: "s1", kind: "execute", skills: [], contractVersion: 1, cognitionRevision: 2, baseRevision: revision, status: "running", startedAt: now }],
     }),
   });
   expect(checkTaskInvariants(withInstance)).toEqual([]);
 
-  const done = { id: "s2", objective: "verify", mode: "review" as const, dependsOn: ["s1"], skillIds: [], status: "complete" as const, statusReason: "verified" };
-  const unfinishedDependency = cleanState({ cognition: cognition({ steps: [running, done] }) });
+  const done: PlanNode = { id: "s2", kind: "review", phase: "review", objective: "verify", dependsOn: ["s1"], expertDecision: { reason: "the coordinator verifies the fix itself" }, host: "coordinator", skillIds: [], status: "done", statusReason: "verified" };
+  const unfinishedDependency = cleanState({ cognition: cognition({ nodes: [running, done] }) });
   expect(checkTaskInvariants(unfinishedDependency).map(item => item.code)).toContain("S/step-complete-with-unmet-dependency");
 });
 

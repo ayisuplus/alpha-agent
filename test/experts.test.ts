@@ -58,7 +58,7 @@ test("every core specialty is discoverable and dispatches a readable immutable S
       verifyExpertSnapshot(expert);
       expect(searchExpertCandidates(query, snapshots, 1)[0]?.id).toBe(expert.id);
       expect(initialExpertCandidates(query, snapshots)).toContain(expert.id);
-      const [order] = bindWorkOrders([{ id: templateId, objective: query, mode: "investigate", ownedPaths: [], readPaths: ["source.txt"], resources: [], expertId: expert.id, skillIds: [...(expert.skillIds ?? [])] }], snapshots);
+      const [order] = await bindWorkOrders([{ id: templateId, objective: query, mode: "investigate", ownedPaths: [], readPaths: ["source.txt"], resources: [], expertId: expert.id }], snapshots, [], root);
       const isolated = join(root, "workers", templateId);
       const dispatched = await snapshotSkills(root, isolated, order);
       const skills = await loadWorkerSkillSnapshots(isolated, dispatched);
@@ -183,16 +183,16 @@ test("worker receives only its selected full role and merge records the frozen v
     const front = await store.copy("frontend");
     const back = await store.copy("backend");
     const presets = await store.enabled();
-    const orders: WorkOrder[] = bindWorkOrders([
+    const orders: WorkOrder[] = (await bindWorkOrders([
       { id: "front", objective: "Edit frontend", ownedPaths: ["src/front.txt"], resources: ["front"], expertId: front.id },
       { id: "back", objective: "Edit backend", ownedPaths: ["src/back.txt"], resources: ["back"], expertId: back.id },
-    ], presets).map(order => ({ ...order, fullAccess: true }));
+    ], presets, [], join(root, "state"))).map(order => ({ ...order, fullAccess: true }));
     const frontPrompt = workerSystemPrompt(orders[0], orders[0].expert).join("\n");
     expect(frontPrompt).toContain(orders[0].expert!.instructions);
     expect(frontPrompt).not.toContain(orders[1].expert!.instructions);
     expect(frontPrompt).toContain("src/front.txt");
     expect(frontPrompt).toContain("task hints, not access limits");
-    expect(() => bindWorkOrders([{ ...orders[0], expertId: "missing" }], presets)).toThrow("不存在或未启用");
+    await expect(bindWorkOrders([{ ...orders[0], expertId: "missing" }], presets, [], join(root, "state"))).rejects.toThrow("不存在或未启用");
     expect(() => workerSystemPrompt(orders[0])).toThrow("快照缺失");
     const report = await executeWorkOrders({
       projectRoot: product, dataRoot: join(root, "state"), taskId: "11111111-1111-4111-8111-111111111111", baseRevision: await fingerprintSource(product), orders,
@@ -225,7 +225,7 @@ test("expert package keeps a persona file and private Skill snapshot without glo
     await new SkillPluginStore(root).setEnabled("sample", false);
     expect(await new SkillPluginStore(root).loadSkills()).toEqual([]);
     expect((await experts.loadBundledSkills(frozen)).map(item => item.name)).toEqual(["sample:proof"]);
-    const [order] = bindWorkOrders([{ id: "review", objective: "Review proof", mode: "review", ownedPaths: [], readPaths: ["app.ts"], resources: [], expertId: created.id, skillIds: ["sample:proof"] }], [frozen]);
+    const [order] = await bindWorkOrders([{ id: "review", objective: "Review proof", mode: "review", ownedPaths: [], readPaths: ["app.ts"], resources: [], expertId: created.id }], [frozen], [], root);
     const isolated = join(root, "isolated-worker");
     const dispatched = await snapshotSkills(root, isolated, order);
     expect(dispatched.skillSnapshots).toMatchObject([{ id: "sample:proof", hash: created.package!.skills[0].hash }]);
@@ -252,7 +252,7 @@ test("local expert import keeps bundled Skills private and worker reads its exac
     const [expert] = await store.importLocalBatch([record]);
     expect((await new SkillPluginStore(state).loadSkills())).toEqual([]);
     expect((await store.loadBundledSkills(expert)).map(item => item.name)).toEqual(["wb-pack:proof"]);
-    const [order] = bindWorkOrders([{ id: "review", objective: "Review", mode: "review", ownedPaths: [], readPaths: ["app.ts"], resources: [], expertId: expert.id, skillIds: ["wb-pack:proof"] }], [expert]);
+    const [order] = await bindWorkOrders([{ id: "review", objective: "Review", mode: "review", ownedPaths: [], readPaths: ["app.ts"], resources: [], expertId: expert.id }], [expert], [], state);
     const isolated = join(root, "worker-state");
     const dispatched = await snapshotSkills(state, isolated, order);
     expect((await loadWorkerSkillSnapshots(isolated, dispatched)).map(item => item.name)).toEqual(["wb-pack:proof"]);

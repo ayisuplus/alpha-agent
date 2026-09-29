@@ -2,8 +2,9 @@ import type { AgentMessage } from "../agent-mailbox";
 import type { ExpertSnapshot } from "../experts";
 import type { PauseReasonCode, StopReasonCode } from "../pause-reasons";
 import type {
-  AcceptanceCriterion, CognitionState, CognitionStep, DevelopmentState, Evidence, ExecutionMode,
-  GuidanceRecord, LocalPreview, RunRecord, TaskPhase, TaskState, WorkerCognition, WorkerRequestRecord,
+  AcceptanceCriterion, AccessLevel, CognitionState, DevelopmentState, Evidence, GuidanceRecord, LocalPreview,
+  NodeHost, PlanEdge, PlanNode, PlanNodeHandoff, PlanNodeKind, RunRecord, TaskPhase, TaskState, TemporaryExpert,
+  WorkerCognition, WorkerRequestRecord,
 } from "../task-ledger";
 import type { WorkOrder } from "../work-orders";
 
@@ -54,12 +55,40 @@ export interface TaskEventPayloads {
   "plan/submitted": Record<string, never>;
   "plan/approved": { approval: NonNullable<TaskState["planApproval"]> };
   "plan/revised": {
-    input: { summary: string; candidates: string[]; steps: CognitionStep[]; reason: string; scope?: string[]; constraints?: string[]; openQuestions?: string[] };
+    input: { summary: string; candidates: string[]; nodes: PlanNode[]; edges?: PlanEdge[]; reason: string; scope?: string[]; constraints?: string[]; openQuestions?: string[] };
     recordedAt: string;
   };
   /** `expectedRevision` is the board revision the caller read; a mismatch means someone else moved the step first. */
-  "step/changed": { id: string; status: CognitionStep["status"]; reason: string; expectedRevision?: number; claimedBy?: string };
+  "step/changed": { id: string; status: "running" | "complete" | "blocked" | "cancelled"; reason: string; expectedRevision?: number; claimedBy?: string };
   "candidates/set": { candidates: string[] };
+
+  /** The three-stage skeleton every task starts with (§3.2); plans fill the stages, never delete them. */
+  "graph/skeleton-created": { stages: PlanNodeKind[] };
+  /**
+   * The cursor entered a node (§3.3): one run belongs to exactly one node, and the node's decision activates exactly
+   * one expert (§4.1) whose snapshot travels with the entry. The reducer derives access from the node's kind (§7) and
+   * rejects a payload that disagrees.
+   */
+  "node/entered": {
+    nodeId: string;
+    host: NodeHost;
+    runId: string;
+    access: AccessLevel;
+    expert?: { id: string; name: string; hash: string };
+    expertSnapshot?: ExpertSnapshot;
+    temporaryExpert?: TemporaryExpert;
+    startedAt: string;
+  };
+  /** The node is waiting here (§3.5); the pause code hangs on the node and resuming returns to it. */
+  "node/waiting": { nodeId: string; pause: PauseReasonCode };
+  /** The node's exit and handoff record (§6.1); the runtime checked the exit conditions before committing (§3.4). */
+  "node/exited": PlanNodeHandoff & { exitedAt: string };
+  /**
+   * A back-edge traversal (§3.5): the target node reopens for redo with the reason as its input. With `edge` the
+   * traversal consumes the plan's declared rework/premise edge (capped); without one the node must be stale work the
+   * coordinator chose to redo.
+   */
+  "node/reopened": { nodeId: string; edge?: "rework" | "premise"; sourceNodeId?: string; reason: string; recordedAt: string };
 
   "capability-gap/recorded": { kind: CognitionState["gaps"][number]["kind"]; description: string; recordedAt: string };
   "capability-gap/resolved": { kind: CognitionState["gaps"][number]["kind"]; description: string; resolution: string; resolvedAt: string };
@@ -73,6 +102,9 @@ export interface TaskEventPayloads {
     recordedAt: string;
   };
   "skill-proposal/decided": { id: string; decision: "rejected" | "installed"; installedSkillId?: string; resolvedAt: string };
+  /** A proposal to save a task-local expert into the library (§4.3); the user decides, like Skill proposals. */
+  "expert-proposal/recorded": { proposal: { id: string; temporaryExpert: TemporaryExpert; status: "pending"; recordedAt: string } };
+  "expert-proposal/decided": { id: string; decision: "rejected" | "installed"; installedExpertId?: string; resolvedAt: string };
 
   "evidence/recorded": { evidence: Evidence };
   "preview/published": { preview: LocalPreview };
@@ -106,7 +138,7 @@ export interface TaskEventPayloads {
   "worker/dispatched": {
     id: string;
     orderId: string;
-    mode: ExecutionMode;
+    kind: PlanNodeKind;
     expert?: { id: string; name: string; hash: string };
     skills: Array<{ id: string; hash: string; revision: string }>;
     decisionReason?: string;

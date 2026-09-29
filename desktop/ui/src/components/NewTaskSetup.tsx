@@ -88,9 +88,10 @@ export function NewTaskSetup() {
     <details className="setup-more"><summary>运行方式</summary>
       <label className="setup-field">开始
         <select value={draft.startMode} onChange={event => newTaskDraft.set({ startMode: event.target.value as "plan" | "execute" })}>
-          <option value="execute">直接开始</option><option value="plan">先规划，审阅后执行</option>
+          <option value="execute">自动批准计划</option><option value="plan">先规划，审阅后执行</option>
         </select>
       </label>
+      <p className="setup-note">两种模式都会先规划：先记录计划，才能执行。自动批准计划在计划记录后立即执行；先规划模式会停下等你审阅。</p>
       <label className="setup-continuation"><input type="checkbox" checked={draft.continueUntilAccepted} onChange={event => newTaskDraft.set({ continueUntilAccepted: event.target.checked })} /> 持续推进至验收或停止条件</label>
     </details>
     {error && <p className="setup-error" role="alert">{error}</p>}

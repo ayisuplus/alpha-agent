@@ -8,6 +8,7 @@ import { PDFDocument } from "pdf-lib";
 import { createGeneralWorkspace, verifyGeneralDeliverable } from "../src/runtime/general-work";
 import { editOffice, officeRuntimeStatus, readOffice } from "../src/runtime/office-runtime";
 import { createOfficePlugin } from "../src/plugins/office";
+import { recordApprovedPlan } from "./support/approved-plan";
 
 test("Office runtime edits a Word run and recalculates an Excel formula without changing inputs", async () => {
   if (!(await officeRuntimeStatus()).available) return;
@@ -49,6 +50,7 @@ test("PDF page operations preserve the source and reject out-of-range pages", as
     const dataRoot = join(root, "state");
     const ledger = await createGeneralWorkspace({ taskType: "file-work", objective: "Reorder pages", productsRoot: join(root, "products"), dataRoot,
       files: [{ name: "source.pdf", mimeType: "application/pdf", bytes }] });
+    await recordApprovedPlan(ledger);
     const id = ledger.state.inputs![0].id;
     const reading = await readOffice(ledger, dataRoot, id);
     expect(reading.pagesNeedingOcr).toEqual([1, 2, 3]);

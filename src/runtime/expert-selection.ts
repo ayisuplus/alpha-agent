@@ -13,11 +13,45 @@ function specialtyTerms(value: string): string[] {
   return [...terms(value)].filter(term => !generic.has(term));
 }
 
-/** A cheap initial shortlist. The model may revise it; a shortlist never starts an instance. */
+/**
+ * A cheap initial shortlist (§4.3): name and description scoring plus the handoff declaration — role and
+ * consumes/produces matches — with a one-hop expansion along `next` / `gate` relations. The model may revise it; a
+ * shortlist never starts an instance.
+ */
 export function initialExpertCandidates(objective: string, experts: readonly ExpertSnapshot[]): string[] {
   const wanted = new Set(specialtyTerms(objective));
-  return experts.filter(expert => expert.package?.skills.length).map(expert => ({ id: expert.id, score: [...terms(`${expert.name} ${expert.description}`)].filter(term => wanted.has(term)).length }))
-    .filter(item => item.score > 1).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, 3).map(item => item.id);
+  const scores = new Map<string, number>();
+  const byRole = new Map<string, string[]>();
+  for (const expert of experts) {
+    if (!expert.package?.skills.length) continue;
+    const handoff = expert.package.handoff;
+    const corpus = handoff ? `${expert.name} ${expert.description} ${handoff.role} ${handoff.consumes.join(" ")} ${handoff.produces.join(" ")}` : `${expert.name} ${expert.description}`;
+    const score = [...terms(corpus)].filter(term => wanted.has(term)).length;
+    if (score > 1) scores.set(expert.id, score);
+    if (handoff?.role) byRole.set(handoff.role, [...(byRole.get(handoff.role) ?? []), expert.id]);
+  }
+  // One hop along the relations: who a matched expert hands work to, and whose gate its outputs must pass.
+  for (const expert of experts) {
+    const handoff = expert.package?.handoff;
+    if (!handoff || !scores.has(expert.id)) continue;
+    for (const role of [...handoff.next, ...handoff.gate]) for (const id of byRole.get(role) ?? []) if (!scores.has(id)) scores.set(id, 1);
+  }
+  return [...scores.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0])).slice(0, 3).map(([id]) => id);
+}
+
+/** Roles a built-in neutral reviewer performs when no expert declares them (§6.2). */
+const NEUTRAL_GATE_ROLES = ["code-review"];
+
+/**
+ * Who performs a gate (§6.2): an enabled expert declaring the role wins; `code-review` falls back to the built-in
+ * neutral reviewer; other roles have no neutral fallback and report a gap to pause on.
+ */
+export function gateActorFor(experts: readonly ExpertSnapshot[], gateRole: string): { expert?: ExpertSnapshot; neutral: boolean } | { missing: string } {
+  if (!gateRole) return { neutral: true };
+  const match = experts.find(item => item.package?.handoff?.role === gateRole);
+  if (match) return { expert: match, neutral: false };
+  if (NEUTRAL_GATE_ROLES.includes(gateRole)) return { neutral: true };
+  return { missing: gateRole };
 }
 
 export function searchExpertCandidates(query: string, experts: readonly ExpertSnapshot[], limit = 8): ExpertSnapshot[] {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ExpertSnapshot } from "../src/runtime/experts";
-import type { AgentRecord, CognitionState, CognitionStep, TaskState, WorkerCognition, WorkerRequestRecord } from "../src/runtime/task-ledger";
+import type { AgentRecord, CognitionState, PlanNode, TaskState, WorkerCognition, WorkerRequestRecord } from "../src/runtime/task-ledger";
 import { workerReducers } from "../src/runtime/task-events/apply/worker";
 import { InvariantError } from "../src/runtime/task-events/errors";
 import type { TaskEventOf, TaskEventType, TaskInstanceRecord } from "../src/runtime/task-events/types";
@@ -45,19 +45,19 @@ function expectInvariant(fn: () => void, code: string, message: string): void {
 }
 
 function cognition(overrides: Partial<CognitionState> = {}): CognitionState {
-  return { revision: 3, recipeVersion: 1, summary: "Plan", candidates: [], steps: [], gaps: [], amendments: [], ...overrides };
+  return { revision: 3, recipeVersion: 1, summary: "Plan", candidates: [], nodes: [], gaps: [], amendments: [], ...overrides };
 }
 
-function step(id: string, overrides: Partial<CognitionStep> = {}): CognitionStep {
-  return { id, objective: `objective ${id}`, mode: "implement", dependsOn: [], skillIds: [], status: "planned", ...overrides };
+function node(id: string, overrides: Partial<PlanNode> = {}): PlanNode {
+  return { id, objective: `objective ${id}`, kind: "execute", phase: "execute", dependsOn: [], expertDecision: { reason: "the coordinator works this node itself" }, host: "coordinator", skillIds: [], status: "planned", ...overrides };
 }
 
 function instance(overrides: Partial<TaskInstanceRecord> = {}): TaskInstanceRecord {
-  return { id: "w1", orderId: "step-1", mode: "implement", skills: [], contractVersion: 1, cognitionRevision: 1, baseRevision: null, status: "running", startedAt: AT, ...overrides };
+  return { id: "w1", orderId: "step-1", kind: "execute", skills: [], contractVersion: 1, cognitionRevision: 1, baseRevision: null, status: "running", startedAt: AT, ...overrides };
 }
 
 function agentRecord(overrides: Partial<AgentRecord> = {}): AgentRecord {
-  return { id: "agent-1", skillIds: [], mode: "implement", orderId: "step-1", lastAttemptId: "w1", status: "queued", ...overrides };
+  return { id: "agent-1", skillIds: [], kind: "execute", orderId: "step-1", lastAttemptId: "w1", status: "queued", ...overrides };
 }
 
 function order(overrides: Partial<WorkOrder> = {}): WorkOrder {
@@ -77,50 +77,50 @@ function workerCognition(overrides: Partial<WorkerCognition> = {}): WorkerCognit
 const receipt = { id: "rc-1", attemptId: "w1", kind: "check" as const, sourceRevision: "rev-1", passed: true, path: "src/a.ts", recordedAt: AT };
 
 describe("worker/dispatched", () => {
-  test("records the instance from payload values and marks the plan step running", () => {
-    const state = baseState({ contractVersion: 2, cognition: cognition({ steps: [step("step-1")] }) });
+  test("records the instance from payload values and marks the plan node active", () => {
+    const state = baseState({ contractVersion: 2, cognition: cognition({ nodes: [node("step-1")] }) });
     const skills = [{ id: "sk-1", hash: "h", revision: "r" }];
-    apply(state, "worker/dispatched", { id: "w1", orderId: "step-1", mode: "implement", skills, startedAt: T1 });
+    apply(state, "worker/dispatched", { id: "w1", orderId: "step-1", kind: "execute", skills, startedAt: T1 });
     const instances = state.cognition!.instances!;
     expect(instances).toHaveLength(1);
-    expect(instances[0]).toEqual({ id: "w1", orderId: "step-1", mode: "implement", skills: [{ id: "sk-1", hash: "h", revision: "r" }], contractVersion: 2, cognitionRevision: 3, baseRevision: "rev-1", status: "running", startedAt: T1 });
+    expect(instances[0]).toEqual({ id: "w1", orderId: "step-1", kind: "execute", skills: [{ id: "sk-1", hash: "h", revision: "r" }], contractVersion: 2, cognitionRevision: 3, baseRevision: "rev-1", status: "running", startedAt: T1 });
     expect(instances[0].skills[0]).not.toBe(skills[0]);
-    expect(Object.keys(instances[0])).toEqual(["id", "orderId", "mode", "skills", "contractVersion", "cognitionRevision", "baseRevision", "status", "startedAt"]);
-    expect(state.cognition!.steps[0].status).toBe("running");
-    expect(state.cognition!.steps[0].statusReason).toBe("工单 w1 运行中");
+    expect(Object.keys(instances[0])).toEqual(["id", "orderId", "kind", "skills", "contractVersion", "cognitionRevision", "baseRevision", "status", "startedAt"]);
+    expect(state.cognition!.nodes[0].status).toBe("active");
+    expect(state.cognition!.nodes[0].statusReason).toBe("工单 w1 运行中");
   });
 
   test("a repeated attempt id is a silent no-op", () => {
-    const state = baseState({ cognition: cognition({ steps: [step("step-1")] }) });
-    apply(state, "worker/dispatched", { id: "w1", orderId: "step-1", mode: "implement", skills: [], startedAt: T1 });
-    state.cognition!.steps[0].statusReason = "later edit";
-    apply(state, "worker/dispatched", { id: "w1", orderId: "step-1", mode: "implement", skills: [], startedAt: T2 });
+    const state = baseState({ cognition: cognition({ nodes: [node("step-1")] }) });
+    apply(state, "worker/dispatched", { id: "w1", orderId: "step-1", kind: "execute", skills: [], startedAt: T1 });
+    state.cognition!.nodes[0].statusReason = "later edit";
+    apply(state, "worker/dispatched", { id: "w1", orderId: "step-1", kind: "execute", skills: [], startedAt: T2 });
     expect(state.cognition!.instances).toHaveLength(1);
     expect(state.cognition!.instances![0].startedAt).toBe(T1);
-    expect(state.cognition!.steps[0].statusReason).toBe("later edit");
+    expect(state.cognition!.nodes[0].statusReason).toBe("later edit");
   });
 
   test("creates the default cognition when the task has none", () => {
     const state = baseState();
-    apply(state, "worker/dispatched", { id: "w1", orderId: "step-1", mode: "implement", skills: [], startedAt: T1 });
-    expect(Object.keys(state.cognition!)).toEqual(["revision", "recipeVersion", "summary", "candidates", "steps", "gaps", "amendments", "instances"]);
+    apply(state, "worker/dispatched", { id: "w1", orderId: "step-1", kind: "execute", skills: [], startedAt: T1 });
+    expect(Object.keys(state.cognition!)).toEqual(["revision", "recipeVersion", "summary", "candidates", "nodes", "gaps", "amendments", "instances"]);
     const { instances, ...rest } = state.cognition!;
-    expect(rest).toEqual({ revision: 1, recipeVersion: 1, summary: "Ship the feature", candidates: [], steps: [], gaps: [], amendments: [] });
+    expect(rest).toEqual({ revision: 1, recipeVersion: 1, summary: "Ship the feature", candidates: [], nodes: [], gaps: [], amendments: [] });
     expect(instances).toHaveLength(1);
   });
 
   test("reserved order ids never touch a plan step", () => {
-    const state = baseState({ cognition: cognition({ steps: [step("coordinator")] }) });
-    apply(state, "worker/dispatched", { id: "w1", orderId: "coordinator", mode: "review", skills: [], startedAt: T1 });
+    const state = baseState({ cognition: cognition({ nodes: [node("coordinator")] }) });
+    apply(state, "worker/dispatched", { id: "w1", orderId: "coordinator", kind: "review", skills: [], startedAt: T1 });
     expect(state.cognition!.instances).toHaveLength(1);
-    expect(state.cognition!.steps[0].status).toBe("planned");
-    expect(state.cognition!.steps[0].statusReason).toBeUndefined();
+    expect(state.cognition!.nodes[0].status).toBe("planned");
+    expect(state.cognition!.nodes[0].statusReason).toBeUndefined();
   });
 
   test("a task that is not active is rejected before any mutation", () => {
     const state = baseState({ status: "stopped" });
     expectInvariant(
-      () => apply(state, "worker/dispatched", { id: "w1", orderId: "step-1", mode: "implement", skills: [], startedAt: T1 }),
+      () => apply(state, "worker/dispatched", { id: "w1", orderId: "step-1", kind: "execute", skills: [], startedAt: T1 }),
       "apply/task-not-active",
       "Task is stopped",
     );
@@ -130,7 +130,7 @@ describe("worker/dispatched", () => {
 
 describe("worker/queued", () => {
   test("events written before the expert snapshot rename still fold", () => {
-    const state = baseState({ cognition: cognition({ steps: [step("step-1")] }) });
+    const state = baseState({ cognition: cognition({ nodes: [node("step-1")] }) });
     const workOrder = order({ agentId: "agent-1", skillIds: ["sk-1"] });
     // Old logs carried the full snapshot under `preset`; the fold reads both spellings.
     apply(state, "worker/queued", { attemptId: "w1", order: workOrder, preset, startedAt: T1 } as never);
@@ -139,17 +139,17 @@ describe("worker/queued", () => {
   });
 
   test("upserts a new agent record and queues the instance", () => {
-    const state = baseState({ contractVersion: 4, cognition: cognition({ steps: [step("step-1")] }) });
-    const workOrder = order({ agentId: "agent-1", skillIds: ["sk-1"], capabilityIds: ["cap-1"], contextRevision: 2, decisionReason: "because", mode: "implement" });
+    const state = baseState({ contractVersion: 4, cognition: cognition({ nodes: [node("step-1")] }) });
+    const workOrder = order({ agentId: "agent-1", skillIds: ["sk-1"], capabilityIds: ["cap-1"], contextRevision: 2, decisionReason: "because", kind: "execute" });
     const expert = { id: "e-1", name: "Expert", hash: "hash-1" };
     apply(state, "worker/queued", { attemptId: "w1", parentId: "p0", order: workOrder, expertSnapshot: preset, expert, startedAt: T1 });
-    expect(state.cognition!.agents).toEqual([{ id: "agent-1", expert: preset, skillIds: ["sk-1"], capabilityIds: ["cap-1"], contextRevision: 2, mode: "implement", orderId: "step-1", lastAttemptId: "w1", status: "queued" }]);
+    expect(state.cognition!.agents).toEqual([{ id: "agent-1", expert: preset, skillIds: ["sk-1"], capabilityIds: ["cap-1"], contextRevision: 2, kind: "execute", orderId: "step-1", lastAttemptId: "w1", status: "queued" }]);
     const queued = state.cognition!.instances![0];
-    expect(queued).toEqual({ id: "w1", agentId: "agent-1", parentId: "p0", orderId: "step-1", order: workOrder, decisionReason: "because", mode: "implement", expert, skills: [], contractVersion: 4, cognitionRevision: 3, baseRevision: "rev-1", status: "queued", startedAt: T1 });
+    expect(queued).toEqual({ id: "w1", agentId: "agent-1", parentId: "p0", orderId: "step-1", order: workOrder, decisionReason: "because", kind: "execute", expert, skills: [], contractVersion: 4, cognitionRevision: 3, baseRevision: "rev-1", status: "queued", startedAt: T1 });
     expect(queued.order).toBe(workOrder);
-    expect(Object.keys(queued)).toEqual(["id", "agentId", "parentId", "orderId", "order", "decisionReason", "mode", "expert", "skills", "contractVersion", "cognitionRevision", "baseRevision", "status", "startedAt"]);
-    expect(state.cognition!.steps[0].status).toBe("running");
-    expect(state.cognition!.steps[0].statusReason).toBe("工单 w1 排队中");
+    expect(Object.keys(queued)).toEqual(["id", "agentId", "parentId", "orderId", "order", "decisionReason", "kind", "expert", "skills", "contractVersion", "cognitionRevision", "baseRevision", "status", "startedAt"]);
+    expect(state.cognition!.nodes[0].status).toBe("active");
+    expect(state.cognition!.nodes[0].statusReason).toBe("工单 w1 排队中");
   });
 
   test("a duplicate attempt id throws before any queue work", () => {
@@ -186,24 +186,24 @@ describe("worker/queued", () => {
       cognition: cognition({
         agents: [agentRecord({ status: "returned", lastAttemptId: "w0", contextRevision: 5, capabilityIds: ["old"] })],
         instances: [previous],
-        steps: [step("step-1")],
+        nodes: [node("step-1")],
       }),
     });
-    apply(state, "worker/queued", { attemptId: "w1", order: order({ agentId: "agent-1", mode: "review" }), startedAt: T1 });
+    apply(state, "worker/queued", { attemptId: "w1", order: order({ agentId: "agent-1", kind: "review" }), startedAt: T1 });
     expect(previous.status).toBe("cancelled");
     expect(previous.findings).toEqual(["earlier finding", "Superseded by continuation"]);
     expect(previous.endedAt).toBe(T1);
     const record = state.cognition!.agents![0];
     expect(record.lastAttemptId).toBe("w1");
     expect(record.status).toBe("queued");
-    expect(record.mode).toBe("review");
+    expect(record.kind).toBe("review");
     expect(record.capabilityIds).toEqual([]);
     expect(record.contextRevision).toBe(5);
     expect(state.cognition!.agents).toHaveLength(1);
     expect(state.cognition!.instances).toHaveLength(2);
     expect(state.cognition!.instances![1].status).toBe("queued");
-    expect(state.cognition!.steps[0].status).toBe("running");
-    expect(state.cognition!.steps[0].statusReason).toBe("工单 w1 排队中");
+    expect(state.cognition!.nodes[0].status).toBe("active");
+    expect(state.cognition!.nodes[0].statusReason).toBe("工单 w1 排队中");
   });
 
   test("identity, expert or skill changes on an existing agent are rejected", () => {
@@ -244,7 +244,7 @@ describe("worker/updated", () => {
       cognition: cognition({
         instances: [instance({ id: "w1", agentId: "agent-1", order: workOrder })],
         agents: [agentRecord({ id: "agent-1", status: "queued", lastAttemptId: "w1" })],
-        steps: [step("step-1")],
+        nodes: [node("step-1")],
       }),
     });
     return { state, workOrder };
@@ -272,19 +272,19 @@ describe("worker/updated", () => {
     expect(mirrored.capabilitySnapshots).toEqual(capabilities);
     expect(mirrored.capabilitySnapshots![0]).not.toBe(capabilities[0]);
     expect(workOrder.capabilitySnapshots).toEqual(capabilities);
-    expect(state.cognition!.steps[0].status).toBe("blocked");
-    expect(state.cognition!.steps[0].statusReason).toBe("工单 w1 blocked / conflict");
+    expect(state.cognition!.nodes[0].status).toBe("waiting");
+    expect(state.cognition!.nodes[0].statusReason).toBe("工单 w1 blocked / conflict");
   });
 
-  test("a running update leaves endedAt unset and keeps the step running", () => {
+  test("a running update leaves endedAt unset and keeps the plan node active", () => {
     const { state } = fixture();
     apply(state, "worker/updated", { id: "w1", status: "running", patch: { workRoot: "/tmp/work" } });
     const record = state.cognition!.instances![0];
     expect(record.workRoot).toBe("/tmp/work");
     expect(record.endedAt).toBeUndefined();
     expect(state.cognition!.agents![0].status).toBe("running");
-    expect(state.cognition!.steps[0].status).toBe("running");
-    expect(state.cognition!.steps[0].statusReason).toBe("工单 w1 running");
+    expect(state.cognition!.nodes[0].status).toBe("active");
+    expect(state.cognition!.nodes[0].statusReason).toBe("工单 w1 running");
   });
 
   test("an already ended attempt is a silent no-op", () => {
@@ -309,8 +309,8 @@ describe("worker/updated", () => {
     expect(state.cognition!.agents![0].status).toBe("queued");
     expect(state.cognition!.instances![0].status).toBe("completed");
     expect(state.cognition!.instances![0].findings).toEqual(["done"]);
-    expect(state.cognition!.steps[0].status).toBe("complete");
-    expect(state.cognition!.steps[0].statusReason).toBe("工单 w1 completed");
+    expect(state.cognition!.nodes[0].status).toBe("done");
+    expect(state.cognition!.nodes[0].statusReason).toBe("工单 w1 completed");
   });
 });
 
@@ -489,26 +489,26 @@ describe("worker-run/prepared", () => {
 
 describe("worker/finished", () => {
   test("completes a running instance and joins the findings on the step", () => {
-    const state = baseState({ cognition: cognition({ instances: [instance()], steps: [step("step-1", { status: "running" })] }) });
+    const state = baseState({ cognition: cognition({ instances: [instance()], nodes: [node("step-1", { status: "active" })] }) });
     apply(state, "worker/finished", { id: "w1", status: "completed", findings: ["did A", "did B"], endedAt: T2 });
     expect(state.cognition!.instances![0]).toMatchObject({ status: "completed", findings: ["did A", "did B"], endedAt: T2 });
-    expect(state.cognition!.steps[0].status).toBe("complete");
-    expect(state.cognition!.steps[0].statusReason).toBe("did A；did B");
+    expect(state.cognition!.nodes[0].status).toBe("done");
+    expect(state.cognition!.nodes[0].statusReason).toBe("did A；did B");
   });
 
-  test("empty findings fall back to the order message; failed blocks and cancelled cancels the step", () => {
-    const state = baseState({ cognition: cognition({ instances: [instance()], steps: [step("step-1")] }) });
+  test("empty findings fall back to the order message; failed waits and cancelled cancels the node", () => {
+    const state = baseState({ cognition: cognition({ instances: [instance()], nodes: [node("step-1")] }) });
     apply(state, "worker/finished", { id: "w1", status: "failed", findings: [], endedAt: T2 });
-    expect(state.cognition!.steps[0].status).toBe("blocked");
-    expect(state.cognition!.steps[0].statusReason).toBe("工单 w1 failed");
-    const second = baseState({ cognition: cognition({ instances: [instance()], steps: [step("step-1")] }) });
+    expect(state.cognition!.nodes[0].status).toBe("waiting");
+    expect(state.cognition!.nodes[0].statusReason).toBe("工单 w1 failed");
+    const second = baseState({ cognition: cognition({ instances: [instance()], nodes: [node("step-1")] }) });
     apply(second, "worker/finished", { id: "w1", status: "cancelled", findings: [], endedAt: T2 });
-    expect(second.cognition!.steps[0].status).toBe("cancelled");
-    expect(second.cognition!.steps[0].statusReason).toBe("工单 w1 cancelled");
+    expect(second.cognition!.nodes[0].status).toBe("cancelled");
+    expect(second.cognition!.nodes[0].statusReason).toBe("工单 w1 cancelled");
   });
 
   test("unknown or non-running instances are a silent no-op", () => {
-    const state = baseState({ cognition: cognition({ instances: [instance({ status: "queued" })], steps: [step("step-1")] }) });
+    const state = baseState({ cognition: cognition({ instances: [instance({ status: "queued" })], nodes: [node("step-1")] }) });
     const before = structuredClone(state);
     apply(state, "worker/finished", { id: "w1", status: "completed", findings: ["x"], endedAt: T2 });
     apply(state, "worker/finished", { id: "w9", status: "completed", findings: ["x"], endedAt: T2 });
@@ -516,15 +516,15 @@ describe("worker/finished", () => {
   });
 
   test("reserved order ids finish the instance without touching a step", () => {
-    const state = baseState({ cognition: cognition({ instances: [instance({ orderId: "final-review" })], steps: [step("final-review")] }) });
+    const state = baseState({ cognition: cognition({ instances: [instance({ orderId: "final-review" })], nodes: [node("final-review")] }) });
     apply(state, "worker/finished", { id: "w1", status: "completed", findings: ["ok"], endedAt: T2 });
     expect(state.cognition!.instances![0].status).toBe("completed");
-    expect(state.cognition!.steps[0].status).toBe("planned");
+    expect(state.cognition!.nodes[0].status).toBe("planned");
   });
 });
 
 describe("workers/reconciled", () => {
-  test("fails queued and running instances and blocks their steps", () => {
+  test("fails queued and running instances and leaves their nodes waiting", () => {
     const state = baseState({
       cognition: cognition({
         instances: [
@@ -532,7 +532,7 @@ describe("workers/reconciled", () => {
           instance({ id: "w2", status: "queued", orderId: "step-2" }),
           instance({ id: "w3", status: "completed", orderId: "step-3" }),
         ],
-        steps: [step("step-1", { status: "running", statusReason: "工单 w1 运行中" }), step("step-2"), step("step-3", { status: "complete" })],
+        nodes: [node("step-1", { status: "active", statusReason: "工单 w1 运行中" }), node("step-2"), node("step-3", { status: "done" })],
       }),
     });
     apply(state, "workers/reconciled", { reason: "Coordinator restarted", endedAt: T2 });
@@ -541,15 +541,15 @@ describe("workers/reconciled", () => {
     expect(w2).toMatchObject({ status: "failed", findings: ["Coordinator restarted"], endedAt: T2 });
     expect(w3.status).toBe("completed");
     expect(w3.findings).toBeUndefined();
-    const steps = state.cognition!.steps;
-    expect(steps[0].status).toBe("blocked");
-    expect(steps[0].statusReason).toBe("工单 w1 运行中");
-    expect(steps[1].status).toBe("blocked");
-    expect(steps[2].status).toBe("complete");
+    const nodes = state.cognition!.nodes;
+    expect(nodes[0].status).toBe("waiting");
+    expect(nodes[0].statusReason).toBe("工单 w1 运行中");
+    expect(nodes[1].status).toBe("waiting");
+    expect(nodes[2].status).toBe("done");
   });
 
   test("nothing queued or running is a silent no-op", () => {
-    const state = baseState({ cognition: cognition({ instances: [instance({ status: "completed" })], steps: [step("step-1", { status: "complete" })] }) });
+    const state = baseState({ cognition: cognition({ instances: [instance({ status: "completed" })], nodes: [node("step-1", { status: "done" })] }) });
     const before = structuredClone(state);
     apply(state, "workers/reconciled", { reason: "r", endedAt: T2 });
     expect(state).toEqual(before);

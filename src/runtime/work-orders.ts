@@ -2,6 +2,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { copyFile, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve, sep } from "node:path";
 import { fingerprintSource } from "./task-ledger";
+import { mapNodeKind, orderKind, type PlanNodeKind } from "./plan-kind";
+export { mapNodeKind, orderKind };
 import type { ExpertSnapshot } from "./experts";
 import { isAllowedModelSelector } from "./model-policy";
 import { excludedSourceDirectory } from "./source-review";
@@ -17,6 +19,9 @@ export interface WorkOrder {
   readPaths?: string[];
   /** Async worktree workers may use the whole project; scopes remain scheduling hints. */
   fullAccess?: boolean;
+  /** The plan node's type (§3.1); it decides the order's access (§7). Orders serialized before the rename carry `mode`. */
+  kind?: PlanNodeKind;
+  /** Pre-rename spelling of `kind`; `orderKind` maps it and folds read both (§8). */
   mode?: "investigate" | "implement" | "review";
   /** Optional model for this subagent; absent inherits the coordinator model. */
   modelSelector?: string;
@@ -55,7 +60,7 @@ export interface WorkerResult {
   readPaths?: string[];
   unresolved: string[];
   requests?: Array<{ capability: string; reason: string; details: string }>;
-  usage?: { model: string; toolCalls: number; elapsedMs: number; tokens?: RunUsage; outcome?: "returned" | "cancelled" | "budget" | "error" | "needs-input"; incomplete?: boolean };
+  usage?: { model: string; toolCalls: number; elapsedMs: number; tokens?: RunUsage; outcome?: "returned" | "cancelled" | "budget" | "error" | "needs-input" | "node-switch"; incomplete?: boolean };
   cognition?: { revision: number; understanding: string; findings: Array<{ text: string; evidence: string[] }>; openQuestions: string[]; nextActions: string[]; sourceRevision: string | null };
 }
 
@@ -104,10 +109,11 @@ export function validateOrders(orders: WorkOrder[], maximum = 2): void {
   const scopes: string[] = [];
   const resources = new Set<string>();
   for (const order of orders) {
-    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(order.id) || ids.has(order.id) || !order.objective.trim() || ((order.mode ?? "implement") === "implement" && order.ownedPaths.length === 0)) throw new Error("Invalid work order");
+    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(order.id) || ids.has(order.id) || !order.objective.trim() || (orderKind(order) === "execute" && order.ownedPaths.length === 0)) throw new Error("Invalid work order");
+    if (order.kind && !["investigate", "execute", "review"].includes(order.kind)) throw new Error("Invalid work order kind");
     if (order.mode && !["investigate", "implement", "review"].includes(order.mode)) throw new Error("Invalid work order mode");
     if (order.modelSelector !== undefined && !isAllowedModelSelector(order.modelSelector)) throw new Error(`Model is not supported: ${order.modelSelector}`);
-    if (!order.fullAccess && order.mode && order.mode !== "implement" && order.ownedPaths.length) throw new Error("Read-only orders cannot own source paths");
+    if (!order.fullAccess && orderKind(order) !== "execute" && order.ownedPaths.length) throw new Error("Read-only orders cannot own source paths");
     ids.add(order.id);
     for (const scope of order.ownedPaths) {
       if (!validPath(scope) || (!order.fullAccess && (scope === "alpha-verification.json" || scopes.some(previous => overlaps(previous, scope))))) throw new Error(`Conflicting or invalid ownership: ${scope}`);
@@ -307,11 +313,11 @@ export async function executeWorkOrders(input: {
       }
       report.results[order.id] = outcome.value;
       if (outcome.value.stopReason) (report.stopReasons ??= {})[order.id] = outcome.value.stopReason;
-      if (changedFiles(runStart, workerSnapshot).length && order.mode && order.mode !== "implement") throw new Error(`Read-only worker ${order.id} changed source`);
+      if (changedFiles(runStart, workerSnapshot).length && orderKind(order) !== "execute") throw new Error(`Read-only worker ${order.id} changed source`);
       if (outcome.value.status && outcome.value.status !== "completed") throw new Error(`Worker ${order.id} ended ${outcome.value.status}`);
       if (outcome.value.unresolved.length) throw new Error(`Worker ${order.id} has unresolved items: ${outcome.value.unresolved.join("; ")}`);
-      if (!order.fullAccess && order.mode === "review" && outcome.value.reviewVerdict !== "pass") throw new Error(`Review ${order.id} did not pass: ${outcome.value.reviewVerdict ?? "inconclusive"}`);
-      if (!changes.length && (order.mode ?? "implement") === "implement" && !order.fullAccess) throw new Error(`Worker ${order.id} produced no source changes`);
+      if (!order.fullAccess && orderKind(order) === "review" && outcome.value.reviewVerdict !== "pass") throw new Error(`Review ${order.id} did not pass: ${outcome.value.reviewVerdict ?? "inconclusive"}`);
+      if (!changes.length && orderKind(order) === "execute" && !order.fullAccess) throw new Error(`Worker ${order.id} produced no source changes`);
       const unexpected = order.fullAccess ? undefined : changes.find(file => !order.ownedPaths.some(scope => owns(scope, file)));
       if (unexpected) throw new Error(`Worker ${order.id} changed unowned file: ${unexpected}`);
     }

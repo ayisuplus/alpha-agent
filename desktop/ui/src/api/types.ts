@@ -134,11 +134,32 @@ export interface TaskView extends TaskSummary {
     openQuestions?: string[];
     candidates: string[];
     taskSkillIds?: string[];
-    steps: Array<{ id: string; objective: string; mode: "investigate" | "implement" | "review"; dependsOn: string[]; expertId?: string; skillIds: string[]; status: string; statusReason?: string }>;
+    /** The runtime-owned three-stage skeleton (§3.2); nodes fill it. */
+    stages?: Array<"investigate" | "execute" | "review">;
+    nodes: Array<{
+      id: string;
+      objective: string;
+      kind: "investigate" | "execute" | "review";
+      phase: "investigate" | "execute" | "review";
+      dependsOn: string[];
+      expertDecision: { expertId?: string; temporaryExpert?: { name: string; description: string; instructions: string; skillIds: string[] }; reason: string };
+      host: "coordinator" | "worker";
+      consumes?: string[];
+      produces?: string[];
+      ownedPaths?: string[];
+      gateRole?: string;
+      skillIds: string[];
+      status: "planned" | "ready" | "active" | "waiting" | "done" | "reopened" | "cancelled";
+      statusReason?: string;
+      revision?: number;
+      claimedBy?: string;
+      activation?: { host: "coordinator" | "worker"; runId: string; access: "read-only" | "write"; expert?: { id: string; name: string; hash: string }; expertSnapshot?: { id: string; name: string }; temporaryExpert?: { name: string } };
+      handoff?: { nodeId: string; runId: string; expert?: { id: string; hash: string }; artifacts: Array<{ path: string; hash: string; kind: string }>; findings?: Array<{ claim: string; source: string }>; verdict?: "pass" | "changes-requested" | "inconclusive"; note: string; unresolved: string[]; contractVersion: number };
+    }>;
     gaps: Array<{ kind: string; description: string; resolvedAt?: string; resolution?: string; blockingReason?: string }>;
-    amendments: Array<{ revision: number; reason: string; recordedAt: string }>;
-    agents?: Array<{ id: string; expert?: { id: string; name: string; hash: string }; skillIds: string[]; mode: string; orderId: string; lastAttemptId: string; status: string; cognition?: { revision: number; understanding: string; findings: Array<{ text: string; evidence: string[] }>; openQuestions: string[]; nextActions: string[]; sourceRevision: string | null } }>;
-    instances?: Array<{ id: string; agentId?: string; parentId?: string; orderId: string; mode: string; order?: { modelSelector?: string }; expert?: { id: string; name: string; hash: string }; skills: Array<{ id: string; hash: string; revision: string }>; status: string; integration?: string; worktreePath?: string; startedAt?: string; endedAt?: string; findings?: string[] }>;
+    amendments: Array<{ revision: number; reason: string; affectedNodes?: string[]; affectedSteps?: string[]; recordedAt: string }>;
+    agents?: Array<{ id: string; expert?: { id: string; name: string; hash: string }; skillIds: string[]; kind: string; orderId: string; lastAttemptId: string; status: string; cognition?: { revision: number; understanding: string; findings: Array<{ text: string; evidence: string[] }>; openQuestions: string[]; nextActions: string[]; sourceRevision: string | null } }>;
+    instances?: Array<{ id: string; agentId?: string; parentId?: string; orderId: string; kind: string; order?: { modelSelector?: string }; expert?: { id: string; name: string; hash: string }; skills: Array<{ id: string; hash: string; revision: string }>; status: string; integration?: string; worktreePath?: string; startedAt?: string; endedAt?: string; findings?: string[] }>;
     skillSearches?: Array<{ key: string; gapDescription: string; query: string; resultCount: number; error?: string }>;
     skillProposals?: Array<{ id: string; key: string; name: string; description: string; source: string; revision: string; path: string; installs: number; requirements?: { tools: string[]; services: string[]; conflicts: string[] }; status: "pending" | "rejected" | "installed"; installedSkillId?: string }>;
   } | null;

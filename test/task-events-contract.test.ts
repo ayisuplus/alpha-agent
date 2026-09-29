@@ -8,7 +8,7 @@ const at = "2026-09-28T10:00:00.000Z";
 function baseState(overrides: Partial<TaskState> = {}): TaskState {
   return {
     id: "task-1", taskType: "code-change", objective: "Fix the cart total", contractVersion: 1, contractHistory: [],
-    guidanceHistory: [], cognition: { revision: 1, recipeVersion: 1, summary: "Fix the cart total", candidates: [], steps: [], gaps: [], amendments: [] },
+    guidanceHistory: [], cognition: { revision: 1, recipeVersion: 1, summary: "Fix the cart total", candidates: [], nodes: [], gaps: [], amendments: [] },
     projectRoot: "/tmp/project", criteria: [{ id: "check", description: "Configured checks pass", kind: "test" }],
     status: "active", phase: "execute", revision, evidence: [], runs: [], preview: null,
     createdAt: "2026-09-28T09:00:00.000Z", updatedAt: "2026-09-28T09:30:00.000Z", ...overrides,

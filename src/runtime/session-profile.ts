@@ -1,12 +1,13 @@
 import type { Skill } from "@oh-my-pi/pi-coding-agent";
 import { verifyExpertSnapshot, type ExpertSnapshot } from "./experts";
 import { initialExpertCandidates } from "./expert-selection";
+import type { ExpertScope } from "./expert-scope";
 import { PLANNING_TOOL_NAMES } from "./planning-policy";
 import { roleThinkingInstructions } from "./role-thinking";
-import type { PermissionMode, TaskLedger, TaskState, TaskType } from "./task-ledger";
+import type { AccessLevel, PermissionMode, PlanNode, TaskLedger, TaskState, TaskType } from "./task-ledger";
 import { computeCompletionGaps } from "./task-completion";
 import { taskProfile } from "./task-profile";
-import type { WorkOrder } from "./work-orders";
+import { orderKind, type WorkOrder } from "./work-orders";
 
 /**
  * What an Alpha session is for. Each role gets its own tool list and runtime contract; the contract is appended after
@@ -25,6 +26,12 @@ export interface SessionFacts {
   reviewExpert?: ExpertSnapshot;
   /** Expert the user designated; the coordinator works from its perspective. */
   directExpert?: ExpertSnapshot;
+  /** The mounted expert state (§4.4): persona, primary method and packaged Skills, resolved once per activation. */
+  expertScope?: ExpertScope;
+  /** The current node's access tier (§7); read-only nodes get no write or generation tools. */
+  nodeAccess?: AccessLevel;
+  /** The plan node this run works on (§3.3); its upstream handoffs are the only history the run sees (§6.1). */
+  currentNode?: PlanNode;
   experts: readonly ExpertSnapshot[];
   skills: readonly Skill[];
   pluginToolNames: readonly string[];
@@ -58,7 +65,7 @@ export function sessionToolNames(facts: SessionFacts): string[] {
   switch (facts.role) {
     case "worker": {
       const order = workOrder!;
-      const readOnly = order.mode !== "implement";
+      const readOnly = orderKind(order) !== "execute";
       return [
         "read", "grep", ...intelligence,
         ...(readOnly ? ["alpha_check"] : ["edit", "write", "alpha_build", "alpha_check", "alpha_command", "alpha_document"]),
@@ -76,12 +83,14 @@ export function sessionToolNames(facts: SessionFacts): string[] {
       return [...PLANNING_TOOL_NAMES, ...intelligence, ...facts.officeReadToolNames];
     case "answer":
       return ["read", "grep", ...intelligence, ...attachments, ...(facts.skills.length ? ["alpha_skill_read"] : []), ...facts.officeReadToolNames];
-    case "coordinator":
+    case "coordinator": {
+      // §7: the node's access tier decides the tools; read-only nodes keep reads, checks and the web kernel only.
+      const writable = facts.nodeAccess !== "read-only";
       return [
-        "read", "grep", ...intelligence, "edit", "write",
-        ...attachments, ...profile.deliveryTools(direct),
+        "read", "grep", ...intelligence, ...(writable ? ["edit", "write"] : []),
+        ...attachments, ...(writable ? profile.deliveryTools(direct) : profile.deliveryTools(direct).filter(name => name === "alpha_check")),
         "alpha_search", "alpha_source", "alpha_crawl", "alpha_site",
-        ...(profile.commands ? ["alpha_command"] : []),
+        ...(writable && profile.commands ? ["alpha_command"] : []),
         ...(profile.dispatch && facts.canDispatch ? ["alpha_spawn", "alpha_continue", "alpha_worker_resolve", "alpha_inspect", "alpha_wait", "alpha_cancel", "alpha_integrate", "alpha_send", "alpha_inbox"] : []),
         "alpha_plan", "alpha_step", "alpha_gap", "alpha_gap_resolve", "alpha_expert_search", "alpha_capability_search", "alpha_capability_mcp", "alpha_expert_create", "alpha_expert_update", "alpha_expert_delete",
         "alpha_skill_read",
@@ -89,7 +98,39 @@ export function sessionToolNames(facts: SessionFacts): string[] {
         ...facts.mcpToolNames,
         "alpha_browser",
       ];
+    }
   }
+}
+
+/**
+ * What a downstream node sees of its upstream (§6.1): the task objective and plan graph plus the upstream nodes'
+ * handoff records and artifacts — never the upstream conversations, Skills or MCP.
+ */
+export function handoffSection(state: TaskState, node?: PlanNode): string[] {
+  if (!node) return [];
+  const nodes = state.cognition?.nodes ?? [];
+  const seen = new Set<string>();
+  const upstream: PlanNode[] = [];
+  const visit = (id: string): void => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    for (const parent of nodes.find(item => item.id === id)?.dependsOn ?? []) {
+      const target = nodes.find(item => item.id === parent);
+      if (target?.handoff) upstream.push(target);
+      visit(parent);
+    }
+  };
+  visit(node.id);
+  return upstream.map(item => {
+    const handoff = item.handoff!;
+    return [
+      `Upstream ${item.id} handoff (contract v${handoff.contractVersion}): ${handoff.note}`,
+      ...handoff.artifacts.map(artifact => `artifact ${artifact.path} (${artifact.kind}, sha256 ${artifact.hash.slice(0, 16)}…)`),
+      ...(handoff.findings ?? []).map(finding => `finding: ${finding.claim}（依据：${finding.source}）`),
+      ...(handoff.verdict ? [`gate verdict: ${handoff.verdict}`] : []),
+      ...(handoff.unresolved.length ? [`unresolved: ${handoff.unresolved.join("、")}`] : []),
+    ].join("\n");
+  });
 }
 
 export function cognitionSnapshot(state: TaskState): string {
@@ -102,7 +143,7 @@ export function cognitionSnapshot(state: TaskState): string {
     cognition?.scope?.length ? `Scope: ${bounded(cognition.scope.join("; "), 650)}` : "",
     cognition?.constraints?.length ? `Constraints: ${bounded(cognition.constraints.join("; "), 650)}` : "",
     cognition?.openQuestions?.length ? `Open questions: ${bounded(cognition.openQuestions.join("; "), 600)}` : "",
-    cognition?.steps.length ? `Steps: ${bounded(cognition.steps.map(step => `${step.id} [${step.mode}/${step.status}] ${step.objective}; needs ${step.dependsOn.join(",") || "none"}${step.statusReason ? `; result ${step.statusReason}` : ""}`).join(" | "), 1_500)}` : "",
+    cognition?.nodes.length ? `Plan nodes: ${bounded(cognition.nodes.map(node => `${node.id} [${node.phase}/${node.kind}/${node.status}] ${node.objective}; needs ${node.dependsOn.join(",") || "none"}${node.statusReason ? `; result ${node.statusReason}` : ""}`).join(" | "), 1_500)}` : "",
     cognition?.gaps.some(gap => !gap.resolvedAt) ? `Unresolved capability gaps: ${bounded(cognition.gaps.filter(gap => !gap.resolvedAt).map(gap => `${gap.kind}: ${gap.description}`).join(" | "), 650)}` : "",
     state.workerRequests?.some(item => ["open", "awaiting-approval", "uncertain"].includes(item.status)) ? `Worker requests: ${bounded(state.workerRequests.filter(item => ["open", "awaiting-approval", "uncertain"].includes(item.status)).map(item => `${item.id} [${item.status}/${item.kind}] agent ${item.agentId}; ${item.blockedStep}; approval ${item.approvalId ?? "none"}`).join(" | "), 1000)}` : "",
   ].filter(Boolean).join("\n");
@@ -128,13 +169,13 @@ export function workerSystemPrompt(order: WorkOrder, expert?: ExpertSnapshot): s
   if (expert) verifyExpertSnapshot(expert);
   return [
     ...roleThinkingInstructions("worker"),
-    ...(order.fullAccess && order.mode === "implement" ? [
+    ...(order.fullAccess && orderKind(order) === "execute" ? [
       "You are an isolated Alpha worker. Complete the assigned work order inside your Git worktree. You may read and edit any project file needed for the task. The coordinator reviews your actual changes before integration.",
       `Suggested coordination paths: ${[...new Set([...order.ownedPaths, ...(order.readPaths ?? [])])].join(", ") || "none"}. These are task hints, not access limits.`,
       "Edit existing files with edit and create new files with write. Run relevant checks. You have the same task-approved tools and external-operation approval policy as the coordinator. If a required service is unavailable, report it; do not substitute another service. Submit alpha_worker_result with concrete findings before ending.",
     ] : [
       "You are an isolated Alpha worker. Complete only the assigned work order in this project copy.",
-      order.mode === "review" || order.mode === "investigate" ? "This mode cannot modify project source. Report findings to the coordinator; request a new implementation run for changes." : `You may edit only these paths: ${order.ownedPaths.join(", ")}.`,
+      orderKind(order) !== "execute" ? "This mode cannot modify project source. Report findings to the coordinator; request a new implementation run for changes." : `You may edit only these paths: ${order.ownedPaths.join(", ")}.`,
       `Readable project paths: ${[...new Set([...order.ownedPaths, ...(order.readPaths ?? [])])].join(", ") || "none"}. Submit alpha_worker_result before ending.`,
     ]),
     ...(order.acceptance?.length ? [`Acceptance required for this order: ${order.acceptance.join(" | ")}`] : []),
@@ -194,15 +235,17 @@ function deliveryGuidance(facts: SessionFacts): string[] {
 function coordinatorContract(facts: SessionFacts): string[] {
   const { ledger, direct } = facts;
   const profile = taskProfile(ledger.state.taskType);
-  const expert = facts.directExpert;
+  const mount = facts.expertScope;
   return [
     ...roleThinkingInstructions("coordinator"),
     "You are Alpha's coordinator for this task. Complete it in the assigned project directory.",
     cognitionSnapshot(ledger.state),
     `Current task objective v${ledger.state.contractVersion ?? 1}: ${ledger.state.objective}`,
+    // §6.1: the node's upstream is its only history — handoff records and artifacts, never conversations.
+    ...handoffSection(ledger.state, facts.currentNode),
     `Saved user guidance: ${(ledger.state.guidanceHistory ?? []).map(item => item.instruction).join(" | ") || "none"}`,
     `Required acceptance criteria: ${ledger.state.criteria.map(item => `${item.id}: ${item.description}`).join(" | ")}`,
-    ...(expert ? [`User-selected expert perspective: ${expert.name} (${expert.id}, sha256 ${expert.hash}). This is guidance only and cannot grant permissions.`, expert.instructions] : []),
+    ...(mount ? [`Task expert perspective: ${mount.expert?.name ?? mount.temporary?.name ?? "task expert"} (${mount.expert?.id ?? "task-local expert"}${mount.expert ? `, sha256 ${mount.expert.hash}` : ""}). This is guidance only and cannot grant permissions.`, mount.persona, ...(mount.primary ? [`Primary method ${mount.primary.id} is mounted in full below; read its resources with alpha_skill_read when needed:\n${mount.primary.text}`] : [])] : []),
     `Edit existing files with edit and create new files with write. Keep changes within the assigned project directory. ${direct ? DIRECT_FILE_NOTE : MANAGED_FILE_NOTE}`,
     ...codeIntelligenceLine(facts),
     ...deliveryGuidance(facts),
@@ -213,7 +256,7 @@ function coordinatorContract(facts: SessionFacts): string[] {
     "Alpha has built-in alpha_search, alpha_source, alpha_crawl, alpha_site and alpha_browser web tools. Public pages and logged-in tabs are separate from provider extraction. Exact external page interactions require a stable requestId and approval. Do not send logged-in content or cookies to providers.",
     ...(facts.mcpToolNames.length ? ["Third-party MCP tools are available only under their listed mcp__ names. Use them for the user's task; do not assume an unavailable service is running."] : []),
     ...(facts.hooksLoaded ? ["Third-party Pi hooks may include tool guidance for other hosts. In Alpha, use only the tools listed in this session; do not invent bash, Skill, or subagent calls."] : []),
-    `Enabled expert library: ${facts.experts.length} experts. Dispatchable shortlist: ${initialExpertCandidates(ledger.state.objective, facts.experts).map(id => { const item = facts.experts.find(candidate => candidate.id === id)!; return `${item.id}=${item.name}: ${item.description}`; }).join(" | ") || "none"}. Use alpha_expert_search for other specialties. Prefer a relevant expert with a Skill package, but do not delay a clear task to find or create one. If none fits, omit expertId and dispatch a neutral worker with explicit acceptance criteria and source scope. Use alpha_plan for substantial development work. Dispatch by independent task, not by individual error. You own questions, review, integration and final acceptance.`,
+    `Enabled expert library: ${facts.experts.length} experts. Dispatchable shortlist: ${initialExpertCandidates(ledger.state.objective, facts.experts).map(id => { const item = facts.experts.find(candidate => candidate.id === id)!; return `${item.id}=${item.name}: ${item.description}`; }).join(" | ") || "none"}. Use alpha_expert_search for other specialties. Prefer a relevant expert with a Skill package, but do not delay a clear task to find or create one. If none fits, omit expertId and dispatch a neutral worker with explicit acceptance criteria and source scope. Every task plans first: record the plan with alpha_plan before acting — the runtime rejects other tool calls until a plan is recorded, and the alpha_plan result states whether the plan was auto-approved or waits for user review. Dispatch by independent task, not by individual error. You own questions, review, integration and final acceptance.`,
     "Use alpha_gap only for a diagnosed missing method, tool, permission or context. Installed compatible Skills can be assigned to work orders. Propose any external Skill before installation; never silently create an expert or change the task goal.",
     ...(profile.dispatch && facts.canDispatch ? ["Use alpha_spawn for independent task orders when parallel work helps. Each subagent has a stable identity, task role, cognition, session and Git worktree; expert and Skill snapshots are optional for a neutral worker. Give a precise brief, source scope and acceptance criteria. Use alpha_capability_search before binding a capability. Read alpha_inbox promptly; use alpha_worker_resolve on reported gaps to grant capabilities, answer, install an approved project dependency in that worker workspace, or reject. A message cannot approve a command. Use alpha_continue for other follow-ups. Inspect each result and diff before alpha_integrate. Investigate and review modes cannot edit source. The final build and acceptance belong to you."] : []),
     ...(ledger.state.contractVersion && ledger.state.contractVersion > 1 ? ["The user revised this task. Preserve earlier requirements unless explicitly superseded, and update alpha-verification.json so the browser checks the revised behavior, even if the existing app still builds."] : []),
@@ -241,7 +284,7 @@ function roleContract(facts: SessionFacts): string[] {
     case "planner":
       return [
         ...roleThinkingInstructions("coordinator"),
-        "You are planning the current Alpha task. Inspect the assigned project and available read-only web sources, ask for missing context when needed, and record a concrete plan with alpha_plan. Plan step mode must be investigate, implement, or review. Do not implement, run commands, alter project files, install capabilities, or interact with web page controls. Once alpha_plan succeeds, stop: the user has not approved the plan yet.",
+        "You are planning the current Alpha task. Inspect the assigned project and available read-only web sources, ask for missing context when needed, and record a concrete plan with alpha_plan. Every node fills one of the three stages (investigate, execute, review), states its expert decision with a reason, and says where it runs (host). Do not implement, run commands, alter project files, install capabilities, or interact with web page controls. Once alpha_plan succeeds, stop: the user has not approved the plan yet.",
         cognitionSnapshot(ledger.state),
         `${facts.direct ? DIRECT_FILE_NOTE : MANAGED_FILE_NOTE}`,
         ...codeIntelligenceLine(facts),

@@ -23,13 +23,33 @@ async function newTask(root: string, name = "project"): Promise<TaskLedger> {
   });
 }
 
+/**
+ * A ledger file from before the plan-graph vocabulary: `cognition.steps` carry `mode` and old statuses (§8 旧任务).
+ * The cast is deliberate — this is the JSON the old build wrote, before the fold normalizes it.
+ */
 function legacyState(id: string, projectRoot: string): TaskState {
   return {
     id, taskType: "code-change", objective: "Legacy task", contractVersion: 1, contractHistory: [], guidanceHistory: [],
-    cognition: { revision: 1, recipeVersion: 1, summary: "Legacy task", candidates: [], steps: [], gaps: [], amendments: [] },
+    cognition: {
+      revision: 1, recipeVersion: 1, summary: "Legacy task", candidates: [],
+      steps: [{ id: "fix-cart", objective: "Fix the cart rounding", mode: "implement", dependsOn: [], skillIds: [], status: "complete", statusReason: "verified" }],
+      gaps: [], amendments: [],
+    },
     projectRoot, criteria: [{ id: "check", description: "Configured checks pass", kind: "test" }], status: "stopped",
     phase: "execute", revision, evidence: [], runs: [], preview: null, lastFailure: "User cancelled",
     createdAt: "2026-09-20T08:00:00.000Z", updatedAt: "2026-09-20T09:00:00.000Z",
+  } as unknown as TaskState;
+}
+
+/** What the import folds that file into (§8 旧任务): the legacy `steps` come back as execute-stage nodes. */
+function importedState(id: string, projectRoot: string): TaskState {
+  return {
+    ...legacyState(id, projectRoot),
+    cognition: {
+      revision: 1, recipeVersion: 1, summary: "Legacy task", candidates: [],
+      nodes: [{ id: "fix-cart", kind: "execute", phase: "execute", objective: "Fix the cart rounding", dependsOn: [], expertDecision: { reason: "历史计划（旧格式步骤）" }, host: "coordinator", skillIds: [], status: "done", statusReason: "verified" }],
+      gaps: [], amendments: [],
+    },
   };
 }
 
@@ -48,11 +68,11 @@ test("every mutation appends an event and the fold reproduces the projection byt
 
     const events = await readEvents(taskLogDir(ledger.file));
     expect(events.map(event => event.type)).toEqual([
-      "task/created", "guidance/recorded", "failure/recorded", "run/ended", "status/changed", "status/changed",
+      "task/created", "graph/skeleton-created", "guidance/recorded", "failure/recorded", "run/ended", "status/changed", "status/changed",
     ]);
-    expect(events.map(event => event.seq)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(events.map(event => event.seq)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(events.every(event => event.actor === "runtime")).toBe(true);
-    expect(events[4].payload).toMatchObject({ status: "needs-input", question: "Approve `bun test`?", reason: "approval" });
+    expect(events[5].payload).toMatchObject({ status: "needs-input", question: "Approve `bun test`?", reason: "approval" });
 
     const folded = JSON.stringify(foldTask(events), null, 2);
     expect(folded).toBe(await readFile(ledger.file, "utf8"));
@@ -69,11 +89,11 @@ test("appends are sequence compare-and-swap: a stale writer is rejected, not sil
     const ledger = await newTask(root);
     const dir = taskLogDir(ledger.file);
     const draft = { at: "2026-09-28T10:00:00.000Z", actor: "runtime" as const, type: "failure/recorded" as const, payload: { reason: "Stale writer" } };
-    await appendEvent(dir, draft, 1);
-    const conflict = appendEvent(dir, draft, 1);
+    await appendEvent(dir, draft, 2);
+    const conflict = appendEvent(dir, draft, 2);
     await expect(conflict).rejects.toBeInstanceOf(EventConflictError);
-    expect((await readEvents(dir)).map(event => event.seq)).toEqual([1, 2]);
-    await expect(appendEvent(dir, draft, 5)).rejects.toThrow(/expected seq 5, found 2/);
+    expect((await readEvents(dir)).map(event => event.seq)).toEqual([1, 2, 3]);
+    await expect(appendEvent(dir, draft, 5)).rejects.toThrow(/expected seq 5, found 3/);
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
@@ -87,12 +107,12 @@ test("a retry after a conflict re-folds the winner's events instead of overwriti
     await first.recordGuidance("Written while the second handle was stale");
     await second.recordGuidance("Written after re-folding");
     const events = await readEvents(taskLogDir(first.file));
-    expect(events.map(event => event.seq)).toEqual([1, 2, 3]);
+    expect(events.map(event => event.seq)).toEqual([1, 2, 3, 4]);
     const reloaded = await TaskLedger.load(first.file);
     expect(reloaded.state.guidanceHistory?.map(item => item.instruction)).toEqual([
       "Written while the second handle was stale", "Written after re-folding",
     ]);
-    expect(reloaded.eventSeq).toBe(3);
+    expect(reloaded.eventSeq).toBe(4);
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
@@ -103,14 +123,14 @@ test("a torn trailing line is truncated on the next append and never folded", as
   try {
     const ledger = await newTask(root);
     const dir = taskLogDir(ledger.file);
-    await appendFile(eventLogPath(dir), '{"seq":2,"at":"2026-09-28T10:00:00.000Z","actor":"runtime","type":"fail');
+    await appendFile(eventLogPath(dir), '{"seq":3,"at":"2026-09-28T10:00:00.000Z","actor":"runtime","type":"fail');
     const tail = await inspectLogTail(dir);
     expect(tail.torn).toBe(true);
-    expect(tail.seq).toBe(1);
-    expect((await readEvents(dir)).map(event => event.seq)).toEqual([1]);
+    expect(tail.seq).toBe(2);
+    expect((await readEvents(dir)).map(event => event.seq)).toEqual([1, 2]);
     await ledger.recordFailure("Appended after the torn line was dropped");
     const events = await readEvents(dir);
-    expect(events.map(event => event.seq)).toEqual([1, 2]);
+    expect(events.map(event => event.seq)).toEqual([1, 2, 3]);
     expect(foldTask(events).lastFailure).toBe("Appended after the torn line was dropped");
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
@@ -137,7 +157,7 @@ test("a snapshot shortens the fold and older snapshots are pruned", async () => 
     await ledger.recordFailure("failure 5");
     const reloaded = await TaskLedger.load(ledger.file);
     expect(reloaded.state.lastFailure).toBe("failure 5");
-    expect(reloaded.eventSeq).toBe(7);
+    expect(reloaded.eventSeq).toBe(8);
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
@@ -159,7 +179,11 @@ test("a pre-event-log ledger is imported once, without rewriting the JSON file",
 
     const events = await readEvents(taskLogDir(file));
     expect(events.map(event => [event.seq, event.type])).toEqual([[1, "task/imported"]]);
-    expect(foldTask(events)).toEqual(legacyState(id, join(root, "project")));
+    const folded = foldTask(events);
+    expect(folded).toEqual(importedState(id, join(root, "project")));
+    // The fold reads the file's legacy `steps` back as execute-stage nodes with the old statuses mapped (§8).
+    expect(folded.cognition?.nodes.map(node => [node.kind, node.phase])).toEqual([["execute", "execute"]]);
+    expect(folded.cognition && "steps" in folded.cognition).toBe(false);
 
     await ledger.resume("Continue after the import");
     expect(ledger.state.status).toBe("active");
@@ -200,17 +224,17 @@ test("the transition table rejects changes no event may cause", async () => {
     const ledger = await newTask(root);
     const events = await readEvents(taskLogDir(ledger.file));
     const at = "2026-09-28T10:00:00.000Z";
-    const toPlan = { seq: 2, at, actor: "runtime" as const, type: "phase/changed" as const, payload: { phase: "plan" as const, clearPause: false } };
+    const toPlan = { seq: 3, at, actor: "runtime" as const, type: "phase/changed" as const, payload: { phase: "plan" as const, clearPause: false } };
     expect(foldTask([...events, toPlan]).phase).toBe("plan");
     // Only an approved plan may start execution, so a hand-written phase event is refused by the table.
-    expect(codeOf(() => foldTask([...events, toPlan, { ...toPlan, seq: 3, payload: { phase: "execute" as const, clearPause: false } }]))).toBe("transition/phase-not-allowed");
+    expect(codeOf(() => foldTask([...events, toPlan, { ...toPlan, seq: 4, payload: { phase: "execute" as const, clearPause: false } }]))).toBe("transition/phase-not-allowed");
 
-    const stopped = { seq: 2, at, actor: "runtime" as const, type: "status/changed" as const, payload: { status: "stopped" as const, reason: "no-progress" as const, detail: "three runs added no evidence" } };
+    const stopped = { seq: 3, at, actor: "runtime" as const, type: "status/changed" as const, payload: { status: "stopped" as const, reason: "no-progress" as const, detail: "three runs added no evidence" } };
     const stoppedState = foldTask([...events, stopped]);
     expect(stoppedState.status).toBe("stopped");
     expect(stoppedState.stop).toEqual({ reason: "no-progress", detail: "three runs added no evidence", stoppedAt: at });
     // A stopped task cannot pause: the reducer's own guard fires before the table is consulted.
-    expect(codeOf(() => foldTask([...events, stopped, { ...stopped, seq: 3, payload: { status: "needs-input" as const, question: "Approve?", reason: "approval" as const } }]))).toBe("apply/task-not-active");
+    expect(codeOf(() => foldTask([...events, stopped, { ...stopped, seq: 4, payload: { status: "needs-input" as const, question: "Approve?", reason: "approval" as const } }]))).toBe("apply/task-not-active");
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
@@ -226,7 +250,7 @@ test("two processes appending to one task lose nothing", async () => {
     for (const result of results) expect([result.exitCode, result.stderr]).toEqual([0, ""]);
 
     const events = await readEvents(taskLogDir(ledger.file));
-    expect(events.length).toBe(201);
+    expect(events.length).toBe(202);
     expect(events.map(event => event.seq)).toEqual(events.map((_event, index) => index + 1));
     const reloaded = await TaskLedger.load(ledger.file);
     const reasons = (reloaded.state.runs ?? []).map(run => run.failureReason ?? "");
@@ -244,14 +268,14 @@ test("the log snapshots itself periodically and loads from the snapshot", async 
     const ledger = await newTask(root);
     for (let index = 0; index < SNAPSHOT_INTERVAL; index++) await ledger.recordFailure(`failure ${index}`);
     const dir = taskLogDir(ledger.file);
-    expect(ledger.eventSeq).toBe(SNAPSHOT_INTERVAL + 1);
+    expect(ledger.eventSeq).toBe(SNAPSHOT_INTERVAL + 2);
     expect((await readdir(dir)).filter(name => name.startsWith("snapshot."))).toEqual([`snapshot.${SNAPSHOT_INTERVAL}.json`]);
     expect((await latestSnapshot(dir))?.seq).toBe(SNAPSHOT_INTERVAL);
 
     const reloaded = await TaskLedger.load(ledger.file);
     expect(reloaded.state).toEqual(ledger.state);
     expect(reloaded.state.lastFailure).toBe(`failure ${SNAPSHOT_INTERVAL - 1}`);
-    expect(reloaded.eventSeq).toBe(SNAPSHOT_INTERVAL + 1);
+    expect(reloaded.eventSeq).toBe(SNAPSHOT_INTERVAL + 2);
 
     // Snapshots are caches: without one the fold replays the whole log to the same state.
     await rm(join(dir, `snapshot.${SNAPSHOT_INTERVAL}.json`));
@@ -274,7 +298,7 @@ test("a lock left by a dead process is taken over instead of blocking the task",
     await ledger.recordFailure("Written after the dead owner's lock was taken over");
     expect(ledger.state.lastFailure).toBe("Written after the dead owner's lock was taken over");
     expect((await readdir(dir)).filter(name => name.endsWith(".lock"))).toEqual([]);
-    expect((await readEvents(dir)).map(event => event.seq)).toEqual([1, 2]);
+    expect((await readEvents(dir)).map(event => event.seq)).toEqual([1, 2, 3]);
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }

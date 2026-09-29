@@ -14,6 +14,7 @@ import { ExpertStore } from "../src/runtime/experts";
 import { createCognitionTools } from "../src/runtime/cognition-tool";
 import { createWorkerCapabilityTool } from "../src/runtime/worker-capability-tool";
 import { createWorkerResultTool } from "../src/runtime/worker-result-tool";
+import { recordApprovedPlan } from "./support/approved-plan";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "alpha-cvm-"));
@@ -27,9 +28,10 @@ async function fixture() {
 test("review and capability gaps gate completion against the current contract and source", async () => {
   const { root, projectRoot, ledger } = await fixture();
   try {
+    await recordApprovedPlan(ledger);
     await ledger.enableDevelopmentWorkflow();
     await ledger.recordEvidence({ criterionId: "build", kind: "build", revision: ledger.state.revision!, passed: true, source: "actual-build-log" });
-    await expect(ledger.complete()).rejects.toThrow("development-review");
+    await expect(ledger.complete()).rejects.toThrow("gate");
     await ledger.recordCapabilityGap("method", "Need an accessibility testing method");
     await ledger.recordDevelopmentReview({ verdict: "pass", findings: [], instanceId: "review-1" });
     expect(ledger.completionGaps()).toContain("capability-gap");
@@ -37,35 +39,37 @@ test("review and capability gaps gate completion against the current contract an
     expect(ledger.completionGaps()).toEqual([]);
     await writeFile(join(projectRoot, "app.ts"), "export const value = 2;\n");
     await ledger.refreshRevision();
-    expect(ledger.completionGaps()).toEqual(expect.arrayContaining(["build", "development-review"]));
+    expect(ledger.completionGaps()).toEqual(expect.arrayContaining(["build", "gate"]));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("cognition rejects dependency cycles and keeps dispatched expert snapshots", async () => {
   const { root, ledger } = await fixture();
   try {
-    await ledger.reviseCognition({ summary: "Change then review", reason: "Analysis", scope: ["app.ts"], constraints: ["Keep existing API"], openQuestions: ["Check callers"], candidates: [], steps: [
-      { id: "change", objective: "Change app", mode: "implement", dependsOn: [], skillIds: [], status: "planned" },
-      { id: "check", objective: "Review app", mode: "review", dependsOn: ["change"], skillIds: [], status: "planned" },
+    await ledger.reviseCognition({ summary: "Change then review", reason: "Analysis", scope: ["app.ts"], constraints: ["Keep existing API"], openQuestions: ["Check callers"], candidates: [], nodes: [
+      { id: "scan", objective: "Scan app", kind: "investigate", phase: "investigate", dependsOn: [], expertDecision: { reason: "the coordinator scans itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "change", objective: "Change app", kind: "execute", phase: "execute", dependsOn: ["scan"], expertDecision: { reason: "the coordinator changes it itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "check", objective: "Review app", kind: "review", phase: "review", dependsOn: ["change"], expertDecision: { reason: "the coordinator reviews itself" }, host: "coordinator", skillIds: [], status: "planned" },
     ] });
-    await expect(ledger.reviseCognition({ summary: "Cycle", reason: "Invalid", candidates: [], steps: [
-      { id: "change", objective: "Change", mode: "implement", dependsOn: ["check"], skillIds: [], status: "planned" },
-      { id: "check", objective: "Review", mode: "review", dependsOn: ["change"], skillIds: [], status: "planned" },
+    await expect(ledger.reviseCognition({ summary: "Cycle", reason: "Invalid", candidates: [], nodes: [
+      { id: "change", objective: "Change", kind: "execute", phase: "execute", dependsOn: ["check"], expertDecision: { reason: "the coordinator changes it itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "check", objective: "Review", kind: "review", phase: "review", dependsOn: ["change"], expertDecision: { reason: "the coordinator reviews itself" }, host: "coordinator", skillIds: [], status: "planned" },
     ] })).rejects.toThrow("循环依赖");
-    await ledger.recordDispatch({ id: "instance-1", orderId: "change", mode: "implement", expert: { id: "expert-a", name: "Expert A", hash: "abc" }, skills: [{ id: "plugin:skill", hash: "123", revision: "rev" }] });
+    await ledger.recordDispatch({ id: "instance-1", orderId: "change", kind: "execute", expert: { id: "expert-a", name: "Expert A", hash: "abc" }, skills: [{ id: "plugin:skill", hash: "123", revision: "rev" }] });
     await ledger.finishDispatch("instance-1", "completed");
-    await ledger.reviseCognition({ summary: "Change complete, add inspection", reason: "Implementation returned", candidates: [], steps: [
-      { id: "change", objective: "Change app", mode: "implement", dependsOn: [], skillIds: [], status: "planned" },
-      { id: "inspect", objective: "Inspect result", mode: "review", dependsOn: ["change"], skillIds: [], status: "planned" },
+    await ledger.reviseCognition({ summary: "Change complete, add inspection", reason: "Implementation returned", candidates: [], nodes: [
+      { id: "scan", objective: "Scan app", kind: "investigate", phase: "investigate", dependsOn: [], expertDecision: { reason: "the coordinator scans itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "change", objective: "Change app", kind: "execute", phase: "execute", dependsOn: ["scan"], expertDecision: { reason: "the coordinator changes it itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "inspect", objective: "Inspect result", kind: "review", phase: "review", dependsOn: ["change"], expertDecision: { reason: "the coordinator inspects itself" }, host: "coordinator", skillIds: [], status: "planned" },
     ] });
-    expect(ledger.state.cognition?.steps[0].status).toBe("complete");
+    expect(ledger.state.cognition?.nodes.find(node => node.id === "change")!.status).toBe("done");
     expect(ledger.state.cognition?.constraints).toEqual(["Keep existing API"]);
     expect(ledger.state.cognition?.openQuestions).toEqual(["Check callers"]);
-    await expect(ledger.reviseCognition({ summary: "Rewrite old work", reason: "Invalid", candidates: [], steps: [
-      { id: "change", objective: "Different change", mode: "implement", dependsOn: [], skillIds: [], status: "planned" },
+    await expect(ledger.reviseCognition({ summary: "Rewrite old work", reason: "Invalid", candidates: [], nodes: [
+      { id: "change", objective: "Different change", kind: "execute", phase: "execute", dependsOn: [], expertDecision: { reason: "the coordinator changes it itself" }, host: "coordinator", skillIds: [], status: "planned" },
     ] })).rejects.toThrow("不可改写");
     const restored = await TaskLedger.load(ledger.file);
-    expect(restored.state.cognition?.steps[0].status).toBe("complete");
+    expect(restored.state.cognition?.nodes.find(node => node.id === "change")!.status).toBe("done");
     expect(restored.state.cognition?.instances?.[0]).toMatchObject({ expert: { id: "expert-a", hash: "abc" }, skills: [{ id: "plugin:skill", hash: "123" }], status: "completed" });
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -76,11 +80,15 @@ test("a newly created expert can be selected in the same task turn", async () =>
     const dataRoot = join(root, "state");
     const [plan] = createCognitionTools(ledger, dataRoot);
     const expert = await new ExpertStore(dataRoot).create({ name: "代码审查", description: "检查代码差异", instructions: "检查具体缺陷。", skillIds: [] });
-    const result = await plan.execute("plan", { summary: "Use a reviewer", reason: "User requested review", candidates: [expert.id], steps: [{ id: "review", objective: "Check changes", mode: "review", dependsOn: [], expertId: expert.id, skillIds: [] }] }, undefined, undefined as never);
+    const result = await plan.execute("plan", { summary: "Use a reviewer", reason: "User requested review", candidates: [expert.id], nodes: [
+      { id: "scan", objective: "Check the changes", kind: "investigate", phase: "investigate", dependsOn: [], host: "coordinator", expertDecision: { reason: "the coordinator checks itself" }, skillIds: [] },
+      { id: "work", objective: "Apply the changes", kind: "execute", phase: "execute", dependsOn: ["scan"], host: "coordinator", expertDecision: { reason: "the coordinator applies them itself" }, skillIds: [] },
+      { id: "review", objective: "Check changes", kind: "review", phase: "review", dependsOn: ["work"], host: "coordinator", expertDecision: { expertId: expert.id, reason: "User requested review" }, gateRole: "code-review", skillIds: [] },
+    ] }, undefined, undefined as never);
     expect(result.isError).toBeUndefined();
     expect(ledger.state.cognition?.candidates).toEqual([expert.id]);
     await new ExpertStore(dataRoot).setEnabled(expert.id, false);
-    const disabled = await plan.execute("plan", { summary: "Use disabled reviewer", reason: "Invalid", candidates: [expert.id], steps: [] }, undefined, undefined as never);
+    const disabled = await plan.execute("plan", { summary: "Use disabled reviewer", reason: "Invalid", candidates: [expert.id], nodes: [] }, undefined, undefined as never);
     expect(disabled.isError).toBe(true);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -93,15 +101,23 @@ test("a user-designated expert stays in the plan and must actually participate",
     const ledger = await TaskLedger.create(join(root, "state"), { objective: "Review app", projectRoot, taskType: "code-change", designatedExpertId: "expert-chosen", criteria: [{ id: "check", description: "Check", kind: "test" }] });
     await ledger.setInitialCandidates([]);
     expect(ledger.state.cognition?.candidates).toEqual(["expert-chosen"]);
-    await expect(ledger.reviseCognition({ summary: "New plan", reason: "Model suggestion", candidates: [], steps: [] })).rejects.toThrow("用户指定专家");
-    await ledger.reviseCognition({ summary: "Use selected expert", reason: "User selection", candidates: ["expert-chosen"], steps: [{ id: "review", objective: "Review app", mode: "review", dependsOn: [], expertId: "expert-chosen", skillIds: [], status: "planned" }] });
+    await expect(ledger.reviseCognition({ summary: "New plan", reason: "Model suggestion", candidates: [], nodes: [] })).rejects.toThrow("用户指定专家");
+    await ledger.reviseCognition({ summary: "Use selected expert", reason: "User selection", candidates: ["expert-chosen"], nodes: [
+      { id: "scan", objective: "Scan app", kind: "investigate", phase: "investigate", dependsOn: [], expertDecision: { reason: "the coordinator scans itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "build", objective: "Prepare review material", kind: "execute", phase: "execute", dependsOn: ["scan"], expertDecision: { reason: "the coordinator prepares it itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "review", objective: "Review app", kind: "review", phase: "review", dependsOn: ["build"], expertDecision: { expertId: "expert-chosen", reason: "User selection" }, host: "coordinator", skillIds: [], status: "planned" },
+    ] });
+    await ledger.enterNode({ nodeId: "scan", host: "coordinator", runId: "run-1" });
+    await ledger.exitNode({ nodeId: "scan", runId: "run-1", artifacts: [], findings: [{ claim: "App scanned", source: "app.ts" }], note: "Scanned the app", unresolved: [] });
+    await ledger.enterNode({ nodeId: "build", host: "coordinator", runId: "run-1" });
+    await ledger.exitNode({ nodeId: "build", runId: "run-1", artifacts: [], note: "Prepared the review material", unresolved: [] });
     await ledger.recordEvidence({ criterionId: "check", kind: "test", revision: ledger.state.revision!, passed: true, source: "check.log" });
-    expect(ledger.completionGaps()).toContain("designated-expert");
-    await ledger.recordDispatch({ id: "instance-1", orderId: "review", mode: "review", expert: { id: "expert-chosen", name: "Chosen", hash: "snapshot" }, skills: [] });
+    expect(ledger.completionGaps()).toContain("plan-graph");
+    await ledger.recordDispatch({ id: "instance-1", orderId: "review", kind: "review", expert: { id: "expert-chosen", name: "Chosen", hash: "snapshot" }, skills: [] });
     await ledger.finishDispatch("instance-1", "completed");
     expect(ledger.completionGaps()).toEqual([]);
     await ledger.reviseObjective("Review app and update contract");
-    expect(ledger.completionGaps()).toContain("designated-expert");
+    expect(ledger.completionGaps()).toContain("plan-graph");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -119,7 +135,7 @@ test("general work takes the designated expert's perspective without waiting for
 test("neutral read-only work succeeds without edits; reviewer file access is limited", async () => {
   const { root, projectRoot, ledger } = await fixture();
   try {
-    const [order] = bindWorkOrders([{ id: "inspect", objective: "Inspect app", mode: "investigate", ownedPaths: [], resources: [] }], []);
+    const [order] = await bindWorkOrders([{ id: "inspect", objective: "Inspect app", kind: "investigate", ownedPaths: [], resources: [] }], [], [], join(root, "state"));
     expect(order.expert).toBeUndefined();
     const report = await executeWorkOrders({ projectRoot, dataRoot: join(root, "state"), taskId: ledger.state.id, baseRevision: ledger.state.revision!, orders: [order], async runWorker() { return { status: "completed", findings: ["app.ts exports value"], evidence: ["read app.ts"], unresolved: [] }; } });
     expect(report.status).toBe("merged");
@@ -140,7 +156,7 @@ test("review orders can inspect project source but cannot read secrets or write"
   try {
     await writeFile(join(projectRoot, "app.test.ts"), "test source\n");
     await writeFile(join(projectRoot, ".env"), "secret\n");
-    const [order] = bindWorkOrders([{ id: "review", objective: "Review app", mode: "review", ownedPaths: [], readPaths: ["app.ts"], resources: [] }], []);
+    const [order] = await bindWorkOrders([{ id: "review", objective: "Review app", kind: "review", ownedPaths: [], readPaths: ["app.ts"], resources: [] }], [], [], join(root, "state"));
     expect(order.readPaths).toContain(".");
     await checkFileToolCall("read", { path: "app.test.ts" }, projectRoot, order, [], true);
     await expect(checkFileToolCall("read", { path: ".env" }, projectRoot, order, [], true)).rejects.toThrow("protected file");
@@ -156,7 +172,7 @@ test("worker capability requests are persisted and prevent a false completed res
     expect(result.isError).toBeUndefined();
     const restored = await TaskLedger.load(ledger.file);
     expect(restored.state.workerOutcome?.requests).toMatchObject([{ capability: "browser" }]);
-    const order = { id: "inspect", objective: "Inspect", mode: "review" as const, ownedPaths: [], resources: [] };
+    const order = { id: "inspect", objective: "Inspect", kind: "review" as const, ownedPaths: [], resources: [] };
     const submit = await createWorkerResultTool(restored, order).execute("result", { status: "completed", findings: [], reviewVerdict: "pass" }, undefined, undefined as never);
     expect(submit.isError).toBe(true);
     expect(restored.state.workerOutcome?.status).toBe("needs-context");
@@ -168,7 +184,7 @@ test("worker reads only owned or explicitly assigned source paths", async () => 
   try {
     await writeFile(join(projectRoot, "app.test.ts"), "test source\n");
     await writeFile(join(projectRoot, "private.ts"), "private source\n");
-    const order = { id: "edit", objective: "Edit app", mode: "implement" as const, ownedPaths: ["app.ts"], readPaths: ["app.test.ts"], resources: [] };
+    const order = { id: "edit", objective: "Edit app", kind: "execute" as const, ownedPaths: ["app.ts"], readPaths: ["app.test.ts"], resources: [] };
     await checkFileToolCall("read", { path: "app.ts" }, projectRoot, order);
     await checkFileToolCall("grep", { path: "app.test.ts", pattern: "test" }, projectRoot, order);
     const reads: string[] = [];
@@ -188,9 +204,9 @@ test("selected Skill requirements are checked against worker mode", async () => 
     const filePath = join(directory, "SKILL.md");
     await writeFile(filePath, "---\nname: sample\nrequires-tools: [edit]\n---\nUse edit.\n");
     const skill = { name: "pack:sample", description: "Sample", filePath, baseDir: directory, source: "test" };
-    const order = { id: "inspect", objective: "Review", mode: "review" as const, ownedPaths: [], resources: [], skillIds: [skill.name] };
+    const order = { id: "inspect", objective: "Review", kind: "review" as const, ownedPaths: [], resources: [], skillIds: [skill.name] };
     await expect(validateSkillBindings([order], [skill])).rejects.toThrow("未获此工具");
-    await validateSkillBindings([{ ...order, mode: "implement", ownedPaths: ["app.ts"] }], [skill]);
+    await validateSkillBindings([{ ...order, kind: "execute", ownedPaths: ["app.ts"] }], [skill]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -242,7 +258,8 @@ test("a stale ledger handle re-folds instead of overwriting another operation's 
     await stale.recordGuidance("stale guidance");
     expect((await TaskLedger.load(ledger.file)).state.guidanceHistory?.map(item => item.instruction)).toEqual(["first guidance", "stale guidance"]);
     expect(stale.state.guidanceHistory?.map(item => item.instruction)).toEqual(["first guidance", "stale guidance"]);
-    expect(stale.eventSeq).toBe(3);
+    // The stale handle re-folded up to the log's end; the absolute count is wiring, the equality is the contract.
+    expect(stale.eventSeq).toBe((await TaskLedger.load(ledger.file)).eventSeq);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

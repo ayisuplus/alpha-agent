@@ -3,13 +3,14 @@ import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
 import { ExpertStore } from "./experts";
 import { SkillPluginStore } from "../plugins/third-party";
 import { searchExpertCandidates } from "./expert-selection";
+import type { TaskLedger } from "./task-ledger";
 
 const fields = { name: "string", description: "string", instructions: "string", skillIds: "string[]" } as const;
 const createParameters = type(fields);
 const updateParameters = type({ id: "string", ...fields });
 const deleteParameters = type({ id: "string" });
 
-export function createExpertTools(store: ExpertStore, plugins: SkillPluginStore): Array<CustomTool<any>> {
+export function createExpertTools(store: ExpertStore, plugins: SkillPluginStore, ledger: TaskLedger): Array<CustomTool<any>> {
   const check = async (ids: string[], expertId?: string) => {
     const bundled = expertId ? (await store.get(expertId)).package?.skills.map(item => item.id) ?? [] : [];
     const available = new Set([...(await plugins.loadSkills()).map(item => item.name), ...bundled]);
@@ -30,12 +31,15 @@ export function createExpertTools(store: ExpertStore, plugins: SkillPluginStore)
       },
     },
     {
-      name: "alpha_expert_create", label: "Create expert", loadMode: "essential",
-      description: "Use only when the user explicitly asks to create an expert. Do not silently create one because a task lacks expertise.",
+      name: "alpha_expert_create", label: "Propose expert", loadMode: "essential",
+      description: "Propose an expert for the library — for a task-local expert worth keeping, or when the user explicitly asks for one. The proposal is recorded and the user approves before it enters the library (§4.3); until then the task keeps using the expert locally.",
       parameters: createParameters,
       async execute(_id, args) {
-        try { await check(args.skillIds); const expert = await store.create(args); return { content: [{ type: "text", text: `专家 ${expert.name} 已创建 (${expert.id})。后续计划可选择此专家。` }] }; }
-        catch (error) { return fail(error); }
+        try {
+          await check(args.skillIds);
+          const id = await ledger.proposeTemporaryExpert({ name: args.name, description: args.description, instructions: args.instructions, skillIds: args.skillIds });
+          return { content: [{ type: "text", text: `专家提案 ${id} 已记录（${args.name}）；用户批准后才入库，本轮先按任务内专家使用。` }] };
+        } catch (error) { return fail(error); }
       },
     },
     {

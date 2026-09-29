@@ -5,6 +5,7 @@ import { approvalReducers } from "./apply/approval";
 import { contextReducers } from "./apply/context";
 import { contractReducers } from "./apply/contract";
 import { evidenceReducers } from "./apply/evidence";
+import { graphReducers } from "./apply/graph";
 import { lifecycleReducers } from "./apply/lifecycle";
 import { planReducers } from "./apply/plan";
 import { mailboxReducers } from "./apply/mailbox";
@@ -22,6 +23,7 @@ const reducers = {
   ...contextReducers,
   ...contractReducers,
   ...evidenceReducers,
+  ...graphReducers,
   ...lifecycleReducers,
   ...mailboxReducers,
   ...operationReducers,

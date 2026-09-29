@@ -6,6 +6,7 @@ import { join, relative } from "node:path";
 import { createDocument } from "../src/runtime/document-tool";
 import { createGeneralWorkspace, recordAnswerCompliance, verifyGeneralDeliverable } from "../src/runtime/general-work";
 import { requestedOutput } from "../src/runtime/requested-output";
+import { recordApprovedPlan } from "./support/approved-plan";
 
 test("file-work keeps input and artifact hashes and completes without a web preview", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-general-file-"));
@@ -13,6 +14,7 @@ test("file-work keeps input and artifact hashes and completes without a web prev
   const dataRoot = join(root, "data");
   await mkdir(productsRoot);
   const ledger = await createGeneralWorkspace({ taskType: "file-work", objective: "Make a report", productsRoot, dataRoot, files: [{ name: "notes.txt", mimeType: "text/plain", bytes: new TextEncoder().encode("input") }] });
+  await recordApprovedPlan(ledger);
   const document = await createDocument(ledger.state.projectRoot, dataRoot, ledger.state.id, "docx", "report", "Report", "From input");
   await writeFile(join(ledger.state.projectRoot, "alpha-deliverable.json"), JSON.stringify({ outputs: [{ path: relative(ledger.state.projectRoot, document.path).replaceAll("\\", "/") }] }));
   await ledger.refreshRevision();
@@ -32,6 +34,7 @@ test("research validates supplied citations and permits local-only material", as
   const dataRoot = join(root, "data");
   await mkdir(productsRoot);
   const ledger = await createGeneralWorkspace({ taskType: "research", objective: "Investigate", productsRoot, dataRoot, files: [{ name: "input.txt", mimeType: "text/plain", bytes: new TextEncoder().encode("original") }] });
+  await recordApprovedPlan(ledger);
   await writeFile(join(ledger.state.projectRoot, "outputs", "report.md"), "Report");
   await writeFile(join(ledger.state.projectRoot, "alpha-deliverable.json"), JSON.stringify({ outputs: [{ path: "outputs/report.md", sourceIds: ["missing"] }] }));
   await ledger.refreshRevision();
@@ -45,6 +48,7 @@ test("research validates supplied citations and permits local-only material", as
   expect(ledger.state.status).toBe("complete");
 
   const local = await createGeneralWorkspace({ taskType: "research", objective: "Summarize local notes", productsRoot, dataRoot, files: [{ name: "notes.txt", mimeType: "text/plain", bytes: new TextEncoder().encode("local") }] });
+  await recordApprovedPlan(local);
   await writeFile(join(local.state.projectRoot, "outputs", "summary.csv"), "finding,source\nlocal,notes.txt\n");
   await writeFile(join(local.state.projectRoot, "alpha-deliverable.json"), JSON.stringify({ outputs: [{ path: "outputs/summary.csv" }] }));
   await local.refreshRevision();
@@ -96,6 +100,7 @@ test("a deliverable text output may not use what the objective forbids", async (
   const dataRoot = join(root, "data");
   await mkdir(productsRoot);
   const ledger = await createGeneralWorkspace({ taskType: "file-work", objective: "写一份推广文案。禁止出现“全网最低价”。", productsRoot, dataRoot });
+  await recordApprovedPlan(ledger);
   await writeFile(join(ledger.state.projectRoot, "outputs", "copy.md"), "全网最低价，快来抢购");
   await writeFile(join(ledger.state.projectRoot, "alpha-deliverable.json"), JSON.stringify({ outputs: [{ path: "outputs/copy.md" }] }));
   await ledger.refreshRevision();

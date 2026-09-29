@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import { criterionState, describeStep, parseFailure } from "../state/evidence";
 import { criterionLabel, failureHeadline, formatDateTime, pauseActionLabel, pauseReasonLabel, phaseInfo, reopenText, stopReasonLabel, taskStatus, taskTitle } from "../state/labels";
 import { notify, openDetail, openSettings, setGoalContinuation, setTaskModel, showPreview, store, syncSelected } from "../state/workbench";
+import { PlanGraph } from "./PlanGraph";
 import { TaskAutomationPanel } from "./TaskAutomationPanel";
 import { useStore } from "../state/store";
 import { ModelPicker, shortModel } from "./ModelPicker";
@@ -108,8 +109,8 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
   const criteria = [...task.criteria.map(item => item.id).filter(id => id !== "local-preview"), ...(!task.taskType || task.taskType === "web-product" ? ["local-preview"] : []), ...(task.development?.enabled ? ["development-review"] : []), ...(task.designatedExpertId ? ["designated-expert"] : []), ...(task.cognition?.gaps.some(gap => !gap.resolvedAt) ? ["capability-gap"] : [])];
   const history = [...(task.contractHistory ?? [])].sort((a, b) => b.version - a.version);
   const proposals = task.cognition?.skillProposals?.filter(item => item.status === "pending") ?? [];
-  const steps = task.cognition?.steps ?? [];
-  const completedSteps = steps.filter(step => step.status === "complete").length;
+  const nodes = task.cognition?.nodes ?? [];
+  const completedSteps = nodes.filter(node => node.status === "done").length;
   const usedCalls = (task.runs ?? []).reduce((sum, run) => sum + run.toolCalls, 0);
   const usedMinutes = Math.floor((task.runs ?? []).reduce((sum, run) => sum + run.elapsedMs, 0) / 60_000);
   const workerModels = new Map((task.runs ?? []).filter(run => run.instanceId).map(run => [run.instanceId, run.model]));
@@ -146,7 +147,7 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
     <div className="thread-meta" aria-label="认知运行状态">
       <span>阶段：{planningState}</span>
       <span>{task.planApproval ? `已批准计划 v${task.planApproval.cognitionRevision}` : task.phase === "plan-review" ? `待审计划 v${task.cognition?.revision ?? 0}` : "计划未批准"}</span>
-      <span>待办 {completedSteps}/{steps.length}</span>
+      <span>待办 {completedSteps}/{nodes.length}</span>
       {task.goal?.budget && <span>预算 {usedCalls}/{task.goal.budget.maxTotalToolCalls} 次工具调用 · {usedMinutes}/{Math.ceil(task.goal.budget.totalWallTimeMs / 60_000)} 分钟</span>}
       {task.status !== "complete" && <label><input type="checkbox" checked={!!task.goal?.enabled} disabled={busy} onChange={event => void setGoalContinuation(event.target.checked)} /> 持续推进</label>}
       {task.goal?.stopReason && <span>停止原因：{task.goal.stopReason}</span>}
@@ -185,10 +186,10 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
       {!!task.cognition.constraints?.length && <p>约束：{task.cognition.constraints.join("；")}</p>}
       {!!task.cognition.openQuestions?.length && <p>待澄清：{task.cognition.openQuestions.join("；")}</p>}
       {!!task.cognition.candidates.length && <p>候选专家：{task.cognition.candidates.join("、")}（按需派发）</p>}
-      {!!steps.length && <ol aria-label="任务待办">{steps.map(step => <li key={step.id}><strong>{step.id}</strong> · {step.objective} · {step.mode} · {step.status}{step.dependsOn.length ? ` · 依赖 ${step.dependsOn.join("、")}` : ""}{step.expertId ? ` · 专家 ${step.expertId}` : ""}{step.statusReason ? ` · ${step.statusReason}` : ""}</li>)}</ol>}
+      <PlanGraph nodes={nodes} />
       {!!task.cognition.amendments.length && <details><summary>分工调整记录</summary><ul>{task.cognition.amendments.map(item => <li key={item.revision}>v{item.revision} · {item.reason}</li>)}</ul></details>}
       {!!task.cognition.agents?.length && <div><strong>子代理 · {task.cognition.agents.length} 个稳定身份</strong><ul>{task.cognition.agents.map(agent => <li key={agent.id}>
-        <strong>{agent.expert?.name ?? "通用执行"}</strong> · {agent.mode} · {agent.status} · ID {agent.id.slice(0, 8)} · {agent.skillIds.join("、")}
+        <strong>{agent.expert?.name ?? "通用执行"}</strong> · {agent.kind} · {agent.status} · ID {agent.id.slice(0, 8)} · {agent.skillIds.join("、")}
         <div>运行记录：{task.cognition?.instances?.filter(instance => instance.agentId === agent.id).map(instance => `${instance.id.slice(0, 8)} ${instance.status}${instance.integration ? `/${instance.integration}` : ""}`).join(" → ") || "暂无"}</div>
         {agent.cognition && <div>认知 v{agent.cognition.revision}：{agent.cognition.understanding}{agent.cognition.openQuestions.length ? ` · 待查 ${agent.cognition.openQuestions.join("；")}` : ""}</div>}
       </li>)}</ul></div>}
@@ -198,7 +199,7 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
         return <li key={message.id}>{agent?.expert?.name ?? message.fromAgentId?.slice(0, 8) ?? "主代理"} · {message.kind}{stale ? " · 旧运行/任务版本" : ""} · {message.body}</li>;
       })}</ul></div>}
       {!!task.cognition.instances?.length && <div><strong>执行实例</strong><ul>{task.cognition.instances.map(instance => <li key={instance.id}>
-        <strong>{instance.orderId}</strong> · {instance.expert?.name ?? "通用执行"} · {instance.mode} · {instance.status}{instance.integration ? ` / ${instance.integration}` : ""}{instance.agentId ? ` · 子代理 ${instance.agentId.slice(0, 8)}` : ""}
+        <strong>{instance.orderId}</strong> · {instance.expert?.name ?? "通用执行"} · {instance.kind} · {instance.status}{instance.integration ? ` / ${instance.integration}` : ""}{instance.agentId ? ` · 子代理 ${instance.agentId.slice(0, 8)}` : ""}
         {(workerModels.get(instance.id) ?? instance.order?.modelSelector) && ` · 模型 ${shortModel((workerModels.get(instance.id) ?? instance.order?.modelSelector)!)}`}
         {instance.parentId ? ` · 主实例 ${instance.parentId.slice(0, 8)}` : ""}
         {instance.worktreePath && <div>Worktree：<code>{instance.worktreePath}</code></div>}
@@ -262,7 +263,7 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
       <Info size={16} aria-hidden />
       <div className="thread-alert-body"><strong>已停止：{stopReasonLabel(task.stop.reason)}</strong>{task.stop.detail && <p>{task.stop.detail}</p>}</div>
     </div>}
-    {task.phase === "plan-review" && <div className="thread-alert tone-info" role="status"><Info size={16} aria-hidden /><div className="thread-alert-body"><strong>计划待审阅 · v{task.cognition?.revision ?? 0}</strong><p>{task.cognition?.summary ?? "尚无计划摘要"}</p><p>范围：{task.cognition?.scope?.join("；") || "未列出"}；约束：{task.cognition?.constraints?.join("；") || "未列出"}</p><ol aria-label="待审计划步骤">{steps.map(step => <li key={step.id}>{step.id} · {step.objective} · {step.mode}{step.dependsOn.length ? ` · 依赖 ${step.dependsOn.join("、")}` : ""}</li>)}</ol></div></div>}
+    {task.phase === "plan-review" && <div className="thread-alert tone-info" role="status"><Info size={16} aria-hidden /><div className="thread-alert-body"><strong>计划待审阅 · v{task.cognition?.revision ?? 0}</strong><p>{task.cognition?.summary ?? "尚无计划摘要"}</p><p>范围：{task.cognition?.scope?.join("；") || "未列出"}；约束：{task.cognition?.constraints?.join("；") || "未列出"}</p><ol aria-label="待审计划节点">{nodes.map(node => <li key={node.id}>{node.id} · {node.objective} · {node.kind} · {node.phase} · 专家 {node.expertDecision.expertId ?? node.expertDecision.temporaryExpert?.name ?? "主代理"}{node.dependsOn.length ? ` · 依赖 ${node.dependsOn.join("、")}` : ""}</li>)}</ol></div></div>}
     {!!proposals.length && <button className="thread-attention" onClick={() => openDetail({ kind: "info" })}>{proposals.length} 个 Skill 提案待决定 · 查看任务详情</button>}
     {task.lastFailure && task.status !== "complete" && !busy && <FailureAlert reason={task.lastFailure} />}
     {!task.lastFailure && task.reopenReason && task.status === "active" && !busy && <div className="thread-alert tone-info">

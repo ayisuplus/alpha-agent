@@ -90,10 +90,29 @@ export function summarizeTaskEvent(event: TaskEvent): TaskTimelineEvent | null {
     case "plan/approved": return { ...row, label: "计划已批准，开始执行", tone: "success" };
     case "plan/revised": return { ...row, label: "计划已修订", detail: detail(event.payload.input.summary), tone: "info" };
     case "step/changed": return { ...row, label: `步骤 ${event.payload.id}：${STEP_LABELS[event.payload.status] ?? event.payload.status}`, detail: detail(event.payload.reason), refs: { stepId: event.payload.id } };
+    case "graph/skeleton-created": return { ...row, label: "计划骨架：调查 · 执行 · 审查", tone: "info" };
+    case "node/entered": return { ...row, label: `进入节点 ${event.payload.nodeId}`, detail: detail(`${event.payload.expert?.name ?? "无专家"} · ${event.payload.access} · ${event.payload.host}`), refs: { stepId: event.payload.nodeId } };
+    case "node/waiting": return { ...row, label: `节点 ${event.payload.nodeId} 等待中`, detail: detail(event.payload.pause), tone: "warning", refs: { stepId: event.payload.nodeId } };
+    case "node/exited": return {
+      ...row,
+      label: `节点 ${event.payload.nodeId} 已退出`,
+      detail: detail([event.payload.note, event.payload.unresolved.length ? `待解决：${event.payload.unresolved.join("、")}` : ""].filter(Boolean).join("；")),
+      tone: event.payload.verdict === "changes-requested" ? "warning" : "success",
+      refs: { stepId: event.payload.nodeId, ...(event.payload.verdict ? { verdict: event.payload.verdict, passed: event.payload.verdict === "pass" } : {}) },
+    };
+    case "node/reopened": return {
+      ...row,
+      label: `节点 ${event.payload.nodeId} 已重开${event.payload.edge ? `（${event.payload.edge === "rework" ? "返工回边" : "前提回边"}）` : "（重做过期工作）"}`,
+      detail: detail(event.payload.reason),
+      tone: "warning",
+      refs: { stepId: event.payload.nodeId },
+    };
     case "capability-gap/recorded": return { ...row, label: "能力缺口", detail: detail(event.payload.description), tone: "warning" };
     case "capability-gap/resolved": return { ...row, label: "能力缺口已解决", detail: detail(event.payload.resolution), tone: "success" };
     case "skill-search/recorded": return { ...row, label: `Skill 检索 ${event.payload.key}（${event.payload.resultCount} 个结果）`, detail: detail(event.payload.error) };
     case "skill-proposal/decided": return { ...row, label: event.payload.decision === "installed" ? `Skill 已安装：${event.payload.installedSkillId ?? ""}` : "Skill 提案已拒绝", tone: event.payload.decision === "installed" ? "success" : "info" };
+    case "expert-proposal/recorded": return { ...row, label: `专家提案：${event.payload.proposal.temporaryExpert.name}`, detail: detail(event.payload.proposal.temporaryExpert.description), tone: "warning" };
+    case "expert-proposal/decided": return { ...row, label: event.payload.decision === "installed" ? `专家已入库：${event.payload.installedExpertId ?? ""}` : "专家提案已拒绝", tone: event.payload.decision === "installed" ? "success" : "info" };
     case "evidence/recorded": return { ...row, label: `证据 ${event.payload.evidence.criterionId} ${event.payload.evidence.passed ? "通过" : "未通过"}`, detail: detail(event.payload.evidence.source), tone: event.payload.evidence.passed ? "success" : "warning", refs: { criterionId: event.payload.evidence.criterionId, evidenceId: event.payload.evidence.id, passed: event.payload.evidence.passed } };
     case "preview/published": return { ...row, label: "本机预览已发布", detail: detail(event.payload.preview.url) };
     case "run/ended": return {

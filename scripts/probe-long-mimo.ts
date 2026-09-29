@@ -106,7 +106,7 @@ const finalTest = await command([process.execPath, "test", "./test"], projectRoo
 const finalHashes = Object.fromEntries(await Promise.all(testPaths.map(async path => [path, hash(await readFile(join(projectRoot, path)))])));
 const instances = (current.state.cognition?.instances ?? []).map(item => ({
   id: item.id, orderId: item.orderId, status: item.status, parentId: item.parentId,
-  mode: item.mode,
+  kind: item.kind,
 }));
 report.finishedAt = new Date().toISOString();
 report.elapsedMs = Math.round(performance.now() - start);

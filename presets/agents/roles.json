@@ -1,0 +1,91 @@
+{
+  "note": "Controlled vocabulary for expert handoff declarations (docs/plan-graph-and-expert-state-2026-09-29.md §5). Built-in experts may only reference these values; user-created experts may use values outside the list (the UI flags them without refusing). First batch covers the content line and compliance; development, research and game lines extend it later.",
+  "roles": [
+    {
+      "id": "content-strategy",
+      "name": "内容策划"
+    },
+    {
+      "id": "story-script",
+      "name": "故事与剧本"
+    },
+    {
+      "id": "article-writing",
+      "name": "文章写作与改稿"
+    },
+    {
+      "id": "visual-direction",
+      "name": "视觉与音画"
+    },
+    {
+      "id": "platform-ops",
+      "name": "平台运营"
+    },
+    {
+      "id": "live-ops",
+      "name": "直播运营"
+    },
+    {
+      "id": "compliance",
+      "name": "内容合规审核"
+    },
+    {
+      "id": "growth-analysis",
+      "name": "内容数据复盘"
+    },
+    {
+      "id": "code-review",
+      "name": "代码审查"
+    }
+  ],
+  "artifactTypes": [
+    {
+      "id": "brief",
+      "name": "任务简报"
+    },
+    {
+      "id": "source-material",
+      "name": "素材与来源"
+    },
+    {
+      "id": "topic-plan",
+      "name": "选题与内容策划"
+    },
+    {
+      "id": "story-script",
+      "name": "故事与剧本稿"
+    },
+    {
+      "id": "article-draft",
+      "name": "文章稿"
+    },
+    {
+      "id": "visual-brief",
+      "name": "视觉简报"
+    },
+    {
+      "id": "visual-asset",
+      "name": "视觉素材与成片"
+    },
+    {
+      "id": "post-copy",
+      "name": "平台文案"
+    },
+    {
+      "id": "platform-plan",
+      "name": "平台发布与运营方案"
+    },
+    {
+      "id": "live-plan",
+      "name": "直播脚本与流程"
+    },
+    {
+      "id": "compliance-verdict",
+      "name": "合规审核结论"
+    },
+    {
+      "id": "analytics-report",
+      "name": "数据复盘报告"
+    }
+  ]
+}

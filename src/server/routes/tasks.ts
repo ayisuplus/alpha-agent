@@ -264,6 +264,28 @@ export const taskRoutes: Route[] = [
     },
   },
   {
+    method: "POST", path: path(`/api/tasks/${ID}/experts/${ID}/decision`),
+    async handle({ ctx, request, params: [id, proposalId] }) {
+      try {
+        const input = await request.json() as { decision?: unknown };
+        if (input.decision !== "install" && input.decision !== "reject") throw new SkillPluginError("专家提案决定无效");
+        const running = ctx.runForTask(id)?.ledger;
+        const ledger = running ?? await ctx.loadLedger(id);
+        if (!ledger) return notFound("任务不存在");
+        if (!await ctx.taskRootAllowed(ledger)) return Response.json({ error: "Task workspace is unavailable" }, { status: 403 });
+        const proposal = ledger.state.cognition?.expertProposals?.find(item => item.id === proposalId && item.status === "pending");
+        if (!proposal) throw new SkillPluginError("专家提案不存在或已处理");
+        // The user's approval is what takes the task-local expert into the library (§4.3); nothing installs silently.
+        const installed = input.decision === "install"
+          ? await ctx.expertStore.create({ name: proposal.temporaryExpert.name, description: proposal.temporaryExpert.description, instructions: proposal.temporaryExpert.instructions, skillIds: proposal.temporaryExpert.skillIds })
+          : undefined;
+        await ledger.decideExpertProposal(proposal.id, input.decision === "install" ? "installed" : "rejected", installed?.id);
+        ctx.emit({ type: "task", taskId: ledger.state.id, task: ctx.taskView(ledger) });
+        return Response.json({ task: ctx.taskView(ledger), ...(installed ? { installedExpertId: installed.id } : {}) });
+      } catch (error) { return failure(error); }
+    },
+  },
+  {
     method: "GET", path: path(`/api/tasks/${ID}/approvals`),
     async handle({ ctx, params: [id] }) {
       const ledger = await ctx.loadLedger(id);
@@ -583,7 +605,7 @@ export const taskRoutes: Route[] = [
         const currentPreview = ledger.state.preview;
         if (currentPreview && ctx.previews.has(currentPreview.id) && (await fingerprintSource(projectRoot)) === currentPreview.revision) return Response.json(currentPreview);
         if (ledger.state.status === "complete") await ledger.reopen("Local preview was republished and needs browser verification");
-        if (!ledger.state.development?.enabled && taskProfile(ledger.state.taskType).developmentReview) await ledger.enableDevelopmentWorkflow();
+        if (!ledger.state.development?.enabled && taskProfile(ledger.state.taskType).defaultGates.length > 0) await ledger.enableDevelopmentWorkflow();
         await ledger.refreshRevision();
         const controller = lease.controller;
         if (!(await buildProduct(ctx, projectRoot, ledger, controller.signal))) return Response.json({ error: "Build failed" }, { status: 422 });
@@ -624,7 +646,7 @@ export const taskRoutes: Route[] = [
       try {
         if (ledger.state.status !== "active" || !ledger.state.preview || !ctx.previews.has(ledger.state.preview.id)) return Response.json({ error: "A live active preview is required" }, { status: 409 });
         if (!await ctx.taskRootAllowed(ledger)) return Response.json({ error: "Task workspace is unavailable" }, { status: 403 });
-        if (!ledger.state.development?.enabled && taskProfile(ledger.state.taskType).developmentReview) await ledger.enableDevelopmentWorkflow();
+        if (!ledger.state.development?.enabled && taskProfile(ledger.state.taskType).defaultGates.length > 0) await ledger.enableDevelopmentWorkflow();
         ctx.setContext(ledger);
         const verifyRunId = randomUUID();
         ctx.operationIds.set(ledger.state.id, verifyRunId);

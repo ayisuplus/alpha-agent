@@ -9,6 +9,7 @@ import { createGeneralWorkspace, verifyGeneralDeliverable } from "../src/runtime
 import { createDocument } from "../src/runtime/document-tool";
 import { relative } from "node:path";
 import { acceptCodeChange } from "../src/runtime/code-acceptance";
+import { recordApprovedPlan } from "./support/approved-plan";
 
 test("task activity survives a new reader and stays attached to its task", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-activity-"));
@@ -239,6 +240,7 @@ test("workbench serves frozen file evidence and saves a local schedule", async (
     const dataRoot = join(root, ".alpha");
     await mkdir(productsRoot);
     const ledger = await createGeneralWorkspace({ taskType: "file-work", objective: "Create a document", productsRoot, dataRoot, files: [{ name: "source.txt", mimeType: "text/plain", bytes: new TextEncoder().encode("input") }] });
+    await recordApprovedPlan(ledger);
     const document = await createDocument(ledger.state.projectRoot, dataRoot, ledger.state.id, "docx", "result", "Result", "content");
     await writeFile(join(ledger.state.projectRoot, "alpha-deliverable.json"), JSON.stringify({ outputs: [{ path: relative(ledger.state.projectRoot, document.path).replaceAll("\\", "/") }] }));
     await ledger.refreshRevision();

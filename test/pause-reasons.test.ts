@@ -6,6 +6,7 @@ import { LEGACY_SERVICE_TO_REASON, PAUSE_ACTIONS, PAUSE_REASONS, STOP_REASONS, i
 import { TaskLedger, type TaskState } from "../src/runtime/task-ledger";
 import { checkTaskInvariants } from "../src/runtime/task-invariants";
 import { foldTask, readEvents, taskLogDir } from "../src/runtime/task-events";
+import { recordApprovedPlan } from "./support/approved-plan";
 
 const revision = "a".repeat(64);
 
@@ -24,7 +25,7 @@ type LegacyTaskState = TaskState & { blockedService?: string };
 function legacyState(id: string, projectRoot: string, overrides: Partial<LegacyTaskState> = {}): LegacyTaskState {
   return {
     id, taskType: "code-change", objective: "Legacy task", contractVersion: 1, contractHistory: [], guidanceHistory: [],
-    cognition: { revision: 1, recipeVersion: 1, summary: "Legacy task", candidates: [], steps: [], gaps: [], amendments: [] },
+    cognition: { revision: 1, recipeVersion: 1, summary: "Legacy task", candidates: [], nodes: [], gaps: [], amendments: [] },
     projectRoot, criteria: [{ id: "check", description: "Configured checks pass", kind: "test" }], status: "needs-input",
     phase: "execute", revision, evidence: [], runs: [], preview: null, pendingQuestion: "Approve the command?",
     createdAt: "2026-09-20T08:00:00.000Z", updatedAt: "2026-09-20T09:00:00.000Z", ...overrides,
@@ -82,6 +83,7 @@ test("stopping records why, and resuming clears it", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-stop-"));
   try {
     const ledger = await newTask(root);
+    await recordApprovedPlan(ledger);
     await ledger.recordFailure("Model produced no response within 45000 ms");
     await ledger.stop("model");
     expect(ledger.state.stop?.reason).toBe("model");

@@ -185,7 +185,7 @@ function turnSummary(turn: Turn): string {
 
 type WorkerInstance = NonNullable<NonNullable<TaskView["cognition"]>["instances"]>[number];
 
-const MODE_LABEL: Record<string, string> = { investigate: "调查", implement: "实现", review: "审查" };
+const MODE_LABEL: Record<string, string> = { investigate: "调查", execute: "执行", implement: "执行", review: "审查" };
 
 function workerState(worker: WorkerInstance): { label: string; tone: Tone } {
   switch (worker.status) {
@@ -211,7 +211,7 @@ function WorkerCards({ workers }: { workers: WorkerInstance[] }) {
           <span className="worker-card-head">
             <UserRound size={13} aria-hidden />
             <strong>{worker.expert?.name ?? "通用执行"}</strong>
-            <span className="worker-card-mode">{MODE_LABEL[worker.mode] ?? worker.mode}</span>
+            <span className="worker-card-mode">{MODE_LABEL[worker.kind] ?? worker.kind}</span>
             <Badge tone={state.tone}>{worker.status === "running" && <Spinner size={11} />}{state.label}</Badge>
           </span>
           <span className="worker-card-meta">{worker.orderId}{duration ? ` · ${duration}` : ""}</span>

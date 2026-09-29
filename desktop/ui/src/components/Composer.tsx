@@ -60,7 +60,7 @@ export function Composer({ task, phase }: { task: TaskView; phase: string | null
   const nextVersion = task.contractVersion + 1;
   const readyFiles = !fileLimitReason(added.files, task.inputs);
   const hasAdded = added.files.length > 0 || [...added.skillIds].sort().join("|") !== [...(task.capabilities?.skills.map(item => item.id) ?? [])].sort().join("|") || [...added.pluginIds].sort().join("|") !== [...(task.capabilities?.plugins.map(item => item.id) ?? [])].sort().join("|");
-  const canPrimary = !pending && (mode === "ask" ? !!text && text.length <= QUESTION_LIMIT : readyFiles && (mode === "steer" ? task.acceptsGuidance && (!!text || !!added.files.length) : mode === "resume" ? task.status !== "needs-input" || !!text || !!added.files.length : mode === "revise" ? !!text && text !== task.objective : mode === "plan-review" ? !!text || !!added.files.length || !!(task.cognition?.steps.length && task.revision) : false));
+  const canPrimary = !pending && (mode === "ask" ? !!text && text.length <= QUESTION_LIMIT : readyFiles && (mode === "steer" ? task.acceptsGuidance && (!!text || !!added.files.length) : mode === "resume" ? task.status !== "needs-input" || !!text || !!added.files.length : mode === "revise" ? !!text && text !== task.objective : mode === "plan-review" ? !!text || !!added.files.length || !!(task.cognition?.nodes.length && task.revision) : false));
 
   const done = (ok: boolean) => {
     if (!ok) return;
@@ -152,7 +152,7 @@ export function Composer({ task, phase }: { task: TaskView; phase: string | null
         {mode === "resume" && (task.phase ?? "execute") === "execute" && task.status !== "needs-input" && <Button variant="ghost" size="sm" onClick={() => void enterPlanning()} disabled={!!pending} busy={pending === "plan"}>先计划</Button>}
         {mode === "resume" && <Button variant="primary" size="sm" onClick={() => void primary()} disabled={!canPrimary} busy={pending === "resume"}>{task.phase === "plan" ? "继续规划" : task.status === "needs-input" ? "提交回答并继续" : "继续修复"}</Button>}
         {mode === "plan-review" && <Button variant="ghost" size="sm" onClick={() => void enterPlanning()} disabled={!!pending} busy={pending === "plan"}>继续规划</Button>}
-        {mode === "plan-review" && <Button variant="primary" size="sm" onClick={() => text || added.files.length ? void primary() : void approveTaskPlan()} disabled={!!pending || !readyFiles || (!text && !added.files.length && (!task.cognition?.steps.length || !task.revision))} busy={pending === "approve"}>{text || added.files.length ? "提交意见并重新规划" : "开始执行"}</Button>}
+        {mode === "plan-review" && <Button variant="primary" size="sm" onClick={() => text || added.files.length ? void primary() : void approveTaskPlan()} disabled={!!pending || !readyFiles || (!text && !added.files.length && (!task.cognition?.nodes.length || !task.revision))} busy={pending === "approve"}>{text || added.files.length ? "提交意见并重新规划" : "开始执行"}</Button>}
         {mode === "revise" && <Button variant="primary" size="sm" onClick={() => void primary()} disabled={!canPrimary} busy={pending === "revise"}>提交修订 · v{nextVersion}</Button>}
         {mode === "ask" && <Button variant="primary" size="sm" icon={ArrowUp} onClick={() => void primary()} disabled={!canPrimary} busy={pending === "ask"}>追问</Button>}
       </div>

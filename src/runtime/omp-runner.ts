@@ -1,12 +1,17 @@
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { createAgentSession, SessionManager, type CustomTool } from "@oh-my-pi/pi-coding-agent";
+import { createAgentSession, SessionManager, type CustomTool, type PreparedExtension, type Skill } from "@oh-my-pi/pi-coding-agent";
+import type { PluginMCPConnection } from "../plugins/mcp";
 import { ompRegistry } from "./models";
 import { DEFAULT_MODEL, isAllowedModelSelector } from "./model-policy";
-import { TaskLedger, taskBudgetUsed, type TaskState } from "./task-ledger";
+import { orderKind } from "./work-orders";
+import { TaskLedger, accessOf, planApprovalModeOf, taskBudgetUsed, type AccessLevel, type PlanNode, type TaskState, type TemporaryExpert } from "./task-ledger";
+import { hasRecordedPlan } from "./planning-policy";
 import { taskProfile, type DeliveryTool } from "./task-profile";
-import { overPromptBudget, promptFootprint, type PromptFootprint } from "./prompt-budget";
+import { overPromptBudget, promptFootprint, PROMPT_SHARE_LIMIT, type PromptFootprint } from "./prompt-budget";
+import { resolveExpertScope, type ExpertScope } from "./expert-scope";
+import { gateActorFor } from "./expert-selection";
 import { createBrowserTool } from "./browser-tool";
 import { createWorkerBrowserTool } from "./worker-browser-tool";
 import { createBuildTool } from "./build-tool";
@@ -33,7 +38,7 @@ import { loadBuiltinPlugins } from "../plugins";
 import { createOfficePlugin } from "../plugins/office";
 import { SkillPluginStore, hashSkillDirectory } from "../plugins/third-party";
 import { recoverIncompleteMerges, type WorkOrder } from "./work-orders";
-import { createCognitionTools } from "./cognition-tool";
+import { createCognitionTools, type NodeExitHooks } from "./cognition-tool";
 import { readProjectMemory } from "./project-state";
 import { createExpertTools } from "./expert-tools";
 import { createWorkerResultTool } from "./worker-result-tool";
@@ -152,7 +157,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   const direct = options.existingLedger?.state.workspaceOrigin?.kind === "direct" || (options.workOrder?.fullAccess && options.workerContext?.workspaceOrigin?.kind === "direct");
   const reviewing = options.executionMode === "review";
   const answering = options.executionMode === "answer";
-  const workerReadOnly = !!options.workOrder && options.workOrder.mode !== "implement";
+  const workerReadOnly = !!options.workOrder && orderKind(options.workOrder) !== "execute";
   if (reviewing && options.reviewExpert) verifyExpertSnapshot(options.reviewExpert);
   const expertStore = new ExpertStore(dataRoot);
   const ledger = options.existingLedger ?? await TaskLedger.create(dataRoot, {
@@ -176,7 +181,9 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   if (ledger.state.projectRoot !== projectRoot) throw new Error("Existing task belongs to a different project");
   if (ledger.state.status !== "active" && !answering) throw new Error(`Task is ${ledger.state.status}`);
   if (ledger.state.phase === "plan-review" && !reviewing && !answering) throw new Error("Plan is awaiting user review");
-  const planning = ledger.state.phase === "plan" && !reviewing && !answering && !options.workOrder;
+  // A task whose launch switch waits for user review plans in the restricted planner role; 自动批准 tasks plan inside
+  // the full coordinator session, where the plan-first guard rejects non-planning calls until alpha_plan records one.
+  const planning = ledger.state.phase === "plan" && planApprovalModeOf(ledger.state) === "review" && !reviewing && !answering && !options.workOrder;
   const profile = taskProfile(ledger.state.taskType);
   let needsInputReason: string | null = null;
   let abortSessionForInput: (() => void) | null = null;
@@ -210,10 +217,29 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   if (!Number.isInteger(maxToolCalls) || maxToolCalls < 1 || !Number.isInteger(wallTimeMs) || wallTimeMs < 1_000) throw new Error("Invalid task budget");
   await options.onLedger?.(ledger);
 
+  let mcp: Awaited<ReturnType<SkillPluginStore["loadMCP"]>> | null = null;
+  try { if (!options.workOrder && !direct && !reviewing && !planning && !answering && profile.thirdParty) mcp = await pluginStore.loadMCP(projectRoot, ledger.state.capabilities?.plugins.map(item => item.id)); }
+  catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    await ledger.needInput(`已指定的 MCP 工具无法加载：${reason}。请修复服务或说明如何继续。`, "approval");
+    throw new NeedsInputError(reason);
+  }
+  if (mcp?.errors.length) {
+    const reason = mcp.errors.join("; ");
+    await mcp.manager.disconnectAll();
+    await ledger.needInput(`已指定的 MCP 服务不可用：${reason}。请修复服务或说明如何继续。`, "approval");
+    throw new NeedsInputError(reason);
+  }
+  const mcpTools = [...guardMCPTools(mcp?.tools ?? [], new MCPPermissionStore(authorizationRoot), authorizationTaskId || ledger.state.id, question => pauseForInput(question, "approval")), ...(options.mcpProxyTools ?? [])];
+  const mcpServiceNames = [...new Set(mcpTools.map(tool => /^mcp__(.+)__/.exec(tool.name)?.[1]).filter((name): name is string => !!name))];
   let experts: ExpertSnapshot[];
-  let skills: Awaited<ReturnType<SkillPluginStore["loadSkills"]>>;
-  let hooks: Awaited<ReturnType<SkillPluginStore["loadHooks"]>>;
+  let skills: Skill[];
+  let hooks: PreparedExtension[];
   let directExpert: ExpertSnapshot | undefined;
+  let directScope: ExpertScope | undefined;
+  let runNode: PlanNode | undefined;
+  let nodeTemporary: TemporaryExpert | undefined;
+  let nodeSwitchReason: string | null = null;
   try {
     if (ledger.state.capabilities && !options.workOrder) {
       const installed = await pluginStore.list();
@@ -223,21 +249,59 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       }
     }
     experts = options.workOrder || reviewing ? [] : await expertStore.enabled();
-    const expertPerspective = profile.expertPerspective && !reviewing;
-    directExpert = expertPerspective && ledger.state.designatedExpertId ? experts.find(item => item.id === ledger.state.designatedExpertId) : undefined;
-    if (expertPerspective && ledger.state.designatedExpertId && !directExpert) throw new Error(`用户指定专家已停用或删除：${ledger.state.designatedExpertId}`);
-    const selectedSkillIds = options.workOrder ? undefined : ledger.state.capabilities?.skills.map(item => item.id);
-    const loadedSkills = options.workOrder ? [] : reviewing ? (options.reviewExpert?.skillIds?.length ? await pluginStore.loadSkills() : []) : await pluginStore.loadSkills(selectedSkillIds);
+    // §3.6/§4.3: the cursor's node decides this run's expert and access; nothing activates outside the graph. The
+    // runtime enters the next ready coordinator node here, so every run belongs to exactly one node (§3.3).
+    if (!options.workOrder && !reviewing && !answering && ledger.state.phase === "execute") {
+      const nodes = ledger.state.cognition?.nodes ?? [];
+      runNode = nodes.find(node => node.status === "active" && node.host === "coordinator");
+      if (!runNode) {
+        const next = nodes.find(node => node.status === "ready" && node.host === "coordinator");
+        if (next) {
+          let expert = next.expertDecision.expertId ? experts.find(item => item.id === next.expertDecision.expertId) : undefined;
+          if (next.expertDecision.expertId && !expert) throw new Error(`节点 ${next.id} 指定的专家未启用：${next.expertDecision.expertId}`);
+          // §6.2: a gate node's role decides its actor — an enabled expert declaring the role, the neutral reviewer
+          // for code-review, or a pause with a capability gap when nobody can perform it.
+          if (next.kind === "review" && next.gateRole && !expert && !next.expertDecision.temporaryExpert) {
+            const actor = gateActorFor(experts, next.gateRole);
+            if ("missing" in actor) {
+              await ledger.recordCapabilityGap("method", `没有可承担 ${actor.missing} gate 的已启用专家`);
+              await ledger.needInput(`缺少 ${actor.missing} gate 的审查专家；请启用一个具备该角色的专家，或说明如何继续`, "capability");
+              throw new NeedsInputError(`缺少 ${actor.missing} gate 的审查专家`);
+            }
+            expert = "expert" in actor ? actor.expert : undefined;
+          }
+          await ledger.enterNode({ nodeId: next.id, host: "coordinator", runId: ledger.runId ?? "unbound", ...(expert ? { expert } : {}), ...(next.expertDecision.temporaryExpert ? { temporaryExpert: next.expertDecision.temporaryExpert } : {}) });
+          runNode = ledger.state.cognition?.nodes.find(node => node.id === next.id);
+        }
+      }
+    }
+    directExpert = runNode?.expertDecision.expertId ? experts.find(item => item.id === runNode!.expertDecision.expertId) : undefined;
+    nodeTemporary = runNode?.expertDecision.temporaryExpert;
+    if (runNode?.expertDecision.expertId && !directExpert) throw new Error(`用户指定专家已停用或删除：${runNode.expertDecision.expertId}`);
+    // No explicit selection means no Skills: the coordinator's pool is empty and installed Skills are read on demand
+    // through alpha_capability_search and alpha_skill_read (§4.2). Workers take their order's snapshots instead.
+    const selectedSkillIds = options.workOrder ? undefined : ledger.state.capabilities?.skills.map(item => item.id) ?? [];
+    const loadedSkills = options.workOrder || directExpert || nodeTemporary ? [] : reviewing ? (options.reviewExpert?.skillIds?.length ? await pluginStore.loadSkills() : []) : await pluginStore.loadSkills(selectedSkillIds);
+    const reviewBundled = reviewing && options.reviewExpert ? await expertStore.loadBundledSkills(options.reviewExpert) : [];
+    if (directExpert || nodeTemporary) {
+      // Expert activation mounts the expert's own state (§4.4): persona, packaged Skills ∪ explicit extras, declared
+      // MCP. The primary method body is injected unless it would fill the prompt share the fixed prompt has left; the
+      // last recorded footprint of this task is the best pre-session estimate of that share.
+      const lastFixed = ledger.state.runs?.filter(run => run.prompt).at(-1)?.prompt;
+      const primaryBudgetTokens = Math.max(0, Math.floor((model.contextWindow ?? 128_000) * PROMPT_SHARE_LIMIT) - (lastFixed ? lastFixed.systemTokens + lastFixed.toolTokens : 0));
+      directScope = await resolveExpertScope({ expert: directExpert, temporaryExpert: nodeTemporary, host: "coordinator", access: runNode ? accessOf(runNode.kind) : "write", dataRoot, extraSkillIds: selectedSkillIds, model, mcpServers: mcpServiceNames, fullAccess: true, primaryBudgetTokens });
+      if (directScope.missingMcp.length) {
+        await ledger.recordCapabilityGap("tool", `专家声明的 MCP 服务不可用：${directScope.missingMcp.join(", ")}`);
+        throw new Error(`专家声明的 MCP 服务不可用：${directScope.missingMcp.join(", ")}`);
+      }
+    }
     for (const selected of options.workOrder ? [] : ledger.state.capabilities?.skills ?? []) {
-      const skill = loadedSkills.find(item => item.name === selected.id);
+      const skill = (directScope?.skills ?? loadedSkills).find(item => item.name === selected.id);
       if (!skill || await hashSkillDirectory(skill.baseDir) !== selected.hash) throw new Error(`Selected Skill is unavailable or changed: ${selected.id}`);
     }
-    const reviewBundled = reviewing && options.reviewExpert ? await expertStore.loadBundledSkills(options.reviewExpert) : [];
-    const directBundled = directExpert ? await expertStore.loadBundledSkills(directExpert) : [];
-    skills = reviewing ? (options.reviewExpert?.skillIds ?? []).map(id => reviewBundled.find(item => item.name === id) ?? loadedSkills.find(item => item.name === id)).filter((item): item is NonNullable<typeof item> => !!item) : options.workOrder ? await loadWorkerSkillSnapshots(dataRoot, options.workOrder) : [...directBundled, ...loadedSkills.filter(item => !directBundled.some(bundled => bundled.name === item.name))];
-    if (directExpert && (directExpert.skillIds ?? []).some(id => !skills.some(item => item.name === id))) throw new Error(`用户指定专家缺少 Skill：${directExpert.skillIds!.find(id => !skills.some(item => item.name === id))}`);
+    skills = reviewing ? (options.reviewExpert?.skillIds ?? []).map(id => reviewBundled.find(item => item.name === id) ?? loadedSkills.find(item => item.name === id)).filter((item): item is NonNullable<typeof item> => !!item) : options.workOrder ? await loadWorkerSkillSnapshots(dataRoot, options.workOrder) : (directScope?.skills ?? loadedSkills);
     if (reviewing && skills.length !== (options.reviewExpert?.skillIds?.length ?? 0)) throw new Error("Review expert Skill snapshot is missing");
-    if (reviewing && skills.length) await validateSkillBindings([{ id: "final-review", objective: "Review", mode: "review", ownedPaths: [], resources: [], skillIds: skills.map(item => item.name) }], skills);
+    if (reviewing && skills.length) await validateSkillBindings([{ id: "final-review", objective: "Review", kind: "review", ownedPaths: [], resources: [], skillIds: skills.map(item => item.name) }], skills);
     if (options.workOrder && skills.length !== (options.workOrder.skillIds?.length ?? 0)) throw new Error("Worker Skill snapshot is missing");
     hooks = options.workOrder || direct || reviewing || planning || answering || !profile.thirdParty ? [] : await pluginStore.loadHooks(ledger.state.capabilities?.plugins.map(item => item.id));
   } catch (error) {
@@ -275,26 +339,13 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     ? await createDirectFileTools({ taskId: ledger.state.id, projectId: ledger.state.projectId, projectVersion: ledger.state.projectVersion ?? 0, projectRoot, dataRoot, mode: permission.mode, editMode: sessionEditMode(settings, selector), onNeedsInput: (reason, code) => pauseForInput(reason, code ?? "approval") })
     : [];
 
-  const allPlugins = (options.workOrder && !options.workOrder.fullAccess) || reviewing || planning || answering
+  const nodeAccess: AccessLevel = runNode ? accessOf(runNode.kind) : "write";
+  const allPlugins = (options.workOrder && !options.workOrder.fullAccess) || reviewing || planning || answering || nodeAccess === "read-only"
     ? { tools: [], instructions: [] }
     : direct ? { tools: [], instructions: [] }
     : loadBuiltinPlugins({ projectRoot, dataRoot: authorizationRoot, url: options.comfyUrl, enabled: options.plugins, generation: options.generation, ledger });
   const officeReadTools = !options.workOrder && (reviewing || planning || answering) ? createOfficePlugin({ ledger, dataRoot: authorizationRoot, readOnly: true }).tools : [];
   const plugins = options.workOrder ? { ...allPlugins, tools: allPlugins.tools.filter(tool => options.workOrder!.capabilitySnapshots?.some(item => item.kind === "builtin-tool" && item.id === tool.name)) } : allPlugins;
-  let mcp: Awaited<ReturnType<SkillPluginStore["loadMCP"]>> | null = null;
-  try { if (!options.workOrder && !direct && !reviewing && !planning && !answering && profile.thirdParty) mcp = await pluginStore.loadMCP(projectRoot, ledger.state.capabilities?.plugins.map(item => item.id)); }
-  catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    await ledger.needInput(`已指定的 MCP 工具无法加载：${reason}。请修复服务或说明如何继续。`, "approval");
-    throw new NeedsInputError(reason);
-  }
-  if (mcp?.errors.length) {
-    const reason = mcp.errors.join("; ");
-    await mcp.manager.disconnectAll();
-    await ledger.needInput(`已指定的 MCP 服务不可用：${reason}。请修复服务或说明如何继续。`, "approval");
-    throw new NeedsInputError(reason);
-  }
-  const mcpTools = [...guardMCPTools(mcp?.tools ?? [], new MCPPermissionStore(authorizationRoot), authorizationTaskId || ledger.state.id, question => pauseForInput(question, "approval")), ...(options.mcpProxyTools ?? [])];
   const reservedToolNames = ["read", "grep", "edit", "write", "alpha_build", "alpha_check", "alpha_command", "alpha_source", "alpha_search", "alpha_crawl", "alpha_site", "alpha_document", "alpha_spawn", "alpha_browser", ...plugins.tools.map(tool => tool.name)];
   if (mcpTools.some(tool => reservedToolNames.includes(tool.name))) {
     await mcp?.manager.disconnectAll();
@@ -306,12 +357,22 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
 
   const facts: SessionFacts = {
     role, ledger, direct: !!direct, permissionMode: permission?.mode, workOrder: options.workOrder, workerExpert: options.workerExpert,
-    reviewExpert: options.reviewExpert, directExpert, experts, skills, pluginToolNames: plugins.tools.map(tool => tool.name),
+    reviewExpert: options.reviewExpert, directExpert, expertScope: directScope, nodeAccess: runNode ? nodeAccess : undefined, currentNode: runNode, experts, skills, pluginToolNames: plugins.tools.map(tool => tool.name),
     pluginInstructions: plugins.instructions, mcpToolNames: mcpTools.map(tool => tool.name), hooksLoaded: hooks.length > 0,
     officeReadToolNames: officeReadTools.map(tool => tool.name), canDispatch: !!options.getWorkerSupervisor,
     browserConnected: !!(options.browser || options.browserProxyDir),
   };
   const toolNames = sessionToolNames(facts);
+  // §3.6: when the cursor moves onto a node with a different expert or access, this run ends with `node-switch` and the
+  // driver rebuilds the session for the new node; a same-configuration move continues inside the run.
+  const nodeExitHooks: NodeExitHooks = {
+    onCursorMoved: ({ next }) => {
+      if (next && !next.sameConfig) {
+        nodeSwitchReason = `节点切换：${next.nodeId}`;
+        abortSessionForInput?.();
+      }
+    },
+  };
   function sessionCustomTools(): CustomTool[] {
     const checks = ledger.state.workspaceOrigin?.checks ?? [];
     const webTools = () => [createSearchTool(webContext), createCrawlTool(webContext), createSiteTool(webContext), createResearchSourceTool(authorizationRoot, authorizationTaskId || ledger.state.id, reason => pauseForInput(reason, "approval"), { retrieval, kernel: webKernel, authorizeRead: scope => webRead(webContext, scope) })];
@@ -321,7 +382,9 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       permission?.mode === "auto" ? independentCommandReviewer(authorizationRoot, selector) : undefined,
       (reason, code) => pauseForInput(reason, code ?? "approval"));
     const coordinatorBrowser = (readOnly: boolean) => createBrowserTool(() => options.browserAccess?.() === false || options.getWorkerSupervisor && !options.getWorkerSupervisor().claimBrowser("coordinator") ? null : options.browser ?? null, dataRoot, options.browserUrl, webContext, readOnly);
-    const skillReader = () => createSkillResourceTool(skills, async id => (await resolvePoolSkill(dataRoot, id)).skill);
+    // On-demand pool reads stay inside the active expert's package: no session may take another expert's bundled Skill.
+    const activeExpertId = options.workerExpert?.id ?? options.reviewExpert?.id ?? directExpert?.id;
+    const skillReader = () => createSkillResourceTool(skills, async id => (await resolvePoolSkill(dataRoot, id, activeExpertId)).skill);
     const attachments = () => profile.attachments ? [createTaskInputTool(ledger)] : [];
     const delivery: Record<DeliveryTool, () => CustomTool> = {
       alpha_check: () => createCodeCheckTool(projectRoot, dataRoot, ledger.state.id, checks, permission, reason => pauseForInput(reason, "sandbox")),
@@ -355,7 +418,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       case "planner":
         return [
           ...common, ...attachments(), ...webTools(),
-          createCapabilitySearchTool(dataRoot), ...createCognitionTools(ledger, dataRoot), ...createExpertTools(expertStore, pluginStore),
+          createCapabilitySearchTool(dataRoot), ...createCognitionTools(ledger, dataRoot, nodeExitHooks), ...createExpertTools(expertStore, pluginStore, ledger),
           skillReader(), coordinatorBrowser(true),
         ];
       case "coordinator":
@@ -363,7 +426,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
           ...common, ...attachments(), ...profile.deliveryTools(!!direct).map(name => delivery[name]()), ...webTools(),
           ...(profile.commands ? [commandTool()] : []),
           ...(profile.dispatch && options.getWorkerSupervisor ? createAsyncWorkTools(options.getWorkerSupervisor, ledger, dataRoot, experts, skills) : []),
-          createCapabilitySearchTool(dataRoot), createCapabilityMCPTool(dataRoot, projectRoot, ledger.state.id, reason => pauseForInput(reason, "approval")), ...createCognitionTools(ledger, dataRoot), ...createExpertTools(expertStore, pluginStore),
+          createCapabilitySearchTool(dataRoot), createCapabilityMCPTool(dataRoot, projectRoot, ledger.state.id, reason => pauseForInput(reason, "approval")), ...createCognitionTools(ledger, dataRoot, nodeExitHooks), ...createExpertTools(expertStore, pluginStore, ledger),
           skillReader(),
           ...plugins.tools,
           ...mcpTools,
@@ -396,7 +459,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     customTools: sessionCustomTools(),
     autoApprove: true,
     disableExtensionDiscovery: true,
-     preloadedPreparedExtensions: [fileToolGuard(projectRoot, options.workOrder, profile.uploads ? ["inputs"] : [], direct && !reviewing && !options.workOrder, reviewing || planning || workerReadOnly, () => ledger.state.phase, options.getWorkerSupervisor?.(), options.onWorkerRead), ...hooks],
+     preloadedPreparedExtensions: [fileToolGuard(projectRoot, options.workOrder, profile.uploads ? ["inputs"] : [], direct && !reviewing && !options.workOrder, reviewing || planning || workerReadOnly, () => ledger.state.phase, !answering && !reviewing && !options.workOrder ? () => !hasRecordedPlan(ledger.state) : undefined, options.getWorkerSupervisor?.(), options.onWorkerRead), ...hooks],
     enableMCP: false,
     enableLsp: toolNames.includes("lsp"),
     lspReadOnly: true,
@@ -446,7 +509,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   let compactionFailures = 0;
   let budgetReason: string | null = null;
   let stalledReason: string | null = null;
-  let outcome: "returned" | "cancelled" | "budget" | "error" | "needs-input" = "returned";
+  let outcome: "returned" | "cancelled" | "budget" | "error" | "needs-input" | "node-switch" = "returned";
   let failureReason: string | undefined;
   const started = performance.now();
   /** Latency to the model's first visible response; recorded so the eval report can explain slow runs. */
@@ -503,7 +566,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       options.onEvent?.({ type: "tool-start", value: event.toolName, callId: event.toolCallId, target: toolTarget(event.args, projectRoot), intent: event.intent?.slice(0, 160) });
     } else if (event.type === "tool_execution_end") {
       options.onEvent?.({ type: "tool-end", value: event.toolName, error: event.isError, callId: event.toolCallId });
-      if (planning && event.toolName === "alpha_plan" && !event.isError && ledger.state.cognition?.steps.length && !planRecorded) {
+      if (planning && event.toolName === "alpha_plan" && !event.isError && ledger.state.cognition?.nodes.length && !planRecorded) {
         planRecorded = true;
         void session.abort({ goalReason: "internal", reason: "Plan recorded; awaiting user review" });
       }
@@ -575,6 +638,14 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     } else await ledger.clearFailure();
     return ledger;
   } catch (error) {
+    if (nodeSwitchReason && !options.signal?.aborted && !budgetReason && !stalledReason) {
+      // The cursor moved to a differently configured node: this run ends cleanly and the driver continues there (§3.6).
+      outcome = "node-switch";
+      failureReason = nodeSwitchReason;
+      await ledger.refreshRevision();
+      await ledger.clearFailure();
+      return ledger;
+    }
     if (workerHandoff && !options.signal?.aborted && !budgetReason && !stalledReason) {
       outcome = "needs-input";
       await ledger.refreshRevision();
@@ -619,7 +690,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       totalTokens: Math.max(0, usageAfter.totalTokens - usageBefore.totalTokens),
       cost: Math.max(0, usageAfter.cost - usageBefore.cost),
     };
-    await ledger.recordRun({ model: selector, stage: options.workOrder ? "worker" : reviewing ? "review" : answering ? "answer" : "coordinator", instanceId: options.workOrder?.instanceId ?? options.reviewInstanceId, thinkingPolicyVersion: ROLE_THINKING_POLICY_VERSION, toolCalls, compactions, compactionFailures, maxToolCalls, wallTimeMs, elapsedMs: Math.round(performance.now() - started), ...(firstResponseMs === undefined ? {} : { firstResponseMs: Math.round(firstResponseMs) }), usage, ...(footprint ? { prompt: footprint } : {}), outcome, failureReason });
+    await ledger.recordRun({ model: selector, stage: options.workOrder ? "worker" : reviewing ? "review" : answering ? "answer" : "coordinator", nodeId: options.workOrder?.id ?? runNode?.id, instanceId: options.workOrder?.instanceId ?? options.reviewInstanceId, thinkingPolicyVersion: ROLE_THINKING_POLICY_VERSION, toolCalls, compactions, compactionFailures, maxToolCalls, wallTimeMs, elapsedMs: Math.round(performance.now() - started), ...(firstResponseMs === undefined ? {} : { firstResponseMs: Math.round(firstResponseMs) }), usage, ...(footprint ? { prompt: footprint } : {}), ...(directScope?.budgetFallback ? { skillBudgetFallback: directScope.budgetFallback } : {}), outcome, failureReason });
     try { await sessionManager.flush(); }
     finally {
       try { await session.dispose(); }

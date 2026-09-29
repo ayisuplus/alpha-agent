@@ -1,15 +1,46 @@
 import { reasonFromLegacyService } from "../../pause-reasons";
 import type { TaskState } from "../../task-ledger";
+import { mapNodeKind } from "../../plan-kind";
 import { InvariantError } from "../errors";
 import { replaceState } from "../state";
 import type { FamilyReducers } from "../types";
+import { normalizePlanNode } from "./plan";
 
 /** Reference family: contract, inputs, capabilities, guidance and goal events. */
 
+/**
+ * Tasks recorded before the plan-graph vocabulary carry `steps` with `mode` and old statuses, and instances or agents
+ * with `mode`; the fold reads them as execute-stage nodes and mapped kinds (§8 旧任务按单节点图读取).
+ */
+function normalizeLegacyGraph(state: TaskState): void {
+  const cognition = state.cognition as (TaskState["cognition"] & { steps?: unknown[] }) | undefined;
+  if (!cognition) return;
+  if (!Array.isArray((cognition as { nodes?: unknown[] }).nodes)) {
+    const legacySteps = "steps" in cognition ? cognition.steps : undefined;
+    if (Array.isArray(legacySteps)) cognition.nodes = legacySteps.map(normalizePlanNode);
+    delete cognition.steps;
+  }
+  for (const instance of cognition.instances ?? []) {
+    const legacy = instance as { mode?: "investigate" | "implement" | "review" };
+    if (instance.kind === undefined && legacy.mode !== undefined) instance.kind = mapNodeKind(legacy.mode) ?? "execute";
+  }
+  for (const agent of cognition.agents ?? []) {
+    const legacy = agent as { mode?: "investigate" | "implement" | "review" };
+    if (agent.kind === undefined && legacy.mode !== undefined) agent.kind = mapNodeKind(legacy.mode) ?? "execute";
+  }
+  for (const amendment of cognition.amendments ?? []) {
+    const legacy = amendment as { affectedSteps?: string[]; affectedNodes?: string[] };
+    if (!legacy.affectedNodes && Array.isArray(legacy.affectedSteps)) (amendment as { affectedNodes?: string[] }).affectedNodes = legacy.affectedSteps;
+  }
+}
+
 export const contractReducers: FamilyReducers = {
-  "task/created": (state, event) => replaceState(state, event.payload.state),
+  // The origin payload is the pre-image of the whole state; clone it so folding can never write through the event
+  // object (folds replay the same read events and must stay deterministic).
+  "task/created": (state, event) => { replaceState(state, structuredClone(event.payload.state)); normalizeLegacyGraph(state); },
   "task/imported": (state, event) => {
-    replaceState(state, event.payload.state);
+    replaceState(state, structuredClone(event.payload.state));
+    normalizeLegacyGraph(state);
     // Ledgers from before reason codes carried a free-text service name; the event payload keeps the original value.
     const legacy = state as { blockedService?: string };
     if (legacy.blockedService !== undefined) {
@@ -77,7 +108,8 @@ export const contractReducers: FamilyReducers = {
     if (state.status === "complete") throw new InvariantError("apply/guidance-on-complete", "A completed task cannot receive guidance");
     if (!event.payload.guidance.instruction.trim()) throw new InvariantError("apply/guidance-blank", "Guidance is required");
     state.guidanceHistory ??= [];
-    state.guidanceHistory.push(event.payload.guidance);
+    // Copy: later guidance/status-changed writes through the stored record and must not touch the event payload.
+    state.guidanceHistory.push({ ...event.payload.guidance });
   },
 
   "guidance/status-changed": (state, event) => {
@@ -91,6 +123,7 @@ export const contractReducers: FamilyReducers = {
   "goal/changed": (state, event) => {
     const expected = (state.goal?.revision ?? 0) + 1;
     if (event.payload.goal.revision !== expected) throw new InvariantError("apply/goal-revision-not-next", `Goal revision ${event.payload.goal.revision} does not follow ${state.goal?.revision ?? 0}`);
-    state.goal = event.payload.goal;
+    // Copy: plan/approved, contract/revised and phase/changed write stopReason/noProgressRuns through the stored goal.
+    state.goal = { ...event.payload.goal };
   },
 };

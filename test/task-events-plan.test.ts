@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CognitionState, CognitionStep, TaskState } from "../src/runtime/task-ledger";
+import type { CognitionState, PlanNode, TaskState } from "../src/runtime/task-ledger";
 import { planReducers } from "../src/runtime/task-events/apply/plan";
 import { InvariantError } from "../src/runtime/task-events/errors";
 import type { TaskEventOf, TaskEventType } from "../src/runtime/task-events/types";
@@ -40,34 +40,58 @@ function expectInvariant(fn: () => void, code: string, message: string): void {
   expect((thrown as InvariantError).message).toBe(message);
 }
 
-function step(id: string, overrides: Partial<CognitionStep> = {}): CognitionStep {
-  return { id, objective: `Deliver ${id}`, mode: "implement", dependsOn: [], skillIds: [], status: "planned", ...overrides };
+function node(id: string, overrides: Partial<PlanNode> = {}): PlanNode {
+  return {
+    id, objective: `Deliver ${id}`, kind: "execute", phase: "execute", dependsOn: [],
+    expertDecision: { reason: "the coordinator works this node itself" }, host: "coordinator",
+    skillIds: [], status: "planned", ...overrides,
+  };
+}
+
+/** Stage fillers (§3.2): thin plans grow one node per missing skeleton stage so a new-format revision validates. */
+function fillNode(): PlanNode {
+  return node("fill", { kind: "investigate", phase: "investigate", objective: "Fill the investigate stage" });
+}
+
+function checkNode(): PlanNode {
+  return node("check", { kind: "review", phase: "review", objective: "Check the result" });
+}
+
+/** A new-format plan literal: the given nodes plus the stage fillers they are missing. */
+function plan(...nodes: PlanNode[]): PlanNode[] {
+  return [
+    ...(nodes.some(item => item.phase === "investigate") ? [] : [fillNode()]),
+    ...nodes,
+    ...(nodes.some(item => item.phase === "review") ? [] : [checkNode()]),
+  ];
 }
 
 function cognition(overrides: Partial<CognitionState> = {}): CognitionState {
-  return { revision: 1, recipeVersion: 1, summary: "Plan summary", candidates: [], steps: [], gaps: [], amendments: [], ...overrides };
+  return { revision: 1, recipeVersion: 1, summary: "Plan summary", candidates: [], nodes: [], gaps: [], amendments: [], ...overrides };
 }
 
-function reviseInput(overrides: Partial<{ summary: string; candidates: string[]; steps: CognitionStep[]; reason: string; scope: string[]; constraints: string[]; openQuestions: string[] }> = {}) {
-  return { summary: "Revised summary", candidates: ["expert-a"], steps: [step("build-api")], reason: "Split the work", ...overrides };
+type ReviseInput = TaskEventOf<"plan/revised">["payload"]["input"];
+
+function reviseInput(overrides: Partial<ReviseInput> = {}): ReviseInput {
+  return { summary: "Revised summary", candidates: ["expert-a"], nodes: plan(node("build-api")), reason: "Split the work", ...overrides };
 }
 
 describe("plan/submitted", () => {
   test("requires the plan phase with nonempty steps", () => {
-    const wrongPhase = baseState({ phase: "execute", cognition: cognition({ steps: [step("a")], basedOnRevision: "rev-1" }) });
+    const wrongPhase = baseState({ phase: "execute", cognition: cognition({ nodes: [node("a")], basedOnRevision: "rev-1" }) });
     expectInvariant(() => apply(wrongPhase, "plan/submitted", {}), "apply/plan-empty", "A nonempty plan is required for review");
     expect(wrongPhase.phase).toBe("execute");
-    // The phase/steps gate wins over the revision gate.
-    const staleWrongPhase = baseState({ phase: "execute", cognition: cognition({ steps: [], basedOnRevision: "stale" }) });
+    // The phase/plan gate wins over the revision gate.
+    const staleWrongPhase = baseState({ phase: "execute", cognition: cognition({ nodes: [], basedOnRevision: "stale" }) });
     expectInvariant(() => apply(staleWrongPhase, "plan/submitted", {}), "apply/plan-empty", "A nonempty plan is required for review");
-    const emptyPlan = baseState({ phase: "plan", cognition: cognition({ steps: [] }) });
+    const emptyPlan = baseState({ phase: "plan", cognition: cognition({ nodes: [] }) });
     expectInvariant(() => apply(emptyPlan, "plan/submitted", {}), "apply/plan-empty", "A nonempty plan is required for review");
     const noCognition = baseState({ phase: "plan" });
     expectInvariant(() => apply(noCognition, "plan/submitted", {}), "apply/plan-empty", "A nonempty plan is required for review");
   });
 
   test("requires a plan based on the current source revision", () => {
-    const state = baseState({ phase: "plan", cognition: cognition({ steps: [step("a")], basedOnRevision: "rev-0" }) });
+    const state = baseState({ phase: "plan", cognition: cognition({ nodes: [node("a")], basedOnRevision: "rev-0" }) });
     expectInvariant(
       () => apply(state, "plan/submitted", {}),
       "apply/plan-source-moved",
@@ -77,7 +101,7 @@ describe("plan/submitted", () => {
   });
 
   test("flips to plan-review when the plan matches the source", () => {
-    const state = baseState({ phase: "plan", cognition: cognition({ steps: [step("a")], basedOnRevision: "rev-1" }) });
+    const state = baseState({ phase: "plan", cognition: cognition({ nodes: [node("a")], basedOnRevision: "rev-1" }) });
     apply(state, "plan/submitted", {});
     expect(state.phase).toBe("plan-review");
   });
@@ -147,22 +171,22 @@ describe("plan/revised", () => {
         summary: "Old summary",
         basedOnRevision: "rev-0",
         scope: ["old scope"],
-        steps: [
-          step("build-api", { status: "running", statusReason: "工单 wo-1 运行中" }),
-          step("write-tests", { status: "complete", statusReason: "done" }),
-          step("docs", { status: "planned", statusReason: "later" }),
+        nodes: [
+          node("build-api", { status: "active", statusReason: "工单 wo-1 运行中" }),
+          node("write-tests", { status: "done", statusReason: "done" }),
+          node("docs", { status: "planned", statusReason: "later" }),
         ],
-        amendments: [{ revision: 3, reason: "earlier", affectedSteps: ["build-api"], recordedAt: "2026-09-27T00:00:00.000Z" }],
+        amendments: [{ revision: 3, reason: "earlier", affectedNodes: ["build-api"], recordedAt: "2026-09-27T00:00:00.000Z" }],
       }),
     });
     apply(state, "plan/revised", {
       input: reviseInput({
-        steps: [
-          step("build-api", { status: "planned", statusReason: "stale" }),
-          step("write-tests"),
-          step("docs"),
-          step("ship-it", { dependsOn: ["build-api"] }),
-        ],
+        nodes: plan(
+          node("build-api", { status: "planned", statusReason: "stale" }),
+          node("write-tests"),
+          node("docs"),
+          node("ship-it", { dependsOn: ["build-api"] }),
+        ),
         scope: [" new scope ", "new scope", "", "old scope"],
       }),
       recordedAt: AT,
@@ -173,16 +197,18 @@ describe("plan/revised", () => {
     expect(next.summary).toBe("Revised summary");
     expect(next.scope).toEqual(["new scope", "old scope"]);
     expect(next.candidates).toEqual(["expert-a"]);
-    // running/complete statuses and reasons survive even when the input resets them
-    expect(next.steps.map(item => [item.id, item.status, item.statusReason])).toEqual([
-      ["build-api", "running", "工单 wo-1 运行中"],
-      ["write-tests", "complete", "done"],
+    // Entered/finished statuses and reasons survive even when the input resets them; the untouched fillers derive "ready".
+    expect(next.nodes.map(item => [item.id, item.status, item.statusReason])).toEqual([
+      ["fill", "ready", undefined],
+      ["build-api", "active", "工单 wo-1 运行中"],
+      ["write-tests", "done", "done"],
       ["docs", "planned", "later"],
       ["ship-it", "planned", undefined],
+      ["check", "planned", undefined],
     ]);
     expect(next.amendments).toEqual([
-      { revision: 3, reason: "earlier", affectedSteps: ["build-api"], recordedAt: "2026-09-27T00:00:00.000Z" },
-      { revision: 4, reason: "Split the work", affectedSteps: ["build-api", "write-tests", "docs", "ship-it"], recordedAt: AT },
+      { revision: 3, reason: "earlier", affectedNodes: ["build-api"], recordedAt: "2026-09-27T00:00:00.000Z" },
+      { revision: 4, reason: "Split the work", affectedNodes: ["fill", "build-api", "write-tests", "docs", "ship-it", "check"], recordedAt: AT },
     ]);
     // no planApproval: no phase flip
     expect(state.phase).toBe("execute");
@@ -191,9 +217,9 @@ describe("plan/revised", () => {
 
   test("a material change drops the approval and returns to plan-review", () => {
     const approval = { contractVersion: 1, cognitionRevision: 1, sourceRevision: "rev-1", approvedAt: AT };
-    const state = baseState({ phase: "execute", planApproval: approval, cognition: cognition({ steps: [step("build-api")] }) });
+    const state = baseState({ phase: "execute", planApproval: approval, cognition: cognition({ nodes: plan(node("build-api")) }) });
     apply(state, "plan/revised", {
-      input: reviseInput({ steps: [step("build-api"), step("extra-step")] }),
+      input: reviseInput({ nodes: plan(node("build-api"), node("extra-step")) }),
       recordedAt: AT,
     });
     expect(state.phase).toBe("plan-review");
@@ -205,11 +231,11 @@ describe("plan/revised", () => {
     const state = baseState({
       phase: "execute",
       planApproval: approval,
-      cognition: cognition({ scope: ["scope-a"], steps: [step("build-api"), step("docs")] }),
+      cognition: cognition({ scope: ["scope-a"], nodes: plan(node("build-api"), node("docs")) }),
     });
-    // Identical step definitions, unchanged scope/constraints (undefined falls back), only the summary differs.
+    // Identical node definitions, unchanged scope/constraints (undefined falls back), only the summary differs.
     apply(state, "plan/revised", {
-      input: reviseInput({ steps: [step("build-api"), step("docs")] }),
+      input: reviseInput({ nodes: plan(node("build-api"), node("docs")) }),
       recordedAt: AT,
     });
     expect(state.phase).toBe("execute");
@@ -223,10 +249,10 @@ describe("plan/revised", () => {
     const state = baseState({
       phase: "execute",
       planApproval: approval,
-      cognition: cognition({ steps: [step("build-api"), step("docs", { mode: "investigate" })] }),
+      cognition: cognition({ nodes: [fillNode(), node("build-api"), node("docs", { kind: "investigate", phase: "investigate" }), checkNode()] }),
     });
     apply(state, "plan/revised", {
-      input: reviseInput({ steps: [step("build-api"), step("docs", { mode: "implement" })] }),
+      input: reviseInput({ nodes: [fillNode(), node("build-api"), node("docs"), checkNode()] }),
       recordedAt: AT,
     });
     expect(state.phase).toBe("plan-review");
@@ -249,30 +275,37 @@ describe("plan/revised", () => {
     const tooMany = baseState({ cognition: cognition() });
     expectInvariant(
       () => apply(tooMany, "plan/revised", {
-        input: reviseInput({ steps: Array.from({ length: 21 }, (_, i) => step(`s${i}`)) }),
+        input: reviseInput({ nodes: Array.from({ length: 21 }, (_, i) => node(`s${i}`)) }),
         recordedAt: AT,
       }),
       "apply/cognition-content-invalid",
       "认知修订内容无效",
     );
+    // A new-format revision must fill all three skeleton stages (§3.2).
+    const emptyStages = baseState({ cognition: cognition() });
+    expectInvariant(
+      () => apply(emptyStages, "plan/revised", { input: reviseInput({ nodes: [node("build-api")] }), recordedAt: AT }),
+      "apply/plan-stage-empty",
+      "调查、执行、审查三个阶段都必须至少有一个节点",
+    );
   });
 
   test("rejects malformed steps", () => {
-    const cases: CognitionStep[][] = [
-      [step("dup"), step("dup", { objective: "other" })],
-      [step("Bad-Case")],
-      [step("coordinator")],
-      [step("final-review")],
-      [step("review-repair")],
-      [step("blank", { objective: "  " })],
-      [step("orphan", { dependsOn: ["ghost"] })],
-      [step("self", { dependsOn: ["self"] })],
+    const cases: PlanNode[][] = [
+      [node("dup"), node("dup", { objective: "other" })],
+      [node("Bad-Case")],
+      [node("coordinator")],
+      [node("final-review")],
+      [node("review-repair")],
+      [node("blank", { objective: "  " })],
+      [node("orphan", { dependsOn: ["ghost"] })],
+      [node("self", { dependsOn: ["self"] })],
     ];
-    for (const steps of cases) {
+    for (const nodes of cases) {
       expectInvariant(
-        () => apply(baseState({ cognition: cognition() }), "plan/revised", { input: reviseInput({ steps }), recordedAt: AT }),
+        () => apply(baseState({ cognition: cognition() }), "plan/revised", { input: reviseInput({ nodes: plan(...nodes) }), recordedAt: AT }),
         "apply/cognition-steps-invalid",
-        "认知步骤无效",
+        "认知节点无效",
       );
     }
   });
@@ -280,11 +313,11 @@ describe("plan/revised", () => {
   test("detects dependency cycles", () => {
     expectInvariant(
       () => apply(baseState({ cognition: cognition() }), "plan/revised", {
-        input: reviseInput({ steps: [step("a", { dependsOn: ["b"] }), step("b", { dependsOn: ["a"] })] }),
+        input: reviseInput({ nodes: plan(node("a", { dependsOn: ["b"] }), node("b", { dependsOn: ["a"] })) }),
         recordedAt: AT,
       }),
       "apply/cognition-cycle",
-      "认知步骤存在循环依赖",
+      "认知节点存在循环依赖",
     );
   });
 
@@ -298,33 +331,36 @@ describe("plan/revised", () => {
     const noStep = baseState({ designatedExpertId: "expert-9", cognition: cognition() });
     expectInvariant(
       () => apply(noStep, "plan/revised", {
-        input: reviseInput({ candidates: ["expert-9"], steps: [step("build-api", { expertId: "expert-a" })] }),
+        input: reviseInput({ candidates: ["expert-9"], nodes: plan(node("build-api", { expertDecision: { expertId: "expert-a", reason: "expert-a owns this work" } })) }),
         recordedAt: AT,
       }),
       "apply/designated-expert-dropped",
       "用户指定专家必须保留在计划中：expert-9",
     );
-    // An empty step list only needs the candidate entry.
+    // A node carrying the designated expert keeps the candidate entry.
     const ok = baseState({ designatedExpertId: "expert-9", cognition: cognition() });
-    apply(ok, "plan/revised", { input: reviseInput({ candidates: ["expert-9"], steps: [] }), recordedAt: AT });
+    apply(ok, "plan/revised", {
+      input: reviseInput({ candidates: ["expert-9"], nodes: plan(node("build-api", { expertDecision: { expertId: "expert-9", reason: "the user picked this expert" } })) }),
+      recordedAt: AT,
+    });
     expect(ok.cognition!.candidates).toEqual(["expert-9"]);
   });
 
   test("refuses to rewrite or drop running and completed steps", () => {
-    const rewritten = baseState({ cognition: cognition({ steps: [step("build-api", { status: "running" })] }) });
+    const rewritten = baseState({ cognition: cognition({ nodes: [node("build-api", { status: "active" })] }) });
     expectInvariant(
       () => apply(rewritten, "plan/revised", {
-        input: reviseInput({ steps: [step("build-api", { objective: "Something else" })] }),
+        input: reviseInput({ nodes: plan(node("build-api", { objective: "Something else" })) }),
         recordedAt: AT,
       }),
       "apply/dispatched-step-rewritten",
-      "已派发或完成的认知步骤不可改写：build-api",
+      "已进入或完成的节点不可改写：build-api",
     );
-    const dropped = baseState({ cognition: cognition({ steps: [step("write-tests", { status: "complete" })] }) });
+    const dropped = baseState({ cognition: cognition({ nodes: [node("write-tests", { status: "done" })] }) });
     expectInvariant(
-      () => apply(dropped, "plan/revised", { input: reviseInput({ steps: [step("build-api")] }), recordedAt: AT }),
+      () => apply(dropped, "plan/revised", { input: reviseInput({ nodes: plan(node("build-api")) }), recordedAt: AT }),
       "apply/dispatched-step-rewritten",
-      "已派发或完成的认知步骤不可改写：write-tests",
+      "已进入或完成的节点不可改写：write-tests",
     );
   });
 
@@ -335,7 +371,7 @@ describe("plan/revised", () => {
         candidates: ["a", "a", "b"],
         constraints: [" dup ", "dup", ""],
         openQuestions: ["q1"],
-        steps: [step("build-api")],
+        nodes: plan(node("build-api")),
       }),
       recordedAt: AT,
     });
@@ -354,78 +390,106 @@ describe("plan/revised", () => {
     const state = baseState({
       phase: "execute",
       cognition: cognition({
-        steps: [
-          step("build-api", { status: "running", statusReason: "工单 wo-1 运行中", revision: 3, claimedBy: "inst-1" }),
-          step("docs", { status: "planned", revision: 1 }),
+        nodes: [
+          node("build-api", { status: "active", statusReason: "工单 wo-1 运行中", revision: 3, claimedBy: "inst-1" }),
+          node("docs", { status: "planned", revision: 1 }),
         ],
       }),
     });
     apply(state, "plan/revised", {
-      // The input resets the board fields; the reducer must restore them from the prior steps.
-      input: reviseInput({ steps: [step("build-api", { revision: 99, claimedBy: "inst-fake" }), step("docs"), step("ship-it")] }),
+      // The input resets the board fields; the reducer must restore them from the prior nodes.
+      input: reviseInput({ nodes: plan(node("build-api", { revision: 99, claimedBy: "inst-fake" }), node("docs"), node("ship-it")) }),
       recordedAt: AT,
     });
-    expect(state.cognition!.steps.map(item => [item.id, item.status, item.revision, item.claimedBy])).toEqual([
-      ["build-api", "running", 3, "inst-1"],
+    expect(state.cognition!.nodes.map(item => [item.id, item.status, item.revision, item.claimedBy])).toEqual([
+      ["fill", "ready", undefined, undefined],
+      ["build-api", "active", 3, "inst-1"],
       ["docs", "planned", 1, undefined],
       ["ship-it", "planned", undefined, undefined],
+      ["check", "planned", undefined, undefined],
     ]);
   });
 
   test("refuses to rewrite or drop a claimed step", () => {
-    const rewritten = baseState({ cognition: cognition({ steps: [step("build-api", { status: "blocked", claimedBy: "inst-1" })] }) });
+    const rewritten = baseState({ cognition: cognition({ nodes: [node("build-api", { status: "waiting", claimedBy: "inst-1" })] }) });
     expectInvariant(
       () => apply(rewritten, "plan/revised", {
-        input: reviseInput({ steps: [step("build-api", { objective: "Something else" })] }),
+        input: reviseInput({ nodes: plan(node("build-api", { objective: "Something else" })) }),
         recordedAt: AT,
       }),
       "apply/dispatched-step-rewritten",
-      "已派发或完成的认知步骤不可改写：build-api",
+      "已进入或完成的节点不可改写：build-api",
     );
-    const dropped = baseState({ cognition: cognition({ steps: [step("write-tests", { claimedBy: "inst-2" })] }) });
+    const dropped = baseState({ cognition: cognition({ nodes: [node("write-tests", { claimedBy: "inst-2" })] }) });
     expectInvariant(
-      () => apply(dropped, "plan/revised", { input: reviseInput({ steps: [step("build-api")] }), recordedAt: AT }),
+      () => apply(dropped, "plan/revised", { input: reviseInput({ nodes: plan(node("build-api")) }), recordedAt: AT }),
       "apply/dispatched-step-rewritten",
-      "已派发或完成的认知步骤不可改写：write-tests",
+      "已进入或完成的节点不可改写：write-tests",
     );
-    // An unchanged claimed step passes.
-    const kept = baseState({ cognition: cognition({ steps: [step("build-api", { claimedBy: "inst-1" })] }) });
-    apply(kept, "plan/revised", { input: reviseInput({ steps: [step("build-api")] }), recordedAt: AT });
-    expect(kept.cognition!.steps[0]).toMatchObject({ claimedBy: "inst-1", status: "planned" });
+    // An unchanged claimed node passes and keeps its claim.
+    const kept = baseState({ cognition: cognition({ nodes: [node("build-api", { claimedBy: "inst-1" })] }) });
+    apply(kept, "plan/revised", { input: reviseInput({ nodes: plan(node("build-api")) }), recordedAt: AT });
+    expect(kept.cognition!.nodes.find(item => item.id === "build-api")).toMatchObject({ claimedBy: "inst-1", status: "planned" });
+  });
+
+  test("a legacy plan/revised history with input.steps still folds into execute-stage nodes", () => {
+    const state = baseState({ phase: "execute" });
+    // Old logs are untyped JSON: `input.steps` with `mode` keys and pre-graph statuses (§8 旧任务).
+    const legacy = {
+      summary: "历史计划", candidates: ["expert-a"], reason: "历史任务回放",
+      steps: [
+        { id: "build-api", objective: "Deliver build-api", mode: "implement", dependsOn: [], skillIds: [], status: "complete", expertId: "expert-a" },
+        { id: "survey", objective: "Survey the codebase", mode: "investigate", dependsOn: [], skillIds: [], status: "running" },
+        { id: "docs", objective: "Deliver docs", mode: "implement", dependsOn: ["build-api"], skillIds: [], status: "blocked" },
+        { id: "ship-it", objective: "Deliver ship-it", mode: "implement", dependsOn: ["docs"], skillIds: [], status: "planned" },
+      ],
+    };
+    apply(state, "plan/revised", { input: legacy as unknown as TaskEventOf<"plan/revised">["payload"]["input"], recordedAt: AT });
+    const nodes = state.cognition!.nodes;
+    // Legacy steps read as execute-stage nodes: implement maps to execute, investigate and review keep their kind,
+    // and the old status vocabulary maps onto the node lifecycle.
+    expect(nodes.map(item => [item.id, item.kind, item.phase, item.status])).toEqual([
+      ["build-api", "execute", "execute", "done"],
+      ["survey", "investigate", "execute", "active"],
+      ["docs", "execute", "execute", "waiting"],
+      ["ship-it", "execute", "execute", "planned"],
+    ]);
+    expect(nodes[0].expertDecision).toEqual({ expertId: "expert-a", reason: "历史计划（旧格式步骤）" });
+    expect(nodes[1].expertDecision).toEqual({ reason: "历史计划（旧格式步骤）" });
+    expect(state.cognition!.amendments[0].affectedNodes).toEqual(["build-api", "survey", "docs", "ship-it"]);
   });
 });
 
 describe("step/changed", () => {
   test("requires an active task", () => {
-    const state = baseState({ status: "stopped", cognition: cognition({ steps: [step("a")] }) });
+    const state = baseState({ status: "stopped", cognition: cognition({ nodes: [node("a")] }) });
     expectInvariant(() => apply(state, "step/changed", { id: "a", status: "running", reason: "go" }), "apply/task-not-active", "Task is stopped");
   });
 
-  test("requires an existing step, a usable status and a non-blank reason", () => {
+  test("requires an existing step and a non-blank reason", () => {
     const payloads = [
       { id: "ghost", status: "running" as const, reason: "go" },
-      { id: "a", status: "planned" as const, reason: "go" },
       { id: "a", status: "running" as const, reason: "   " },
     ];
     for (const payload of payloads) {
-      const state = baseState({ phase: "execute", cognition: cognition({ steps: [step("a")] }) });
+      const state = baseState({ phase: "execute", cognition: cognition({ nodes: [node("a")] }) });
       expectInvariant(() => apply(state, "step/changed", payload), "apply/step-required", "Step and reason are required");
     }
   });
 
   test("finished steps cannot be rewritten", () => {
-    for (const status of ["complete", "cancelled"] as const) {
-      const state = baseState({ phase: "execute", cognition: cognition({ steps: [step("a", { status })] }) });
+    for (const status of ["done", "cancelled"] as const) {
+      const state = baseState({ phase: "execute", cognition: cognition({ nodes: [node("a", { status })] }) });
       expectInvariant(() => apply(state, "step/changed", { id: "a", status: "blocked", reason: "stuck" }), "apply/step-finished", "Finished step cannot be rewritten");
     }
   });
 
   test("delegated steps belong to the work order, checked before the phase gates", () => {
     const instance = {
-      id: "inst-1", orderId: "a", mode: "implement" as const, skills: [], contractVersion: 1, cognitionRevision: 1,
+      id: "inst-1", orderId: "a", kind: "execute" as const, skills: [], contractVersion: 1, cognitionRevision: 1,
       baseRevision: null, status: "running" as const, startedAt: AT,
     };
-    const state = baseState({ phase: "plan-review", cognition: cognition({ steps: [step("a", { status: "running" })], instances: [instance] }) });
+    const state = baseState({ phase: "plan-review", cognition: cognition({ nodes: [node("a", { status: "active" })], instances: [instance] }) });
     expectInvariant(
       () => apply(state, "step/changed", { id: "a", status: "complete", reason: "done" }),
       "apply/step-delegated",
@@ -434,57 +498,60 @@ describe("step/changed", () => {
   });
 
   test("the plan phase only finishes investigation steps", () => {
-    const implement = baseState({ phase: "plan", cognition: cognition({ steps: [step("a", { mode: "implement" })] }) });
+    const implement = baseState({ phase: "plan", cognition: cognition({ nodes: [node("a")] }) });
     expectInvariant(
       () => apply(implement, "step/changed", { id: "a", status: "complete", reason: "done" }),
       "apply/step-plan-mode",
       "Planning can only finish investigation steps",
     );
-    const investigate = baseState({ phase: "plan", cognition: cognition({ steps: [step("a", { mode: "investigate" })] }) });
+    const investigate = baseState({ phase: "plan", cognition: cognition({ nodes: [node("a", { kind: "investigate", phase: "investigate" })] }) });
     apply(investigate, "step/changed", { id: "a", status: "complete", reason: " surveyed " });
-    expect(investigate.cognition!.steps[0]).toMatchObject({ status: "complete", statusReason: "surveyed" });
+    expect(investigate.cognition!.nodes[0]).toMatchObject({ status: "done", statusReason: "surveyed" });
   });
 
   test("plan-review blocks every step change", () => {
-    const state = baseState({ phase: "plan-review", cognition: cognition({ steps: [step("a", { mode: "investigate" })] }) });
+    const state = baseState({ phase: "plan-review", cognition: cognition({ nodes: [node("a", { kind: "investigate", phase: "investigate" })] }) });
     expectInvariant(() => apply(state, "step/changed", { id: "a", status: "running", reason: "go" }), "apply/plan-awaiting-review", "Plan is awaiting review");
   });
 
   test("completing requires complete dependencies", () => {
     const state = baseState({
       phase: "execute",
-      cognition: cognition({ steps: [step("dep", { status: "running" }), step("a", { dependsOn: ["dep"] })] }),
+      cognition: cognition({ nodes: [node("dep", { status: "active" }), node("a", { dependsOn: ["dep"] })] }),
     });
     expectInvariant(
       () => apply(state, "step/changed", { id: "a", status: "complete", reason: "done" }),
       "apply/step-deps-incomplete",
       "Step dependencies are not complete",
     );
-    state.cognition!.steps[0].status = "complete";
-    apply(state, "step/changed", { id: "a", status: "complete", reason: "done" });
-    expect(state.cognition!.steps[1].status).toBe("complete");
+    const ready = baseState({
+      phase: "execute",
+      cognition: cognition({ nodes: [node("dep", { status: "done" }), node("a", { dependsOn: ["dep"] })] }),
+    });
+    apply(ready, "step/changed", { id: "a", status: "complete", reason: "done" });
+    expect(ready.cognition!.nodes[1].status).toBe("done");
   });
 
   test("sets the trimmed reason for non-complete statuses without dependency checks", () => {
-    const state = baseState({ phase: "execute", cognition: cognition({ steps: [step("a", { status: "running", dependsOn: ["dep"] })] }) });
+    const state = baseState({ phase: "execute", cognition: cognition({ nodes: [node("a", { status: "active", dependsOn: ["dep"] })] }) });
     apply(state, "step/changed", { id: "a", status: "blocked", reason: " waiting on review " });
-    expect(state.cognition!.steps[0]).toMatchObject({ status: "blocked", statusReason: "waiting on review" });
+    expect(state.cognition!.nodes[0]).toMatchObject({ status: "waiting", statusReason: "waiting on review" });
   });
 
   test("compare-and-swap accepts a matching revision and rejects a stale one", () => {
-    const matched = baseState({ phase: "execute", cognition: cognition({ steps: [step("a", { revision: 2 })] }) });
+    const matched = baseState({ phase: "execute", cognition: cognition({ nodes: [node("a", { revision: 2 })] }) });
     apply(matched, "step/changed", { id: "a", status: "running", reason: "go", expectedRevision: 2 });
-    expect(matched.cognition!.steps[0]).toMatchObject({ status: "running", revision: 3 });
-    const stale = baseState({ phase: "execute", cognition: cognition({ steps: [step("a", { revision: 2 })] }) });
+    expect(matched.cognition!.nodes[0]).toMatchObject({ status: "active", revision: 3 });
+    const stale = baseState({ phase: "execute", cognition: cognition({ nodes: [node("a", { revision: 2 })] }) });
     expectInvariant(
       () => apply(stale, "step/changed", { id: "a", status: "running", reason: "go", expectedRevision: 1 }),
       "apply/step-revision-conflict",
       "Step a moved on: expected revision 1, found 2",
     );
     // A rejected swap leaves the step untouched.
-    expect(stale.cognition!.steps[0]).toMatchObject({ status: "planned", revision: 2 });
+    expect(stale.cognition!.nodes[0]).toMatchObject({ status: "planned", revision: 2 });
     // A step that never moved compares against revision 0.
-    const untouched = baseState({ phase: "execute", cognition: cognition({ steps: [step("a")] }) });
+    const untouched = baseState({ phase: "execute", cognition: cognition({ nodes: [node("a")] }) });
     expectInvariant(
       () => apply(untouched, "step/changed", { id: "a", status: "running", reason: "go", expectedRevision: 1 }),
       "apply/step-revision-conflict",
@@ -493,25 +560,25 @@ describe("step/changed", () => {
   });
 
   test("an absent expectedRevision still folds legacy events", () => {
-    const state = baseState({ phase: "execute", cognition: cognition({ steps: [step("a", { revision: 5 })] }) });
+    const state = baseState({ phase: "execute", cognition: cognition({ nodes: [node("a", { revision: 5 })] }) });
     apply(state, "step/changed", { id: "a", status: "running", reason: "go" });
-    expect(state.cognition!.steps[0]).toMatchObject({ status: "running", revision: 6 });
+    expect(state.cognition!.nodes[0]).toMatchObject({ status: "active", revision: 6 });
   });
 
   test("every accepted transition bumps the revision", () => {
-    const state = baseState({ phase: "execute", cognition: cognition({ steps: [step("a")] }) });
+    const state = baseState({ phase: "execute", cognition: cognition({ nodes: [node("a")] }) });
     apply(state, "step/changed", { id: "a", status: "running", reason: "go", expectedRevision: 0 });
     apply(state, "step/changed", { id: "a", status: "blocked", reason: "stuck", expectedRevision: 1 });
     apply(state, "step/changed", { id: "a", status: "running", reason: "retry", expectedRevision: 2 });
-    expect(state.cognition!.steps[0].revision).toBe(3);
+    expect(state.cognition!.nodes[0].revision).toBe(3);
   });
 
   test("records claimedBy when provided and keeps it when not", () => {
-    const state = baseState({ phase: "execute", cognition: cognition({ steps: [step("a")] }) });
+    const state = baseState({ phase: "execute", cognition: cognition({ nodes: [node("a")] }) });
     apply(state, "step/changed", { id: "a", status: "running", reason: "go", claimedBy: "inst-1" });
-    expect(state.cognition!.steps[0]).toMatchObject({ status: "running", claimedBy: "inst-1", revision: 1 });
+    expect(state.cognition!.nodes[0]).toMatchObject({ status: "active", claimedBy: "inst-1", revision: 1 });
     apply(state, "step/changed", { id: "a", status: "blocked", reason: "stuck", expectedRevision: 1 });
-    expect(state.cognition!.steps[0]).toMatchObject({ status: "blocked", claimedBy: "inst-1", revision: 2 });
+    expect(state.cognition!.nodes[0]).toMatchObject({ status: "waiting", claimedBy: "inst-1", revision: 2 });
   });
 });
 
@@ -564,8 +631,8 @@ describe("capability-gap events", () => {
   test("recording without cognition creates the default and bumps the revision", () => {
     const state = baseState();
     apply(state, "capability-gap/recorded", { kind: "method", description: " need a deploy path ", recordedAt: AT });
-    expect(Object.keys(state.cognition!)).toEqual(["revision", "recipeVersion", "summary", "candidates", "steps", "gaps", "amendments"]);
-    expect(state.cognition).toMatchObject({ revision: 2, recipeVersion: 1, summary: "Ship the feature", candidates: [], steps: [], amendments: [] });
+    expect(Object.keys(state.cognition!)).toEqual(["revision", "recipeVersion", "summary", "candidates", "nodes", "gaps", "amendments"]);
+    expect(state.cognition).toMatchObject({ revision: 2, recipeVersion: 1, summary: "Ship the feature", candidates: [], nodes: [], amendments: [] });
     expect(state.cognition!.gaps).toEqual([{ kind: "method", description: "need a deploy path", recordedAt: AT }]);
   });
 

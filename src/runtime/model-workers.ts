@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { copyFile, lstat, mkdir, readFile, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import { executeWorkOrders, type WorkBatchReport, type WorkOrder, type WorkerResult } from "./work-orders";
+import { executeWorkOrders, orderKind, type WorkBatchReport, type WorkOrder, type WorkerResult } from "./work-orders";
 import { hashSkillDirectory, SkillPluginStore, type SkillPlugin } from "../plugins/third-party";
 import { ExpertStore } from "./experts";
 import { createBrowserTool } from "./browser-tool";
@@ -46,7 +46,7 @@ export async function snapshotSkills(dataRoot: string, stateRoot: string, order:
       continue;
     }
     const bundledSkill = bundled.find(item => item.name === id);
-    const pooled = bundledSkill ? undefined : await resolvePoolSkill(dataRoot, id);
+    const pooled = bundledSkill ? undefined : await resolvePoolSkill(dataRoot, id, order.expert?.id);
     const skill = bundledSkill ?? pooled?.skill ?? available.find(item => item.name === id);
     const pluginId = id.split(":")[0];
     const plugin = bundledSkill
@@ -100,7 +100,7 @@ export function runModelWorkOrders(input: {
     signal?.throwIfAborted();
     const modelSelector = order.modelSelector ?? input.modelSelector;
     if (order.install) {
-      if (order.mode !== "implement" || !order.agentId) throw new Error("Dependency installation requires an implementing persistent subagent");
+      if (orderKind(order) !== "execute" || !order.agentId) throw new Error("Dependency installation requires an implementing persistent subagent");
       const cwd = resolve(directory, order.install.cwdRelative);
       const relativeCwd = relative(directory, cwd);
       if (relativeCwd.startsWith("..") || isAbsolute(relativeCwd)) throw new Error("Dependency installation target escapes the worker workspace");
@@ -146,7 +146,7 @@ export function runModelWorkOrders(input: {
     }
     const allowedMCP = (mcp?.tools ?? []).filter(tool => mcpSelections.some(item => item.kind === "mcp-tool" ? item.id === tool.name : item.id === tool.mcpServerName));
     const permissions = await new MCPPermissionStore(input.dataRoot).list();
-    const selectedMCP = (order.mode === "implement" ? allowedMCP : allowedMCP.filter(tool => permissions[tool.name] === "read"));
+    const selectedMCP = (orderKind(order) === "execute" ? allowedMCP : allowedMCP.filter(tool => permissions[tool.name] === "read"));
     const guardedMCP = guardMCPTools(selectedMCP, new MCPPermissionStore(input.dataRoot), input.taskId, async () => undefined);
     const descriptors: WorkerMCPDescriptor[] = selectedMCP.map(tool => ({ name: tool.name, label: tool.label, description: tool.description, parameters: tool.parameters, server: tool.mcpServerName ?? "" }));
     if (descriptors.length) {

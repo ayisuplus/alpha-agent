@@ -1,0 +1,103 @@
+.plan-graph {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 8px 0;
+}
+
+.plan-graph-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.plan-graph-stage h4 {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  opacity: 0.75;
+}
+
+.plan-graph-empty {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.plan-node {
+  border: 1px solid rgba(22, 32, 42, 0.18);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+}
+
+.plan-node header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.plan-node-kind,
+.plan-node-gate,
+.plan-node-status {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(22, 32, 42, 0.18);
+}
+
+.plan-node-gate {
+  border-style: dashed;
+}
+
+.plan-node p {
+  margin: 6px 0;
+}
+
+.plan-node dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  margin: 0;
+}
+
+.plan-node dt {
+  opacity: 0.65;
+}
+
+.plan-node dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.plan-node-cursor {
+  outline: 2px solid rgba(22, 32, 42, 0.65);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.plan-node-done {
+  opacity: 0.72;
+}
+
+.plan-node-waiting {
+  color: #8a5a00;
+}
+
+.plan-node-handoff {
+  border-top: 1px dashed rgba(22, 32, 42, 0.25);
+  padding-top: 6px;
+  margin-top: 6px;
+}
+
+.plan-node-handoff ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+
+.plan-node-unresolved {
+  color: #8a5a00;
+}

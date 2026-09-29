@@ -5,12 +5,12 @@ import { computeCompletionGaps } from "./task-completion";
 import { eventLogPath, foldTask, readEvents, taskLogDir } from "./task-events";
 import type { TaskState } from "./task-ledger";
 
-/** The state the model saw at one step: objective, contract version, gaps, plan steps, pause/stop codes. */
+/** The state the model saw at one step: objective, contract version, gaps, plan nodes, pause/stop codes. */
 export interface ReplayState {
   objective: string;
   contractVersion: number;
   gaps: string[];
-  steps: string[];
+  nodes: string[];
   status: string;
   phase?: string;
   /** Why a `needs-input` task waited, when the step found one. */
@@ -31,7 +31,7 @@ export interface ReplayRow {
   taskContextHash: string;
   promptHash: string;
   toolNames: string[];
-  /** The state the model saw: objective, contract version, gaps, plan steps, pause/stop codes. */
+  /** The state the model saw: objective, contract version, gaps, plan nodes, pause/stop codes. */
   state: ReplayState;
   /** Whether the stored block still hashes to `taskContextHash` and still names that state's objective. */
   verified: boolean;
@@ -50,7 +50,7 @@ function stateView(state: TaskState): ReplayState {
     objective: state.objective,
     contractVersion: state.contractVersion ?? 1,
     gaps: computeCompletionGaps(state),
-    steps: (state.cognition?.steps ?? []).map(step => `${step.id} [${step.mode}/${step.status}] ${step.objective}`),
+    nodes: (state.cognition?.nodes ?? []).map(node => `${node.id} [${node.kind}/${node.status}] ${node.objective}`),
     status: state.status,
     ...(state.phase ? { phase: state.phase } : {}),
     ...(state.pauseReason ? { pauseReason: state.pauseReason } : {}),

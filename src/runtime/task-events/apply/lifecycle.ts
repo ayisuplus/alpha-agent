@@ -42,7 +42,7 @@ export const lifecycleReducers: FamilyReducers = {
           state.reopenReason = payload.reopenReason.trim();
           if (state.goal) { state.goal.stopReason = undefined; state.goal.noProgressRuns = 0; }
           state.guidanceHistory ??= [];
-          state.guidanceHistory.push(payload.guidance);
+          state.guidanceHistory.push({ ...payload.guidance });
           return;
         }
         // reopen()

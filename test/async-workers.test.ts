@@ -391,11 +391,11 @@ test("persistent subagent continues in its worktree and merges cumulative change
     async runWorker(workOrder, directory) {
       await input.onWorkerEvent?.(workOrder, "started");
       runs++;
-      expect(workOrder.modelSelector).toBe(workOrder.mode === "review" ? "deepseek/deepseek-v4-pro" : "xiaomi-token-plan-cn/mimo-v2.6-flash");
+      expect(workOrder.modelSelector).toBe(workOrder.kind === "review" ? "deepseek/deepseek-v4-pro" : "xiaomi-token-plan-cn/mimo-v2.6-flash");
       expect(directory).toBe(join(state.dataRoot, "worker-agents", state.ledger.state.id, agentId, "project"));
       expect(await readFile(join(directory, "src", "first.txt"), "utf8")).toBe(runs === 1 ? "dirty-parent" : runs === 2 ? "first-run" : "second-run");
-      if (workOrder.mode === "implement") await writeFile(join(directory, "src", "first.txt"), runs === 1 ? "first-run" : "second-run");
-      return { status: "completed", findings: [`run ${runs}`], evidence: [], unresolved: [], readPaths: runs === 1 ? ["src/first.txt:-40"] : [], ...(workOrder.mode === "review" ? { reviewVerdict: "pass" as const } : {}), cognition: { revision: runs, understanding: `run ${runs}`, findings: [], openQuestions: [], nextActions: [], sourceRevision: null } };
+      if (workOrder.kind === "execute") await writeFile(join(directory, "src", "first.txt"), runs === 1 ? "first-run" : "second-run");
+      return { status: "completed", findings: [`run ${runs}`], evidence: [], unresolved: [], readPaths: runs === 1 ? ["src/first.txt:-40"] : [], ...(workOrder.kind === "review" ? { reviewVerdict: "pass" as const } : {}), cognition: { revision: runs, understanding: `run ${runs}`, findings: [], openQuestions: [], nextActions: [], sourceRevision: null } };
     },
   }) });
   try {

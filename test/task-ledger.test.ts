@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { TaskLedger, taskBudgetUsed, type RunRecord } from "../src/runtime/task-ledger";
 import type { WorkOrder } from "../src/runtime/work-orders";
 import { taskPrompt } from "../src/runtime/omp-runner";
+import { recordApprovedPlan } from "./support/approved-plan";
 
 test("a source change makes old evidence and preview ineligible for completion", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-ledger-test-"));
@@ -16,6 +17,7 @@ test("a source change makes old evidence and preview ineligible for completion",
       projectRoot: project,
       criteria: [{ id: "build", description: "Build passes", kind: "build" }],
     });
+    await recordApprovedPlan(ledger);
     const firstRevision = ledger.state.revision!;
     await ledger.recordEvidence({ criterionId: "build", kind: "build", passed: true, revision: firstRevision, source: "build.log" });
     await ledger.recordPreview({ id: "preview-1", revision: firstRevision, path: join(root, "preview-1"), url: "http://127.0.0.1:8123/" });
@@ -41,6 +43,7 @@ test("a completed task can be reopened when visual review finds a failure", asyn
     const project = join(root, "product");
     await Bun.write(join(project, "app.txt"), "source");
     const ledger = await TaskLedger.create(join(root, "state"), { objective: "Build", projectRoot: project, criteria: [{ id: "browser", description: "Visible path", kind: "browser" }] });
+    await recordApprovedPlan(ledger);
     const revision = ledger.state.revision!;
     await ledger.recordPreview({ id: "preview", revision, path: join(root, "preview"), url: "http://127.0.0.1:9000/" });
     await ledger.recordEvidence({ criterionId: "browser", kind: "browser", passed: true, revision, previewId: "preview", source: "first-review.json" });
@@ -105,6 +108,7 @@ test("a revised objective invalidates old acceptance evidence without changing s
     const project = join(root, "product");
     await Bun.write(join(project, "app.txt"), "source");
     const ledger = await TaskLedger.create(join(root, "state"), { objective: "Make a list", projectRoot: project, criteria: [{ id: "build", description: "Build passes", kind: "build" }] });
+    await recordApprovedPlan(ledger);
     const revision = ledger.state.revision!;
     await ledger.recordEvidence({ criterionId: "build", kind: "build", passed: true, revision, source: "old-build.log" });
     await ledger.recordPreview({ id: "old", revision, path: join(root, "old"), url: "http://127.0.0.1:9000/" });
@@ -117,13 +121,18 @@ test("a revised objective invalidates old acceptance evidence without changing s
     expect(ledger.state.status).toBe("active");
     expect(ledger.state.lastFailure).toBeUndefined();
     expect(ledger.state.revision).toBe(revision);
-    expect(ledger.completionGaps()).toEqual(["build", "local-preview"]);
+    // The old gate verdict binds contract v1, so it expires with the revision (§6.2) alongside the evidence.
+    expect(ledger.completionGaps()).toEqual(["build", "local-preview", "gate"]);
+    // The revised objective sent the task back to the plan lane; the model re-plans and the auto-approved plan restores
+    // completion against the now-invalidated evidence.
+    await recordApprovedPlan(ledger);
     await expect(ledger.complete()).rejects.toThrow("build, local-preview");
     await expect(ledger.reviseObjective("Make a list with filtering")).rejects.toThrow("changed");
 
     const restored = await TaskLedger.load(ledger.file);
     expect(restored.state.contractHistory?.[0]?.objective).toBe("Make a list");
-    expect(restored.completionGaps()).toEqual(["build", "local-preview"]);
+    // The review verdict from v1 expired with the contract too (§6.2): evidence and gate both wait for re-work.
+    expect(restored.completionGaps()).toEqual(["build", "local-preview", "gate"]);
     const resumedPrompt = taskPrompt(restored.state, "Keep the original list and add filtering");
     expect(resumedPrompt).toContain("v1: Make a list");
     expect(resumedPrompt).toContain("v2: Make a list with filtering");

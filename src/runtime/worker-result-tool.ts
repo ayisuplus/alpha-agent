@@ -1,7 +1,7 @@
 import { type } from "@oh-my-pi/omptype";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
 import type { TaskLedger } from "./task-ledger";
-import type { WorkOrder } from "./work-orders";
+import { orderKind, type WorkOrder } from "./work-orders";
 import { validateReviewEvidence } from "./development-review-tool";
 import { dirname } from "node:path";
 import { hasUnansweredWorkerRequest } from "./agent-mailbox";
@@ -17,8 +17,8 @@ export function createWorkerResultTool(ledger: TaskLedger, order: WorkOrder): Cu
         if (!["completed", "needs-context", "blocked", "failed"].includes(args.status)) throw new Error("工单结果状态无效");
         if (args.status === "completed" && order.agentId && order.instanceId && await hasUnansweredWorkerRequest(dirname(dirname(ledger.file)), order.instanceId)) throw new Error("子代理仍有待主代理回答的请求，请提交 needs-context");
         if (ledger.state.workerOutcome?.requests?.length && args.status === "completed") throw new Error("仍有能力请求待主代理处理，不能标记完成");
-        if (order.mode === "review" && !["pass", "changes-requested", "inconclusive"].includes(args.reviewVerdict ?? "")) throw new Error("审查结论无效");
-        if (order.mode === "review" && order.fullAccess && args.reviewVerdict === "pass" && !args.reviewEvidence?.length) throw new Error("通过审查需要当前源码引用");
+        if (orderKind(order) === "review" && !["pass", "changes-requested", "inconclusive"].includes(args.reviewVerdict ?? "")) throw new Error("审查结论无效");
+        if (orderKind(order) === "review" && order.fullAccess && args.reviewVerdict === "pass" && !args.reviewEvidence?.length) throw new Error("通过审查需要当前源码引用");
         const reviewEvidence = args.reviewEvidence?.length ? await validateReviewEvidence(ledger.state.projectRoot, args.reviewEvidence) : undefined;
         const input = { status: args.status as NonNullable<typeof ledger.state.workerOutcome>["status"], findings: args.findings, ...(args.reviewVerdict ? { reviewVerdict: args.reviewVerdict as NonNullable<typeof ledger.state.workerOutcome>["reviewVerdict"] } : {}), ...(reviewEvidence ? { reviewEvidence } : {}) };
         await ledger.recordWorkerOutcome(input);

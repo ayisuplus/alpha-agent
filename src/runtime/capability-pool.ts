@@ -22,6 +22,11 @@ export interface CapabilityEntry {
 
 export const expertSkillId = (expertId: string, skillId: string) => `expert-${expertId}:s${createHash("sha256").update(skillId).digest("hex").slice(0, 16)}`;
 
+/**
+ * The global capability catalog: installed Skills, MCP services and tools, and kernel builtin tools. Expert-bundled
+ * Skills are deliberately absent — they mount with their expert and only `resolvePoolSkill` hands one out, to the
+ * expert active in the calling context (docs/plan-graph-and-expert-state-2026-09-29.md §4.2).
+ */
 export async function capabilityPool(dataRoot: string): Promise<CapabilityEntry[]> {
   const plugins = new SkillPluginStore(dataRoot);
   const installed = await plugins.list();
@@ -31,13 +36,6 @@ export async function capabilityPool(dataRoot: string): Promise<CapabilityEntry[
     const plugin = installed.find(item => skill.name.startsWith(`${item.id}:`));
     if (!plugin) continue;
     entries.push({ id: skill.name, kind: "skill", name: skill.name, description: skill.description, source: plugin.id, revision: plugin.revision, hash: await hashSkillDirectory(skill.baseDir), enabled: true });
-  }
-  for (const expert of await new ExpertStore(dataRoot).list()) {
-    if (!expert.package?.skills.length) continue;
-    for (const skill of await new ExpertStore(dataRoot).loadBundledSkills(expert)) {
-      const item = expert.package.skills.find(entry => entry.id === skill.name)!;
-      entries.push({ id: expertSkillId(expert.id, skill.name), kind: "skill", name: skill.name, description: skill.description, source: `expert:${expert.id}`, revision: expert.package.revision, hash: item.hash, enabled: expert.enabled });
-    }
   }
   for (const plugin of installed) {
     const config = await readPluginMCP(join(dataRoot, "plugin-packs", plugin.id), plugin.id);
@@ -57,9 +55,10 @@ export async function capabilityPool(dataRoot: string): Promise<CapabilityEntry[
   return entries.sort((a, b) => a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id));
 }
 
-export async function resolvePoolSkill(dataRoot: string, id: string): Promise<{ skill: Skill; revision: string; hash: string }> {
+/** `activeExpertId` is the expert mounted in the calling session; an `expert-` id resolves only inside its own package. */
+export async function resolvePoolSkill(dataRoot: string, id: string, activeExpertId?: string): Promise<{ skill: Skill; revision: string; hash: string }> {
   if (id.startsWith("expert-")) {
-    const expert = (await new ExpertStore(dataRoot).list()).find(item => item.package?.skills.some(skill => expertSkillId(item.id, skill.id) === id));
+    const expert = (await new ExpertStore(dataRoot).list()).find(item => item.id === activeExpertId && item.package?.skills.some(skill => expertSkillId(item.id, skill.id) === id));
     if (!expert?.enabled) throw new Error(`Skill is unavailable: ${id}`);
     const skill = (await new ExpertStore(dataRoot).loadBundledSkills(expert)).find(item => expertSkillId(expert.id, item.name) === id);
     if (!skill || !expert.package) throw new Error(`Skill is unavailable: ${id}`);

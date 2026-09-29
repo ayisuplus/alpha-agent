@@ -3,6 +3,7 @@ import { createTwoFilesPatch } from "diff";
 import { ExpertStore } from "./experts";
 import { runTask, type RunOptions } from "./omp-runner";
 import { snapshotSource, sourceChanges } from "./source-review";
+import { gateActorFor } from "./expert-selection";
 import { taskBudgetUsed, type TaskLedger } from "./task-ledger";
 import type { WorkerStopReason } from "./task-events";
 import { WorkerSupervisor, inspectWorkerAttempt } from "./worker-supervisor";
@@ -11,7 +12,7 @@ import { taskProfile } from "./task-profile";
 import type { WorkOrder } from "./work-orders";
 
 function isDevelopment(ledger: TaskLedger): boolean {
-  return taskProfile(ledger.state.taskType).developmentReview;
+  return taskProfile(ledger.state.taskType).defaultGates.length > 0;
 }
 
 function currentReviewPassed(ledger: TaskLedger): boolean {
@@ -42,7 +43,7 @@ export async function recordIntegratedFinalReview(ledger: TaskLedger, dataRoot: 
   if (ledger.state.status !== "active") return false;
   const instance = ledger.state.cognition?.instances?.findLast(item =>
     (instanceId ? item.id === instanceId : item.orderId === "final-review" || item.order?.resources.includes("final-review"))
-    && item.mode === "review" && item.status === "completed" && item.integration === "merged"
+    && item.kind === "review" && item.status === "completed" && item.integration === "merged"
     && item.baseRevision === ledger.state.revision && item.contractVersion === (ledger.state.contractVersion ?? 1));
   if (!instance || ledger.state.development?.review?.instanceId === instance.id) return false;
   const attempt = await inspectWorkerAttempt(ledger, dataRoot, instance.id);
@@ -51,6 +52,17 @@ export async function recordIntegratedFinalReview(ledger: TaskLedger, dataRoot: 
   const evidence = await validateReviewEvidence(projectRoot, result.reviewEvidence ?? []);
   if (result.reviewVerdict === "pass" && !evidence.length) throw new Error("Passing review has no current source evidence");
   await ledger.recordDevelopmentReview({ verdict: result.reviewVerdict, findings: result.findings?.length ? result.findings : ["Source review passed"], evidence, instanceId: instance.id, expectedRevision: instance.baseRevision ?? undefined, expectedContractVersion: instance.contractVersion });
+  // §6.2: the independent review IS the task type's default gate, so it also closes the plan's gate node; the
+  // verdict and its source excerpts become that node's handoff, and a changes-requested walks its rework edge.
+  const gateNode = ledger.state.cognition?.nodes.find(node => node.kind === "review" && taskProfile(ledger.state.taskType).defaultGates.includes(node.gateRole ?? ""));
+  if (gateNode && gateNode.status !== "done" && gateNode.status !== "cancelled") {
+    await ledger.enterNode({ nodeId: gateNode.id, host: gateNode.host, runId: instance.id });
+    await ledger.exitNode({
+      nodeId: gateNode.id, runId: instance.id, artifacts: [], verdict: result.reviewVerdict,
+      findings: evidence.map(item => ({ claim: item.excerpt, source: item.path })),
+      note: `独立审查结论：${result.reviewVerdict}`, unresolved: result.reviewVerdict === "pass" ? [] : result.findings ?? [],
+    });
+  }
   return true;
 }
 
@@ -90,7 +102,7 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
       createdLedger = created;
       if (isDevelopment(created)) {
         await created.enableDevelopmentWorkflow();
-        await created.recordDispatch({ id: coordinatorId, orderId: "coordinator", mode: "implement", expert: coordinatorExpert ? { id: coordinatorExpert.id, name: coordinatorExpert.name, hash: coordinatorExpert.hash } : undefined, skills: coordinatorExpert?.package?.skills.map(item => ({ id: item.id, hash: item.hash, revision: coordinatorExpert.package!.revision })) ?? [] });
+        await created.recordDispatch({ id: coordinatorId, orderId: "coordinator", kind: "execute", expert: coordinatorExpert ? { id: coordinatorExpert.id, name: coordinatorExpert.name, hash: coordinatorExpert.hash } : undefined, skills: coordinatorExpert?.package?.skills.map(item => ({ id: item.id, hash: item.hash, revision: coordinatorExpert.package!.revision })) ?? [] });
       }
       supervisor = new WorkerSupervisor({ ledger: created, dataRoot: options.dataRoot, parentId: coordinatorId, modelSelector: options.modelSelector, signal: options.signal, browser: options.browser, browserUrl: options.browserUrl, browserAccess: options.browserAccess, plugins: options.plugins, generation: options.generation, comfyUrl: options.comfyUrl,
         remainingCalls: () => (options.maxTotalToolCalls ?? 1200) - taskBudgetUsed(created.state.runs).toolCalls - currentToolCalls,
@@ -131,17 +143,25 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
     const changes = sourceChanges(comparison, after);
     const changedPaths = changes.map(item => item.path).slice(0, 80).join(", ") || "no source change in this run";
     const actualDiff = changes.slice(0, 20).map(item => createTwoFilesPatch(`before/${item.path}`, `after/${item.path}`, item.before ?? "", item.after ?? "").slice(0, 8_000)).join("\n").slice(0, 32_000);
-    const reviewStep = ledger.state.cognition?.steps.find(step => step.mode === "review");
-    const suggestedReviewer = reviewStep?.expertId ? (await new ExpertStore(options.dataRoot).enabled()).find(item => item.id === reviewStep.expertId) : undefined;
-    const reviewExpert = suggestedReviewer?.package?.skills.length ? suggestedReviewer : undefined;
+    const reviewStep = ledger.state.cognition?.nodes.find(step => step.kind === "review");
+    const suggestedReviewer = reviewStep?.expertDecision.expertId ? (await new ExpertStore(options.dataRoot).enabled()).find(item => item.id === reviewStep.expertDecision.expertId) : undefined;
+    // §6.2: a gate role is performed by an expert that declares it when one is enabled; code-review falls back to the
+    // built-in neutral reviewer.
+    const gateActor = gateActorFor(await new ExpertStore(options.dataRoot).enabled(), reviewStep?.gateRole ?? "");
+    const reviewExpert = suggestedReviewer ?? ("expert" in gateActor ? gateActor.expert : undefined);
+    if ("missing" in gateActor) {
+      await ledger.recordCapabilityGap("method", `没有可承担 ${gateActor.missing} gate 的已启用专家`);
+      await ledger.needInput(`缺少 ${gateActor.missing} gate 的审查专家；请启用一个具备该角色的专家，或说明如何继续`, "capability");
+      return ledger;
+    }
     if (!supervisor) throw new Error("Worker supervisor is not ready for final review");
     const reviewedRevision = ledger.state.revision;
     const reviewedContract = ledger.state.contractVersion ?? 1;
     const instanceId = randomUUID();
     const reviewOrder: WorkOrder = {
-      id: reviewStep?.id ?? "final-review", agentId: randomUUID(), instanceId, mode: "review", fullAccess: true, ownedPaths: [], readPaths: ["."], resources: ["final-review"], contractVersion: reviewedContract, baseRevision: reviewedRevision ?? undefined, decisionReason: "Independent review is required before final acceptance",
+      id: reviewStep?.id ?? "final-review", agentId: randomUUID(), instanceId, kind: "review", fullAccess: true, ownedPaths: [], readPaths: ["."], resources: ["final-review"], contractVersion: reviewedContract, baseRevision: reviewedRevision ?? undefined, decisionReason: "Independent review is required before final acceptance",
       objective: `Review source correctness against this task: ${ledger.state.objective}. Acceptance criteria: ${ledger.state.criteria.map(item => `${item.id}: ${item.description}`).join(" | ")}. Configured tests and browser checks are separate. Changed paths this run: ${changedPaths}. Actual bounded diff:\n${actualDiff || "No text diff captured; inspect current source and task evidence."}\nCheck the requested behavior end to end; do not dismiss a requirement as pre-existing without verifying it. Read source without changing it. Submit alpha_worker_result with a review verdict and exact current source evidence when passing. Send findings to the primary agent.`,
-      skillIds: [...new Set([...(reviewExpert?.skillIds ?? []), ...(reviewExpert || !reviewStep?.expertId ? reviewStep?.skillIds ?? [] : [])])], acceptance: ["Return an independent source verdict with exact current source evidence; make no source edits"],
+      skillIds: [...new Set([...(reviewExpert?.skillIds ?? []), ...(reviewExpert || !reviewStep?.expertDecision.expertId ? reviewStep?.skillIds ?? [] : [])])], acceptance: ["Return an independent source verdict with exact current source evidence; make no source edits"],
       ...(reviewExpert ? { expertId: reviewExpert.id, expert: reviewExpert } : {}),
     };
     options.onEvent?.({ type: "status", value: `独立工作树审查 · ${reviewExpert?.name ?? "通用执行"}` });
@@ -197,11 +217,11 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
     const oldRevision = ledger.state.revision;
     options.onEvent?.({ type: "status", value: `按审查意见修复 · 第 ${ledger.state.development?.repairAttempts} 轮` });
     comparison = after;
-    const implementer = ledger.state.cognition?.agents?.findLast(agent => agent.mode === "implement" && agent.status === "completed");
+    const implementer = ledger.state.cognition?.agents?.findLast(agent => agent.kind === "execute" && agent.status === "completed");
     // The primary agent repairs directly when there is no implementer to continue, or when one returned nothing.
     const repairDirectly = async (): Promise<void> => {
       const repairId = randomUUID();
-      await ledger.recordDispatch({ id: repairId, orderId: "review-repair", mode: "implement", skills: [] });
+      await ledger.recordDispatch({ id: repairId, orderId: "review-repair", kind: "execute", skills: [] });
       try {
         ledger = await runCoordinator({ ...workerOptions, existingLedger: ledger, objective: `Fix these independent review findings while preserving the task contract: ${review.findings.join(" | ")}`, onLedger: undefined });
         await ledger.finishDispatch(repairId, ledger.state.revision === oldRevision ? "blocked" : "completed", ledger.state.revision === oldRevision ? ["No source change after repair"] : []);
@@ -213,7 +233,7 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
     if (!implementer) {
       await repairDirectly();
     } else {
-      const repairRunId = await supervisor.continue(implementer.id, `Fix independent review findings: ${review.findings.join(" | ")}`, "implement");
+      const repairRunId = await supervisor.continue(implementer.id, `Fix independent review findings: ${review.findings.join(" | ")}`, "execute");
       while (["queued", "running"].includes(ledger.state.cognition?.instances?.find(item => item.id === repairRunId)?.status ?? "") && ledger.state.status === "active" && !options.signal?.aborted) await supervisor.wait([repairRunId], 60_000, false);
       const repairStatus = ledger.state.cognition?.instances?.find(item => item.id === repairRunId)?.status;
       if (repairStatus !== "returned") {

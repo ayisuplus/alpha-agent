@@ -23,7 +23,7 @@ async function git(root: string, ...args: string[]) {
   if (code) throw new Error(stderr);
 }
 
-test("expert Skills are distinct catalog entries and only selected versions reach workers", async () => {
+test("expert Skills stay out of the global catalog and resolve only inside their own expert", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-capability-pool-"));
   try {
     const source = join(root, "source");
@@ -39,16 +39,24 @@ test("expert Skills are distinct catalog entries and only selected versions reac
     await writeFile(join(data, "plugin-packs", "installed.json"), JSON.stringify({ plugins: [{ id: "sample", name: "sample", source: "https://github.com/example/sample.git", revision: "a".repeat(40), enabled: true, skillCount: 0, hookCount: 0, hooksEnabled: false, mcpCount: 1, mcpEnabled: true }] }));
     const catalog = await capabilityPool(data);
     const id = expertSkillId(first.id, "source:proof");
-    expect(catalog.filter(item => item.name === "source:proof").map(item => item.id)).toEqual([id, expertSkillId(second.id, "source:proof")]);
+    expect(catalog.filter(item => item.kind === "skill")).toEqual([]);
+    expect(catalog.some(item => item.id.startsWith("expert-"))).toBe(false);
     expect(catalog).toContainEqual(expect.objectContaining({ id: "alpha_sample_echo", kind: "mcp-server", enabled: true }));
     expect(await Bun.file(join(root, "started.txt")).exists()).toBe(false);
-    const reader = createSkillResourceTool([], async skillId => (await resolvePoolSkill(data, skillId)).skill);
+    // On-demand reads resolve only inside the mounted expert's own package: no session reaches past its expert.
+    const reader = createSkillResourceTool([], async skillId => (await resolvePoolSkill(data, skillId, first.id)).skill);
     expect((await reader.execute("read", { id, path: "SKILL.md" }, undefined, undefined as never)).content[0]).toMatchObject({ text: expect.stringContaining("Use the source") });
-    const [unbound] = bindWorkOrders([{ id: "review", objective: "Review", mode: "review", ownedPaths: [], readPaths: ["."], resources: [], expertId: first.id }], await store.enabled(), []);
-    expect(unbound.skillIds).toEqual([]);
-    const bound = await snapshotSkills(data, join(root, "worker"), { ...unbound, capabilityIds: [id] });
-    expect(bound.capabilitySnapshots).toMatchObject([{ id, kind: "skill" }]);
-    expect((await loadWorkerSkillSnapshots(join(root, "worker"), bound)).map(item => item.name)).toEqual([id]);
+    for (const stranger of [undefined, second.id]) {
+      const closed = createSkillResourceTool([], async skillId => (await resolvePoolSkill(data, skillId, stranger)).skill);
+      expect((await closed.execute("read", { id, path: "SKILL.md" }, undefined, undefined as never)).isError).toBe(true);
+    }
+    // A worker takes its own expert's bundled Skill through the order; a catalog capabilityId cannot smuggle one in.
+    const [unbound] = await bindWorkOrders([{ id: "review", objective: "Review", mode: "review", ownedPaths: [], readPaths: ["."], resources: [], expertId: first.id }], await store.enabled(), [], data);
+    expect(unbound.skillIds).toEqual(["source:proof"]);
+    const bound = await snapshotSkills(data, join(root, "worker"), { ...unbound, capabilityIds: [] });
+    expect(bound.skillSnapshots).toMatchObject([{ id: "source:proof" }]);
+    expect((await loadWorkerSkillSnapshots(join(root, "worker"), bound)).map(item => item.name)).toEqual(["source:proof"]);
+    await expect(snapshotSkills(data, join(root, "worker-two"), { ...unbound, capabilityIds: [id] })).rejects.toThrow("Capability is unavailable");
     const project = join(root, "project");
     await mkdir(project);
     await writeFile(join(project, "entry.txt"), "source");
@@ -67,7 +75,7 @@ test("expert Skills are distinct catalog entries and only selected versions reac
     await mailbox.collect();
     expect(ledger.state.workerRequests?.[0]).toMatchObject({ kind: "capability", capabilityIds: [id], status: "open" });
     await store.setEnabled(first.id, false);
-    expect((await capabilityPool(data)).find(item => item.id === id)?.enabled).toBe(false);
+    await expect(resolvePoolSkill(data, id, first.id)).rejects.toThrow("Skill is unavailable");
     const continued = await snapshotSkills(data, join(root, "worker"), bound);
     expect(continued.skillSnapshots?.[0].hash).toBe(bound.skillSnapshots?.[0].hash);
   } finally { await rm(root, { recursive: true, force: true }); }

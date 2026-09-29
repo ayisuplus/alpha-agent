@@ -135,7 +135,7 @@ export function checkTaskInvariants(state: TaskState, operations: TaskOperationR
     }
   }
   if ((state.goal?.noProgressRuns ?? 0) < 0) add("I7/negative-no-progress-runs", "I7", `无进展轮数为 ${state.goal?.noProgressRuns}`);
-  for (const step of cognition?.steps ?? []) {
+  for (const step of cognition?.nodes ?? []) {
     if (step.revision !== undefined && step.revision < 0) add("I7/step-revision-negative", "I7", `计划步骤 ${step.id} 的看板修订为负数：${step.revision}`);
   }
 
@@ -144,15 +144,15 @@ export function checkTaskInvariants(state: TaskState, operations: TaskOperationR
   if (state.status === "stopped" && !state.stop && !state.lastFailure && !state.reopenReason && !state.goal?.stopReason) {
     add("S/stopped-without-reason", "S", "任务已停止但没有停止原因（stop / lastFailure / reopenReason / goal.stopReason 都为空）");
   }
-  const steps = cognition?.steps ?? [];
+  const steps = cognition?.nodes ?? [];
   for (const step of steps) {
     // A restart reconciles the instance but leaves the step running; a claim naming that ended instance explains it.
-    if (step.status === "running"
+    if (step.status === "active"
       && !instances.some(item => item.orderId === step.id && !FINISHED_INSTANCE[item.status])
       && !instances.some(item => item.id === step.claimedBy && FINISHED_INSTANCE[item.status])) {
       add("S/step-running-without-instance", "S", `计划步骤 ${step.id} 标记运行中，但没有未结束的实例`);
     }
-    if (step.status === "complete" && step.dependsOn.some(dependency => steps.find(item => item.id === dependency)?.status !== "complete")) {
+    if (step.status === "done" && step.dependsOn.some(dependency => steps.find(item => item.id === dependency)?.status !== "done")) {
       add("S/step-complete-with-unmet-dependency", "S", `计划步骤 ${step.id} 已完成，但依赖未全部完成`);
     }
   }

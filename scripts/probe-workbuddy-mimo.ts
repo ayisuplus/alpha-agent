@@ -43,7 +43,7 @@ await save();
 
 try {
   const source = await fixture("browser-source");
-  const [order] = bindWorkOrders([{ id: "browser", objective: "Use alpha_browser observe on the connected local preview. Verify its visible text contains 'Cart total: 33' and there are no console errors. Report the observed browser evidence and a review verdict; do not change files.", mode: "review", ownedPaths: [], readPaths: ["src/cart.ts"], resources: [] }], [coach]);
+  const [order] = await bindWorkOrders([{ id: "browser", objective: "Use alpha_browser observe on the connected local preview. Verify its visible text contains 'Cart total: 33' and there are no console errors. Report the observed browser evidence and a review verdict; do not change files.", mode: "review", ownedPaths: [], readPaths: ["src/cart.ts"], resources: [] }], [coach], [], dataRoot);
   let browserCalls = 0;
   const observation = { title: "Cart", url: "http://127.0.0.1:8123/", text: "Cart total: 33", controls: [], consoleErrors: [], failedRequests: [], brokenImages: [], viewport: { width: 1280, height: 800, horizontalOverflow: false } };
   const browser = { observe: async () => { browserCalls++; return observation; } } as unknown as VisibleBrowser;
@@ -60,7 +60,7 @@ if (process.argv.includes("--browser-only")) {
 
 try {
   const source = await fixture("capability-source");
-  const [order] = bindWorkOrders([{ id: "visual", objective: "The requested acceptance needs a real browser inspection of the rendered UI, which this isolated worker cannot do directly. Record an exact browser capability request to the coordinator, then report needs-context; do not claim visual verification.", mode: "review", ownedPaths: [], readPaths: ["src/cart.ts"], resources: [] }], [coach]);
+  const [order] = await bindWorkOrders([{ id: "visual", objective: "The requested acceptance needs a real browser inspection of the rendered UI, which this isolated worker cannot do directly. Record an exact browser capability request to the coordinator, then report needs-context; do not claim visual verification.", mode: "review", ownedPaths: [], readPaths: ["src/cart.ts"], resources: [] }], [coach], [], dataRoot);
   const result = await runModelWorkOrders({ projectRoot: source, dataRoot, taskId: randomUUID(), baseRevision: await fingerprintSource(source), orders: [order], modelSelector: model, signal: AbortSignal.timeout(180_000) });
   report.capability = { status: result.status, reason: result.reason, result: result.results.visual, committed: result.committed };
 } catch (error) { report.capability = { error: error instanceof Error ? error.message : String(error) }; }
@@ -68,7 +68,7 @@ await save();
 
 try {
   const source = await fixture("worker-source");
-  const [order] = bindWorkOrders([{ id: "cart", objective: "Fix calculateTotal so it multiplies price by quantity and passes the existing cart test. Keep the public signature.", mode: "implement", ownedPaths: ["src/cart.ts"], readPaths: ["test/cart.test.ts", "package.json"], resources: [], acceptance: ["Existing cart test passes"] }], [coach]);
+  const [order] = await bindWorkOrders([{ id: "cart", objective: "Fix calculateTotal so it multiplies price by quantity and passes the existing cart test. Keep the public signature.", mode: "implement", ownedPaths: ["src/cart.ts"], readPaths: ["test/cart.test.ts", "package.json"], resources: [], acceptance: ["Existing cart test passes"] }], [coach], [], dataRoot);
   const usage: unknown[] = [];
   const result = await runModelWorkOrders({ projectRoot: source, dataRoot, taskId: randomUUID(), baseRevision: await fingerprintSource(source), orders: [order], modelSelector: model, signal: AbortSignal.timeout(180_000), onWorkerUsage: (_order, value) => { usage.push(value); } });
   report.worker = { status: result.status, reason: result.reason, changed: result.changes, results: result.results, usage, source: await readFile(join(source, "src", "cart.ts"), "utf8"), check: await check(source) };

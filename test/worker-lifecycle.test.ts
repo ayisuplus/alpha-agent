@@ -34,7 +34,7 @@ async function fixture() {
 }
 
 function order(id: string, path: string): WorkOrder {
-  return { id, objective: `Change ${path}`, ownedPaths: [path], dependsOn: [], resources: [`module:${id}`], mode: "implement", instanceId: crypto.randomUUID() };
+  return { id, objective: `Change ${path}`, ownedPaths: [path], dependsOn: [], resources: [`module:${id}`], kind: "execute", instanceId: crypto.randomUUID() };
 }
 
 test("a subagent that submits no result leaves a no-result fact instead of a sentence", async () => {
@@ -123,7 +123,7 @@ test("recovery never reaps a process that is not one of our workers", async () =
     const bystander = Bun.spawn([process.execPath, "--version"], { stdout: "ignore", stderr: "ignore" });
     // Only a dispatched attempt can carry a pid: the log cannot claim processes for attempts that do not exist.
     await expect(state.ledger.recordWorkerActivation({ attemptId: "attempt-1", orderId: "first", pid: bystander.pid })).rejects.toThrow("Worker attempt not found");
-    await state.ledger.recordDispatch({ id: "attempt-1", orderId: "coordinator", mode: "investigate", skills: [] });
+    await state.ledger.recordDispatch({ id: "attempt-1", orderId: "coordinator", kind: "investigate", skills: [] });
     await state.ledger.recordWorkerActivation({ attemptId: "attempt-1", orderId: "coordinator", pid: bystander.pid, workRoot: join(state.dataRoot, "workers", "attempt-1") });
     expect(await reapOrphanWorkers(state.ledger)).toEqual([]);
     await bystander.exited;

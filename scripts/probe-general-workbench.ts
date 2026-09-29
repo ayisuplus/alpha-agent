@@ -35,7 +35,7 @@ await waiting.needInput("请补充目标", "question");
 const planRoot = join(productsRoot, "plan");
 await mkdir(planRoot);
 const plan = await TaskLedger.create(dataRoot, { objective: "规划一个任务", projectRoot: planRoot, taskType: "general", startMode: "plan", criteria: [] });
-await plan.reviseCognition({ summary: "先检查需求", reason: "probe", candidates: [], steps: [{ id: "inspect", objective: "审阅需求", mode: "investigate", dependsOn: [], skillIds: [], status: "planned" }] });
+await plan.reviseCognition({ summary: "先检查需求", reason: "probe", candidates: [], nodes: [{ id: "inspect", objective: "审阅需求", kind: "investigate", phase: "investigate", dependsOn: [], expertDecision: { reason: "探针自行调查" }, host: "coordinator", skillIds: [], status: "planned" }, { id: "work", objective: "完成任务", kind: "execute", phase: "execute", dependsOn: ["inspect"], expertDecision: { reason: "探针自行执行" }, host: "coordinator", skillIds: [], status: "planned" }, { id: "review", objective: "检查结果", kind: "review", phase: "review", dependsOn: ["work"], expertDecision: { reason: "探针自行检查" }, host: "coordinator", skillIds: [], status: "planned" }] });
 await plan.submitPlanForReview();
 
 const resultRoot = join(productsRoot, "result");

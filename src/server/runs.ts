@@ -232,6 +232,12 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
       };
       const verified = await verifyCycle();
       currentLedger = (await TaskLedger.load(verified.file)).bindRun(runId);
+      // §3.6: a node switch ends the run but not the work; the driver continues immediately at the new node.
+      if (currentLedger.state.runs?.at(-1)?.outcome === "node-switch") {
+        currentInstruction = "Continue the task at the next plan node; the runtime moved the cursor onto it.";
+        emitRun({ type: "status", phase: "切换节点", runId });
+        continue;
+      }
       const continuation = nextGoalCycle(currentLedger, beforeProgress, controller.signal.aborted, webKernel.controlHolder === "user");
       if (!continuation.continue && continuation.stopReason !== "no-progress") return;
       if (continuation.stopReason === "no-progress") {

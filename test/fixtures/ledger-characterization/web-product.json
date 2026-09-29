@@ -145,11 +145,6 @@
           "after": 0
         },
         {
-          "path": "phase",
-          "before": "execute",
-          "after": "plan"
-        },
-        {
           "path": "updatedAt",
           "before": "<at:9>",
           "after": "<at:10>"
@@ -161,14 +156,24 @@
       "outcome": "ok",
       "changed": [
         {
-          "path": "cognition.amendments[0].affectedSteps[0]",
+          "path": "cognition.amendments[0].affectedNodes[0]",
           "before": "<absent>",
           "after": "s1"
         },
         {
-          "path": "cognition.amendments[0].affectedSteps[1]",
+          "path": "cognition.amendments[0].affectedNodes[1]",
           "before": "<absent>",
           "after": "s2"
+        },
+        {
+          "path": "cognition.amendments[0].affectedNodes[2]",
+          "before": "<absent>",
+          "after": "gate"
+        },
+        {
+          "path": "cognition.amendments[0].affectedNodes[3]",
+          "before": "<absent>",
+          "after": "s3"
         },
         {
           "path": "cognition.amendments[0].reason",
@@ -201,6 +206,196 @@
           "after": "No API change"
         },
         {
+          "path": "cognition.edges[0].from",
+          "before": "<absent>",
+          "after": "s3"
+        },
+        {
+          "path": "cognition.edges[0].kind",
+          "before": "<absent>",
+          "after": "rework"
+        },
+        {
+          "path": "cognition.edges[0].to",
+          "before": "<absent>",
+          "after": "s2"
+        },
+        {
+          "path": "cognition.nodes[0].expertDecision.reason",
+          "before": "<absent>",
+          "after": "the coordinator reads the code itself"
+        },
+        {
+          "path": "cognition.nodes[0].host",
+          "before": "<absent>",
+          "after": "coordinator"
+        },
+        {
+          "path": "cognition.nodes[0].id",
+          "before": "<absent>",
+          "after": "s1"
+        },
+        {
+          "path": "cognition.nodes[0].kind",
+          "before": "<absent>",
+          "after": "investigate"
+        },
+        {
+          "path": "cognition.nodes[0].objective",
+          "before": "<absent>",
+          "after": "Read the cart code and list the rounding paths"
+        },
+        {
+          "path": "cognition.nodes[0].phase",
+          "before": "<absent>",
+          "after": "investigate"
+        },
+        {
+          "path": "cognition.nodes[0].status",
+          "before": "<absent>",
+          "after": "ready"
+        },
+        {
+          "path": "cognition.nodes[1].dependsOn[0]",
+          "before": "<absent>",
+          "after": "s1"
+        },
+        {
+          "path": "cognition.nodes[1].expertDecision.expertId",
+          "before": "<absent>",
+          "after": "backend"
+        },
+        {
+          "path": "cognition.nodes[1].expertDecision.reason",
+          "before": "<absent>",
+          "after": "the named expert owns the implementation"
+        },
+        {
+          "path": "cognition.nodes[1].host",
+          "before": "<absent>",
+          "after": "worker"
+        },
+        {
+          "path": "cognition.nodes[1].id",
+          "before": "<absent>",
+          "after": "s2"
+        },
+        {
+          "path": "cognition.nodes[1].kind",
+          "before": "<absent>",
+          "after": "execute"
+        },
+        {
+          "path": "cognition.nodes[1].objective",
+          "before": "<absent>",
+          "after": "Fix the rounding and add a regression test"
+        },
+        {
+          "path": "cognition.nodes[1].ownedPaths[0]",
+          "before": "<absent>",
+          "after": "src"
+        },
+        {
+          "path": "cognition.nodes[1].phase",
+          "before": "<absent>",
+          "after": "execute"
+        },
+        {
+          "path": "cognition.nodes[1].produces[0]",
+          "before": "<absent>",
+          "after": "patch"
+        },
+        {
+          "path": "cognition.nodes[1].status",
+          "before": "<absent>",
+          "after": "planned"
+        },
+        {
+          "path": "cognition.nodes[2].expertDecision.reason",
+          "before": "<absent>",
+          "after": "the coordinator gates the integration itself"
+        },
+        {
+          "path": "cognition.nodes[2].gateRole",
+          "before": "<absent>",
+          "after": "integration-gate"
+        },
+        {
+          "path": "cognition.nodes[2].host",
+          "before": "<absent>",
+          "after": "coordinator"
+        },
+        {
+          "path": "cognition.nodes[2].id",
+          "before": "<absent>",
+          "after": "gate"
+        },
+        {
+          "path": "cognition.nodes[2].kind",
+          "before": "<absent>",
+          "after": "review"
+        },
+        {
+          "path": "cognition.nodes[2].objective",
+          "before": "<absent>",
+          "after": "Gate the fix before the final review"
+        },
+        {
+          "path": "cognition.nodes[2].phase",
+          "before": "<absent>",
+          "after": "execute"
+        },
+        {
+          "path": "cognition.nodes[2].status",
+          "before": "<absent>",
+          "after": "planned"
+        },
+        {
+          "path": "cognition.nodes[3].dependsOn[0]",
+          "before": "<absent>",
+          "after": "s2"
+        },
+        {
+          "path": "cognition.nodes[3].dependsOn[1]",
+          "before": "<absent>",
+          "after": "gate"
+        },
+        {
+          "path": "cognition.nodes[3].expertDecision.reason",
+          "before": "<absent>",
+          "after": "the coordinator reviews the result itself"
+        },
+        {
+          "path": "cognition.nodes[3].host",
+          "before": "<absent>",
+          "after": "coordinator"
+        },
+        {
+          "path": "cognition.nodes[3].id",
+          "before": "<absent>",
+          "after": "s3"
+        },
+        {
+          "path": "cognition.nodes[3].kind",
+          "before": "<absent>",
+          "after": "review"
+        },
+        {
+          "path": "cognition.nodes[3].objective",
+          "before": "<absent>",
+          "after": "Check the result against the objective"
+        },
+        {
+          "path": "cognition.nodes[3].phase",
+          "before": "<absent>",
+          "after": "review"
+        },
+        {
+          "path": "cognition.nodes[3].status",
+          "before": "<absent>",
+          "after": "planned"
+        },
+        {
           "path": "cognition.revision",
           "before": 1,
           "after": 2
@@ -211,120 +406,19 @@
           "after": "src/cart.ts"
         },
         {
-          "path": "cognition.steps[0].id",
-          "before": "<absent>",
-          "after": "s1"
-        },
-        {
-          "path": "cognition.steps[0].mode",
-          "before": "<absent>",
-          "after": "investigate"
-        },
-        {
-          "path": "cognition.steps[0].objective",
-          "before": "<absent>",
-          "after": "Read the cart code and list the rounding paths"
-        },
-        {
-          "path": "cognition.steps[0].status",
-          "before": "<absent>",
-          "after": "planned"
-        },
-        {
-          "path": "cognition.steps[1].dependsOn[0]",
-          "before": "<absent>",
-          "after": "s1"
-        },
-        {
-          "path": "cognition.steps[1].expertId",
-          "before": "<absent>",
-          "after": "backend"
-        },
-        {
-          "path": "cognition.steps[1].id",
-          "before": "<absent>",
-          "after": "s2"
-        },
-        {
-          "path": "cognition.steps[1].mode",
-          "before": "<absent>",
-          "after": "implement"
-        },
-        {
-          "path": "cognition.steps[1].objective",
-          "before": "<absent>",
-          "after": "Fix the rounding and add a regression test"
-        },
-        {
-          "path": "cognition.steps[1].status",
-          "before": "<absent>",
-          "after": "planned"
-        },
-        {
           "path": "cognition.summary",
           "before": "Build a cart page that shows totals in cents",
           "after": "Fix cart rounding in two steps"
         },
         {
-          "path": "updatedAt",
-          "before": "<at:10>",
-          "after": "<at:12>"
-        }
-      ]
-    },
-    {
-      "name": "reviseCognition:invalid-step-id",
-      "outcome": "error",
-      "error": "认知步骤无效",
-      "changed": []
-    },
-    {
-      "name": "reviseCognition:cycle",
-      "outcome": "error",
-      "error": "认知步骤存在循环依赖",
-      "changed": []
-    },
-    {
-      "name": "updateStep:implement-during-plan",
-      "outcome": "error",
-      "error": "Planning can only finish investigation steps",
-      "changed": []
-    },
-    {
-      "name": "submitPlanForReview",
-      "outcome": "ok",
-      "changed": [
-        {
           "path": "phase",
           "before": "plan",
-          "after": "plan-review"
-        },
-        {
-          "path": "updatedAt",
-          "before": "<at:12>",
-          "after": "<at:13>"
-        }
-      ]
-    },
-    {
-      "name": "updateStep:during-plan-review",
-      "outcome": "error",
-      "error": "Plan is awaiting review",
-      "changed": []
-    },
-    {
-      "name": "approvePlan",
-      "outcome": "ok",
-      "changed": [
-        {
-          "path": "phase",
-          "before": "plan-review",
           "after": "execute"
         },
         {
           "path": "planApproval.approvedAt",
           "before": "<absent>",
-          "after": "<at:15>"
+          "after": "<at:13>"
         },
         {
           "path": "planApproval.cognitionRevision",
@@ -343,10 +437,87 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:13>",
+          "before": "<at:10>",
+          "after": "<at:12>"
+        }
+      ]
+    },
+    {
+      "name": "reviseCognition:invalid-step-id",
+      "outcome": "error",
+      "error": "认知节点无效",
+      "changed": []
+    },
+    {
+      "name": "reviseCognition:cycle",
+      "outcome": "error",
+      "error": "认知节点存在循环依赖",
+      "changed": []
+    },
+    {
+      "name": "enterNode:s2-early",
+      "outcome": "error",
+      "error": "节点前置未完成：s2",
+      "changed": []
+    },
+    {
+      "name": "enterNode:gate-early",
+      "outcome": "error",
+      "error": "节点所在阶段尚未开放：gate",
+      "changed": []
+    },
+    {
+      "name": "submitPlanForReview",
+      "outcome": "error",
+      "error": "A nonempty plan is required for review",
+      "changed": []
+    },
+    {
+      "name": "enterNode:s1",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.nodes[0].activation.access",
+          "before": "<absent>",
+          "after": "read-only"
+        },
+        {
+          "path": "cognition.nodes[0].activation.host",
+          "before": "<absent>",
+          "after": "coordinator"
+        },
+        {
+          "path": "cognition.nodes[0].activation.runId",
+          "before": "<absent>",
+          "after": "run-s1"
+        },
+        {
+          "path": "cognition.nodes[0].claimedBy",
+          "before": "<absent>",
+          "after": "run-s1"
+        },
+        {
+          "path": "cognition.nodes[0].revision",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "cognition.nodes[0].status",
+          "before": "ready",
+          "after": "active"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:12>",
           "after": "<at:14>"
         }
       ]
+    },
+    {
+      "name": "approvePlan",
+      "outcome": "error",
+      "error": "Task has no plan awaiting review",
+      "changed": []
     },
     {
       "name": "approvePlan:stale",
@@ -355,42 +526,892 @@
       "changed": []
     },
     {
-      "name": "updateStep:investigate-complete",
+      "name": "exitNode:blank-note",
+      "outcome": "error",
+      "error": "交接记录必须说明做了什么、哪些待核验",
+      "changed": []
+    },
+    {
+      "name": "exitNode:s1-no-findings",
+      "outcome": "error",
+      "error": "调查节点的发现必须逐条带依据（文件片段、网页来源或用户素材）",
+      "changed": []
+    },
+    {
+      "name": "exitNode:s1",
       "outcome": "ok",
       "changed": [
         {
-          "path": "cognition.steps[0].revision",
+          "path": "cognition.nodes[0].handoff.contractVersion",
           "before": "<absent>",
           "after": 1
         },
         {
-          "path": "cognition.steps[0].status",
-          "before": "planned",
-          "after": "complete"
+          "path": "cognition.nodes[0].handoff.findings[0].claim",
+          "before": "<absent>",
+          "after": "Rounding happens in two places"
         },
         {
-          "path": "cognition.steps[0].statusReason",
+          "path": "cognition.nodes[0].handoff.findings[0].source",
           "before": "<absent>",
-          "after": "Read src/cart.ts and the existing tests"
+          "after": "src/cart.ts:3"
+        },
+        {
+          "path": "cognition.nodes[0].handoff.nodeId",
+          "before": "<absent>",
+          "after": "s1"
+        },
+        {
+          "path": "cognition.nodes[0].handoff.note",
+          "before": "<absent>",
+          "after": "Read src/cart.ts and listed the rounding paths"
+        },
+        {
+          "path": "cognition.nodes[0].handoff.runId",
+          "before": "<absent>",
+          "after": "run-s1"
+        },
+        {
+          "path": "cognition.nodes[0].revision",
+          "before": 1,
+          "after": 2
+        },
+        {
+          "path": "cognition.nodes[0].status",
+          "before": "active",
+          "after": "done"
+        },
+        {
+          "path": "cognition.nodes[1].status",
+          "before": "planned",
+          "after": "ready"
+        },
+        {
+          "path": "cognition.nodes[2].status",
+          "before": "planned",
+          "after": "ready"
         },
         {
           "path": "updatedAt",
           "before": "<at:14>",
+          "after": "<at:15>"
+        }
+      ]
+    },
+    {
+      "name": "exitNode:finished",
+      "outcome": "error",
+      "error": "节点已结束：s1",
+      "changed": []
+    },
+    {
+      "name": "enterNode:done",
+      "outcome": "error",
+      "error": "节点当前状态不能进入：s1",
+      "changed": []
+    },
+    {
+      "name": "enterNode:missing",
+      "outcome": "error",
+      "error": "计划中没有节点：missing",
+      "changed": []
+    },
+    {
+      "name": "exitNode:missing",
+      "outcome": "error",
+      "error": "计划中没有节点：missing",
+      "changed": []
+    },
+    {
+      "name": "waitNode:missing",
+      "outcome": "error",
+      "error": "计划中没有节点：missing",
+      "changed": []
+    },
+    {
+      "name": "exitNode:s2-not-entered",
+      "outcome": "error",
+      "error": "只有进入过的节点可以退出：s2",
+      "changed": []
+    },
+    {
+      "name": "enterNode:host-mismatch",
+      "outcome": "error",
+      "error": "节点执行位置与计划不符：s2",
+      "changed": []
+    },
+    {
+      "name": "enterNode:s2",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.nodes[1].activation.access",
+          "before": "<absent>",
+          "after": "write"
+        },
+        {
+          "path": "cognition.nodes[1].activation.expert.hash",
+          "before": "<absent>",
+          "after": "<rev:2>"
+        },
+        {
+          "path": "cognition.nodes[1].activation.expert.id",
+          "before": "<absent>",
+          "after": "backend"
+        },
+        {
+          "path": "cognition.nodes[1].activation.expert.name",
+          "before": "<absent>",
+          "after": "后端工程师"
+        },
+        {
+          "path": "cognition.nodes[1].activation.expertSnapshot.description",
+          "before": "<absent>",
+          "after": "Owns backend fixes"
+        },
+        {
+          "path": "cognition.nodes[1].activation.expertSnapshot.hash",
+          "before": "<absent>",
+          "after": "<rev:2>"
+        },
+        {
+          "path": "cognition.nodes[1].activation.expertSnapshot.id",
+          "before": "<absent>",
+          "after": "backend"
+        },
+        {
+          "path": "cognition.nodes[1].activation.expertSnapshot.instructions",
+          "before": "<absent>",
+          "after": "Fix backend code"
+        },
+        {
+          "path": "cognition.nodes[1].activation.expertSnapshot.name",
+          "before": "<absent>",
+          "after": "后端工程师"
+        },
+        {
+          "path": "cognition.nodes[1].activation.host",
+          "before": "<absent>",
+          "after": "worker"
+        },
+        {
+          "path": "cognition.nodes[1].activation.inputs[0].hash",
+          "before": "<absent>",
+          "after": "<rev:3>"
+        },
+        {
+          "path": "cognition.nodes[1].activation.inputs[0].key",
+          "before": "<absent>",
+          "after": "finding:0"
+        },
+        {
+          "path": "cognition.nodes[1].activation.inputs[0].nodeId",
+          "before": "<absent>",
+          "after": "s1"
+        },
+        {
+          "path": "cognition.nodes[1].activation.runId",
+          "before": "<absent>",
+          "after": "run-s2"
+        },
+        {
+          "path": "cognition.nodes[1].claimedBy",
+          "before": "<absent>",
+          "after": "run-s2"
+        },
+        {
+          "path": "cognition.nodes[1].revision",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "cognition.nodes[1].status",
+          "before": "ready",
+          "after": "active"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:15>",
           "after": "<at:16>"
         }
       ]
     },
     {
-      "name": "updateStep:finished-step",
+      "name": "enterNode:s2-again",
       "outcome": "error",
-      "error": "Finished step cannot be rewritten",
+      "error": "节点当前状态不能进入：s2",
       "changed": []
     },
     {
-      "name": "updateStep:unknown",
+      "name": "waitNode:s2",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.nodes[1].revision",
+          "before": 1,
+          "after": 2
+        },
+        {
+          "path": "cognition.nodes[1].status",
+          "before": "active",
+          "after": "waiting"
+        },
+        {
+          "path": "cognition.nodes[1].statusReason",
+          "before": "<absent>",
+          "after": "approval"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:16>",
+          "after": "<at:17>"
+        }
+      ]
+    },
+    {
+      "name": "waitNode:s2-again",
       "outcome": "error",
-      "error": "Step and reason are required",
+      "error": "只有进入中的节点可以等待：s2",
       "changed": []
+    },
+    {
+      "name": "enterNode:s2-resume",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.nodes[1].activation.expert.hash",
+          "before": "<rev:2>",
+          "after": "<absent>"
+        },
+        {
+          "path": "cognition.nodes[1].activation.expert.id",
+          "before": "backend",
+          "after": "<absent>"
+        },
+        {
+          "path": "cognition.nodes[1].activation.expert.name",
+          "before": "后端工程师",
+          "after": "<absent>"
+        },
+        {
+          "path": "cognition.nodes[1].activation.expertSnapshot.description",
+          "before": "Owns backend fixes",
+          "after": "<absent>"
+        },
+        {
+          "path": "cognition.nodes[1].activation.expertSnapshot.hash",
+          "before": "<rev:2>",
+          "after": "<absent>"
+        },
+        {
+          "path": "cognition.nodes[1].activation.expertSnapshot.id",
+          "before": "backend",
+          "after": "<absent>"
+        },
+        {
+          "path": "cognition.nodes[1].activation.expertSnapshot.instructions",
+          "before": "Fix backend code",
+          "after": "<absent>"
+        },
+        {
+          "path": "cognition.nodes[1].activation.expertSnapshot.name",
+          "before": "后端工程师",
+          "after": "<absent>"
+        },
+        {
+          "path": "cognition.nodes[1].revision",
+          "before": 2,
+          "after": 3
+        },
+        {
+          "path": "cognition.nodes[1].status",
+          "before": "waiting",
+          "after": "active"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:17>",
+          "after": "<at:18>"
+        }
+      ]
+    },
+    {
+      "name": "exitNode:s2-no-artifact",
+      "outcome": "error",
+      "error": "执行节点缺少声明的产物：patch",
+      "changed": []
+    },
+    {
+      "name": "exitNode:s2",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.nodes[1].handoff.artifacts[0].hash",
+          "before": "<absent>",
+          "after": "<rev:4>"
+        },
+        {
+          "path": "cognition.nodes[1].handoff.artifacts[0].kind",
+          "before": "<absent>",
+          "after": "patch"
+        },
+        {
+          "path": "cognition.nodes[1].handoff.artifacts[0].path",
+          "before": "<absent>",
+          "after": "deliverable.txt"
+        },
+        {
+          "path": "cognition.nodes[1].handoff.contractVersion",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "cognition.nodes[1].handoff.expert.hash",
+          "before": "<absent>",
+          "after": "<rev:2>"
+        },
+        {
+          "path": "cognition.nodes[1].handoff.expert.id",
+          "before": "<absent>",
+          "after": "backend"
+        },
+        {
+          "path": "cognition.nodes[1].handoff.nodeId",
+          "before": "<absent>",
+          "after": "s2"
+        },
+        {
+          "path": "cognition.nodes[1].handoff.note",
+          "before": "<absent>",
+          "after": "Rounding fixed and a regression test added"
+        },
+        {
+          "path": "cognition.nodes[1].handoff.runId",
+          "before": "<absent>",
+          "after": "run-s2"
+        },
+        {
+          "path": "cognition.nodes[1].revision",
+          "before": 3,
+          "after": 4
+        },
+        {
+          "path": "cognition.nodes[1].status",
+          "before": "active",
+          "after": "done"
+        },
+        {
+          "path": "cognition.nodes[1].statusReason",
+          "before": "approval",
+          "after": "<absent>"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:18>",
+          "after": "<at:19>"
+        }
+      ]
+    },
+    {
+      "name": "reopenNode:missing",
+      "outcome": "error",
+      "error": "计划中没有节点：missing",
+      "changed": []
+    },
+    {
+      "name": "reopenNode:s2-undeclared-edge",
+      "outcome": "error",
+      "error": "计划没有声明这条前提回边：s3 → s2",
+      "changed": []
+    },
+    {
+      "name": "reopenNode:s2-rework",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.edges[0].traversals",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "cognition.nodes[1].claimedBy",
+          "before": "run-s2",
+          "after": "<absent>"
+        },
+        {
+          "path": "cognition.nodes[1].revision",
+          "before": 4,
+          "after": 5
+        },
+        {
+          "path": "cognition.nodes[1].stale",
+          "before": "<absent>",
+          "after": false
+        },
+        {
+          "path": "cognition.nodes[1].status",
+          "before": "done",
+          "after": "reopened"
+        },
+        {
+          "path": "cognition.nodes[1].statusReason",
+          "before": "<absent>",
+          "after": "审查退回：补回归测试"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:19>",
+          "after": "<at:20>"
+        }
+      ]
+    },
+    {
+      "name": "reopenNode:s2-open",
+      "outcome": "error",
+      "error": "只有已完成的节点可以重开：s2",
+      "changed": []
+    },
+    {
+      "name": "enterNode:s2-redo",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.nodes[1].activation.runId",
+          "before": "run-s2",
+          "after": "run-s2-redo"
+        },
+        {
+          "path": "cognition.nodes[1].claimedBy",
+          "before": "<absent>",
+          "after": "run-s2-redo"
+        },
+        {
+          "path": "cognition.nodes[1].revision",
+          "before": 5,
+          "after": 6
+        },
+        {
+          "path": "cognition.nodes[1].status",
+          "before": "reopened",
+          "after": "active"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:20>",
+          "after": "<at:21>"
+        }
+      ]
+    },
+    {
+      "name": "exitNode:s2-redo",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.nodes[1].handoff.expert.hash",
+          "before": "<rev:2>",
+          "after": "<absent>"
+        },
+        {
+          "path": "cognition.nodes[1].handoff.expert.id",
+          "before": "backend",
+          "after": "<absent>"
+        },
+        {
+          "path": "cognition.nodes[1].handoff.note",
+          "before": "Rounding fixed and a regression test added",
+          "after": "Regression test added after review"
+        },
+        {
+          "path": "cognition.nodes[1].handoff.runId",
+          "before": "run-s2",
+          "after": "run-s2-redo"
+        },
+        {
+          "path": "cognition.nodes[1].revision",
+          "before": 6,
+          "after": 7
+        },
+        {
+          "path": "cognition.nodes[1].status",
+          "before": "active",
+          "after": "done"
+        },
+        {
+          "path": "cognition.nodes[1].statusReason",
+          "before": "审查退回：补回归测试",
+          "after": "<absent>"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:21>",
+          "after": "<at:22>"
+        }
+      ]
+    },
+    {
+      "name": "reopenNode:s2-rework-2",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.edges[0].traversals",
+          "before": 1,
+          "after": 2
+        },
+        {
+          "path": "cognition.nodes[1].claimedBy",
+          "before": "run-s2-redo",
+          "after": "<absent>"
+        },
+        {
+          "path": "cognition.nodes[1].revision",
+          "before": 7,
+          "after": 8
+        },
+        {
+          "path": "cognition.nodes[1].status",
+          "before": "done",
+          "after": "reopened"
+        },
+        {
+          "path": "cognition.nodes[1].statusReason",
+          "before": "<absent>",
+          "after": "审查退回：补边界测试"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:22>",
+          "after": "<at:23>"
+        }
+      ]
+    },
+    {
+      "name": "enterNode:s2-redo-2",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.nodes[1].activation.runId",
+          "before": "run-s2-redo",
+          "after": "run-s2-redo-2"
+        },
+        {
+          "path": "cognition.nodes[1].claimedBy",
+          "before": "<absent>",
+          "after": "run-s2-redo-2"
+        },
+        {
+          "path": "cognition.nodes[1].revision",
+          "before": 8,
+          "after": 9
+        },
+        {
+          "path": "cognition.nodes[1].status",
+          "before": "reopened",
+          "after": "active"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:23>",
+          "after": "<at:24>"
+        }
+      ]
+    },
+    {
+      "name": "exitNode:s2-redo-2",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.nodes[1].handoff.note",
+          "before": "Regression test added after review",
+          "after": "Boundary tests added after review"
+        },
+        {
+          "path": "cognition.nodes[1].handoff.runId",
+          "before": "run-s2-redo",
+          "after": "run-s2-redo-2"
+        },
+        {
+          "path": "cognition.nodes[1].revision",
+          "before": 9,
+          "after": 10
+        },
+        {
+          "path": "cognition.nodes[1].status",
+          "before": "active",
+          "after": "done"
+        },
+        {
+          "path": "cognition.nodes[1].statusReason",
+          "before": "审查退回：补边界测试",
+          "after": "<absent>"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:24>",
+          "after": "<at:25>"
+        }
+      ]
+    },
+    {
+      "name": "reopenNode:s2-rework-exhausted",
+      "outcome": "error",
+      "error": "回边已达自动次数上限 2：s3 → s2",
+      "changed": []
+    },
+    {
+      "name": "enterNode:gate",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.nodes[2].activation.access",
+          "before": "<absent>",
+          "after": "read-only"
+        },
+        {
+          "path": "cognition.nodes[2].activation.host",
+          "before": "<absent>",
+          "after": "coordinator"
+        },
+        {
+          "path": "cognition.nodes[2].activation.runId",
+          "before": "<absent>",
+          "after": "run-gate"
+        },
+        {
+          "path": "cognition.nodes[2].claimedBy",
+          "before": "<absent>",
+          "after": "run-gate"
+        },
+        {
+          "path": "cognition.nodes[2].revision",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "cognition.nodes[2].status",
+          "before": "ready",
+          "after": "active"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:25>",
+          "after": "<at:26>"
+        }
+      ]
+    },
+    {
+      "name": "exitNode:gate-no-verdict",
+      "outcome": "error",
+      "error": "审查节点必须给出 gate 结论",
+      "changed": []
+    },
+    {
+      "name": "exitNode:gate",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.nodes[2].handoff.contractVersion",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "cognition.nodes[2].handoff.findings[0].claim",
+          "before": "<absent>",
+          "after": "The fix matches the objective"
+        },
+        {
+          "path": "cognition.nodes[2].handoff.findings[0].source",
+          "before": "<absent>",
+          "after": "deliverable.txt"
+        },
+        {
+          "path": "cognition.nodes[2].handoff.nodeId",
+          "before": "<absent>",
+          "after": "gate"
+        },
+        {
+          "path": "cognition.nodes[2].handoff.note",
+          "before": "<absent>",
+          "after": "Integration gate passed"
+        },
+        {
+          "path": "cognition.nodes[2].handoff.runId",
+          "before": "<absent>",
+          "after": "run-gate"
+        },
+        {
+          "path": "cognition.nodes[2].handoff.verdict",
+          "before": "<absent>",
+          "after": "pass"
+        },
+        {
+          "path": "cognition.nodes[2].revision",
+          "before": 1,
+          "after": 2
+        },
+        {
+          "path": "cognition.nodes[2].status",
+          "before": "active",
+          "after": "done"
+        },
+        {
+          "path": "cognition.nodes[3].status",
+          "before": "planned",
+          "after": "ready"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:26>",
+          "after": "<at:27>"
+        }
+      ]
+    },
+    {
+      "name": "enterNode:s3",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.nodes[3].activation.access",
+          "before": "<absent>",
+          "after": "read-only"
+        },
+        {
+          "path": "cognition.nodes[3].activation.host",
+          "before": "<absent>",
+          "after": "coordinator"
+        },
+        {
+          "path": "cognition.nodes[3].activation.inputs[0].hash",
+          "before": "<absent>",
+          "after": "<rev:4>"
+        },
+        {
+          "path": "cognition.nodes[3].activation.inputs[0].key",
+          "before": "<absent>",
+          "after": "deliverable.txt"
+        },
+        {
+          "path": "cognition.nodes[3].activation.inputs[0].nodeId",
+          "before": "<absent>",
+          "after": "s2"
+        },
+        {
+          "path": "cognition.nodes[3].activation.inputs[1].hash",
+          "before": "<absent>",
+          "after": "<rev:3>"
+        },
+        {
+          "path": "cognition.nodes[3].activation.inputs[1].key",
+          "before": "<absent>",
+          "after": "finding:0"
+        },
+        {
+          "path": "cognition.nodes[3].activation.inputs[1].nodeId",
+          "before": "<absent>",
+          "after": "s1"
+        },
+        {
+          "path": "cognition.nodes[3].activation.inputs[2].hash",
+          "before": "<absent>",
+          "after": "<rev:5>"
+        },
+        {
+          "path": "cognition.nodes[3].activation.inputs[2].key",
+          "before": "<absent>",
+          "after": "finding:0"
+        },
+        {
+          "path": "cognition.nodes[3].activation.inputs[2].nodeId",
+          "before": "<absent>",
+          "after": "gate"
+        },
+        {
+          "path": "cognition.nodes[3].activation.runId",
+          "before": "<absent>",
+          "after": "run-s3"
+        },
+        {
+          "path": "cognition.nodes[3].claimedBy",
+          "before": "<absent>",
+          "after": "run-s3"
+        },
+        {
+          "path": "cognition.nodes[3].revision",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "cognition.nodes[3].status",
+          "before": "ready",
+          "after": "active"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:27>",
+          "after": "<at:28>"
+        }
+      ]
+    },
+    {
+      "name": "exitNode:s3-ungrounded",
+      "outcome": "error",
+      "error": "审查结论必须引用产物或源码原文",
+      "changed": []
+    },
+    {
+      "name": "exitNode:s3",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.nodes[3].handoff.contractVersion",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
+          "path": "cognition.nodes[3].handoff.findings[0].claim",
+          "before": "<absent>",
+          "after": "The result matches the objective"
+        },
+        {
+          "path": "cognition.nodes[3].handoff.findings[0].source",
+          "before": "<absent>",
+          "after": "src/cart.ts"
+        },
+        {
+          "path": "cognition.nodes[3].handoff.nodeId",
+          "before": "<absent>",
+          "after": "s3"
+        },
+        {
+          "path": "cognition.nodes[3].handoff.note",
+          "before": "<absent>",
+          "after": "Final review passed"
+        },
+        {
+          "path": "cognition.nodes[3].handoff.runId",
+          "before": "<absent>",
+          "after": "run-s3"
+        },
+        {
+          "path": "cognition.nodes[3].handoff.verdict",
+          "before": "<absent>",
+          "after": "pass"
+        },
+        {
+          "path": "cognition.nodes[3].revision",
+          "before": 1,
+          "after": 2
+        },
+        {
+          "path": "cognition.nodes[3].status",
+          "before": "active",
+          "after": "done"
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:28>",
+          "after": "<at:29>"
+        }
+      ]
     },
     {
       "name": "setInitialCandidates",
@@ -413,8 +1434,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:16>",
-          "after": "<at:17>"
+          "before": "<at:29>",
+          "after": "<at:30>"
         }
       ]
     },
@@ -435,7 +1456,7 @@
         {
           "path": "cognition.gaps[0].recordedAt",
           "before": "<absent>",
-          "after": "<at:18>"
+          "after": "<at:31>"
         },
         {
           "path": "cognition.revision",
@@ -444,8 +1465,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:17>",
-          "after": "<at:19>"
+          "before": "<at:30>",
+          "after": "<at:32>"
         }
       ]
     },
@@ -496,7 +1517,7 @@
         {
           "path": "cognition.skillProposals[0].recordedAt",
           "before": "<absent>",
-          "after": "<at:20>"
+          "after": "<at:33>"
         },
         {
           "path": "cognition.skillProposals[0].revision",
@@ -531,7 +1552,7 @@
         {
           "path": "cognition.skillSearches[0].recordedAt",
           "before": "<absent>",
-          "after": "<at:20>"
+          "after": "<at:33>"
         },
         {
           "path": "cognition.skillSearches[0].resultCount",
@@ -540,8 +1561,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:19>",
-          "after": "<at:21>"
+          "before": "<at:32>",
+          "after": "<at:34>"
         }
       ]
     },
@@ -576,8 +1597,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:21>",
-          "after": "<at:22>"
+          "before": "<at:34>",
+          "after": "<at:35>"
         }
       ]
     },
@@ -585,6 +1606,89 @@
       "name": "decideSkillProposal:again",
       "outcome": "error",
       "error": "Skill 提案不存在或已处理",
+      "changed": []
+    },
+    {
+      "name": "proposeTemporaryExpert",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.expertProposals[0].id",
+          "before": "<absent>",
+          "after": "<id:4>"
+        },
+        {
+          "path": "cognition.expertProposals[0].recordedAt",
+          "before": "<absent>",
+          "after": "<at:36>"
+        },
+        {
+          "path": "cognition.expertProposals[0].status",
+          "before": "<absent>",
+          "after": "pending"
+        },
+        {
+          "path": "cognition.expertProposals[0].temporaryExpert.description",
+          "before": "<absent>",
+          "after": "仅本任务"
+        },
+        {
+          "path": "cognition.expertProposals[0].temporaryExpert.instructions",
+          "before": "<absent>",
+          "after": "只在本任务使用"
+        },
+        {
+          "path": "cognition.expertProposals[0].temporaryExpert.name",
+          "before": "<absent>",
+          "after": "任务内专家"
+        },
+        {
+          "path": "cognition.revision",
+          "before": 5,
+          "after": 6
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:35>",
+          "after": "<at:37>"
+        }
+      ]
+    },
+    {
+      "name": "decideExpertProposal:installed",
+      "outcome": "ok",
+      "changed": [
+        {
+          "path": "cognition.expertProposals[0].installedExpertId",
+          "before": "<absent>",
+          "after": "expert-local"
+        },
+        {
+          "path": "cognition.expertProposals[0].resolvedAt",
+          "before": "<absent>",
+          "after": "<at:38>"
+        },
+        {
+          "path": "cognition.expertProposals[0].status",
+          "before": "pending",
+          "after": "installed"
+        },
+        {
+          "path": "cognition.revision",
+          "before": 6,
+          "after": 7
+        },
+        {
+          "path": "updatedAt",
+          "before": "<at:37>",
+          "after": "<at:39>"
+        }
+      ]
+    },
+    {
+      "name": "decideExpertProposal:again",
+      "outcome": "error",
+      "error": "专家提案不存在或已处理",
       "changed": []
     },
     {
@@ -599,17 +1703,17 @@
         {
           "path": "cognition.gaps[0].resolvedAt",
           "before": "<absent>",
-          "after": "<at:23>"
+          "after": "<at:40>"
         },
         {
           "path": "cognition.revision",
-          "before": 5,
-          "after": 6
+          "before": 7,
+          "after": 8
         },
         {
           "path": "updatedAt",
-          "before": "<at:22>",
-          "after": "<at:24>"
+          "before": "<at:39>",
+          "after": "<at:41>"
         }
       ]
     },
@@ -631,7 +1735,7 @@
         {
           "path": "cognition.instances[0].cognitionRevision",
           "before": "<absent>",
-          "after": 6
+          "after": 8
         },
         {
           "path": "cognition.instances[0].contractVersion",
@@ -649,7 +1753,7 @@
           "after": "attempt-coordinator"
         },
         {
-          "path": "cognition.instances[0].mode",
+          "path": "cognition.instances[0].kind",
           "before": "<absent>",
           "after": "investigate"
         },
@@ -661,7 +1765,7 @@
         {
           "path": "cognition.instances[0].startedAt",
           "before": "<absent>",
-          "after": "<at:25>"
+          "after": "<at:42>"
         },
         {
           "path": "cognition.instances[0].status",
@@ -670,8 +1774,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:24>",
-          "after": "<at:26>"
+          "before": "<at:41>",
+          "after": "<at:43>"
         }
       ]
     },
@@ -690,14 +1794,14 @@
           "after": "agent-1"
         },
         {
+          "path": "cognition.agents[0].kind",
+          "before": "<absent>",
+          "after": "execute"
+        },
+        {
           "path": "cognition.agents[0].lastAttemptId",
           "before": "<absent>",
           "after": "attempt-worker"
-        },
-        {
-          "path": "cognition.agents[0].mode",
-          "before": "<absent>",
-          "after": "implement"
         },
         {
           "path": "cognition.agents[0].orderId",
@@ -722,7 +1826,7 @@
         {
           "path": "cognition.instances[1].cognitionRevision",
           "before": "<absent>",
-          "after": 6
+          "after": 8
         },
         {
           "path": "cognition.instances[1].contractVersion",
@@ -755,9 +1859,9 @@
           "after": "attempt-worker"
         },
         {
-          "path": "cognition.instances[1].mode",
+          "path": "cognition.instances[1].kind",
           "before": "<absent>",
-          "after": "implement"
+          "after": "execute"
         },
         {
           "path": "cognition.instances[1].order.acceptance[0]",
@@ -785,9 +1889,9 @@
           "after": "s2"
         },
         {
-          "path": "cognition.instances[1].order.mode",
+          "path": "cognition.instances[1].order.kind",
           "before": "<absent>",
-          "after": "implement"
+          "after": "execute"
         },
         {
           "path": "cognition.instances[1].order.objective",
@@ -807,7 +1911,7 @@
         {
           "path": "cognition.instances[1].startedAt",
           "before": "<absent>",
-          "after": "<at:27>"
+          "after": "<at:44>"
         },
         {
           "path": "cognition.instances[1].status",
@@ -815,19 +1919,19 @@
           "after": "queued"
         },
         {
-          "path": "cognition.steps[1].status",
-          "before": "planned",
-          "after": "running"
+          "path": "cognition.nodes[1].status",
+          "before": "done",
+          "after": "active"
         },
         {
-          "path": "cognition.steps[1].statusReason",
+          "path": "cognition.nodes[1].statusReason",
           "before": "<absent>",
           "after": "工单 attempt-worker 排队中"
         },
         {
           "path": "updatedAt",
-          "before": "<at:26>",
-          "after": "<at:28>"
+          "before": "<at:43>",
+          "after": "<at:45>"
         }
       ]
     },
@@ -844,7 +1948,7 @@
         {
           "path": "cognition.instances[1].activatedAt",
           "before": "<absent>",
-          "after": "<at:29>"
+          "after": "<at:46>"
         },
         {
           "path": "cognition.instances[1].pid",
@@ -863,8 +1967,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:28>",
-          "after": "<at:30>"
+          "before": "<at:45>",
+          "after": "<at:47>"
         }
       ]
     },
@@ -874,8 +1978,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:30>",
-          "after": "<at:31>"
+          "before": "<at:47>",
+          "after": "<at:48>"
         },
         {
           "path": "workerReceipts[0].attemptId",
@@ -885,7 +1989,7 @@
         {
           "path": "workerReceipts[0].id",
           "before": "<absent>",
-          "after": "<id:4>"
+          "after": "<id:5>"
         },
         {
           "path": "workerReceipts[0].kind",
@@ -905,7 +2009,7 @@
         {
           "path": "workerReceipts[0].recordedAt",
           "before": "<absent>",
-          "after": "<at:32>"
+          "after": "<at:49>"
         },
         {
           "path": "workerReceipts[0].sourceRevision",
@@ -920,8 +2024,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:31>",
-          "after": "<at:33>"
+          "before": "<at:48>",
+          "after": "<at:50>"
         },
         {
           "path": "workerCognition.attemptId",
@@ -931,7 +2035,7 @@
         {
           "path": "workerCognition.findings[0].evidence[0]",
           "before": "<absent>",
-          "after": "<id:4>"
+          "after": "<id:5>"
         },
         {
           "path": "workerCognition.findings[0].text",
@@ -961,7 +2065,7 @@
         {
           "path": "workerCognition.updatedAt",
           "before": "<absent>",
-          "after": "<at:34>"
+          "after": "<at:51>"
         }
       ]
     },
@@ -986,14 +2090,14 @@
           "after": "running"
         },
         {
-          "path": "cognition.steps[1].statusReason",
+          "path": "cognition.nodes[1].statusReason",
           "before": "工单 attempt-worker 排队中",
           "after": "工单 attempt-worker running"
         },
         {
           "path": "updatedAt",
-          "before": "<at:33>",
-          "after": "<at:35>"
+          "before": "<at:50>",
+          "after": "<at:52>"
         }
       ]
     },
@@ -1003,8 +2107,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:35>",
-          "after": "<at:36>"
+          "before": "<at:52>",
+          "after": "<at:53>"
         },
         {
           "path": "workerRequests[0].agentId",
@@ -1044,7 +2148,7 @@
         {
           "path": "workerRequests[0].recordedAt",
           "before": "<absent>",
-          "after": "<at:37>"
+          "after": "<at:54>"
         },
         {
           "path": "workerRequests[0].runId",
@@ -1075,8 +2179,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:36>",
-          "after": "<at:38>"
+          "before": "<at:53>",
+          "after": "<at:55>"
         },
         {
           "path": "workerRequests[0].status",
@@ -1091,8 +2195,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:38>",
-          "after": "<at:39>"
+          "before": "<at:55>",
+          "after": "<at:56>"
         },
         {
           "path": "workerRequests[0].reason",
@@ -1102,7 +2206,7 @@
         {
           "path": "workerRequests[0].resolvedAt",
           "before": "<absent>",
-          "after": "<at:40>"
+          "after": "<at:57>"
         },
         {
           "path": "workerRequests[0].status",
@@ -1129,7 +2233,7 @@
         {
           "path": "cognition.instances[1].endedAt",
           "before": "<absent>",
-          "after": "<at:41>"
+          "after": "<at:58>"
         },
         {
           "path": "cognition.instances[1].findings[0]",
@@ -1147,14 +2251,14 @@
           "after": "returned"
         },
         {
-          "path": "cognition.steps[1].statusReason",
+          "path": "cognition.nodes[1].statusReason",
           "before": "工单 attempt-worker running",
           "after": "工单 attempt-worker returned / pending"
         },
         {
           "path": "updatedAt",
-          "before": "<at:39>",
-          "after": "<at:42>"
+          "before": "<at:56>",
+          "after": "<at:59>"
         }
       ]
     },
@@ -1169,8 +2273,8 @@
         },
         {
           "path": "cognition.instances[1].endedAt",
-          "before": "<at:41>",
-          "after": "<at:43>"
+          "before": "<at:58>",
+          "after": "<at:60>"
         },
         {
           "path": "cognition.instances[1].integration",
@@ -1213,19 +2317,19 @@
           "after": "completed"
         },
         {
-          "path": "cognition.steps[1].status",
-          "before": "running",
-          "after": "complete"
+          "path": "cognition.nodes[1].status",
+          "before": "active",
+          "after": "done"
         },
         {
-          "path": "cognition.steps[1].statusReason",
+          "path": "cognition.nodes[1].statusReason",
           "before": "工单 attempt-worker returned / pending",
           "after": "工单 attempt-worker completed / merged"
         },
         {
           "path": "updatedAt",
-          "before": "<at:42>",
-          "after": "<at:44>"
+          "before": "<at:59>",
+          "after": "<at:61>"
         }
       ]
     },
@@ -1240,8 +2344,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:44>",
-          "after": "<at:45>"
+          "before": "<at:61>",
+          "after": "<at:62>"
         }
       ]
     },
@@ -1251,8 +2355,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:45>",
-          "after": "<at:46>"
+          "before": "<at:62>",
+          "after": "<at:63>"
         },
         {
           "path": "workerMessages[0].baseRevision",
@@ -1282,7 +2386,7 @@
         {
           "path": "workerMessages[0].id",
           "before": "<absent>",
-          "after": "<id:5>"
+          "after": "<id:6>"
         },
         {
           "path": "workerMessages[0].kind",
@@ -1312,13 +2416,13 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:46>",
-          "after": "<at:47>"
+          "before": "<at:63>",
+          "after": "<at:64>"
         },
         {
           "path": "workerMessageAcks[0].acknowledgedAt",
           "before": "<absent>",
-          "after": "<at:48>"
+          "after": "<at:65>"
         },
         {
           "path": "workerMessageAcks[0].agentId",
@@ -1328,7 +2432,7 @@
         {
           "path": "workerMessageAcks[0].id",
           "before": "<absent>",
-          "after": "<id:5>"
+          "after": "<id:6>"
         }
       ]
     },
@@ -1345,7 +2449,7 @@
         {
           "path": "cognition.instances[0].endedAt",
           "before": "<absent>",
-          "after": "<at:49>"
+          "after": "<at:66>"
         },
         {
           "path": "cognition.instances[0].findings[0]",
@@ -1359,8 +2463,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:47>",
-          "after": "<at:50>"
+          "before": "<at:64>",
+          "after": "<at:67>"
         }
       ]
     },
@@ -1375,8 +2479,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:50>",
-          "after": "<at:51>"
+          "before": "<at:67>",
+          "after": "<at:68>"
         },
         {
           "path": "workerOutcome.findings[0]",
@@ -1417,7 +2521,7 @@
         {
           "path": "development.review.recordedAt",
           "before": "<absent>",
-          "after": "<at:53>"
+          "after": "<at:70>"
         },
         {
           "path": "development.review.revision",
@@ -1431,8 +2535,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:51>",
-          "after": "<at:52>"
+          "before": "<at:68>",
+          "after": "<at:69>"
         }
       ]
     },
@@ -1447,8 +2551,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:52>",
-          "after": "<at:54>"
+          "before": "<at:69>",
+          "after": "<at:71>"
         }
       ]
     },
@@ -1463,8 +2567,8 @@
         },
         {
           "path": "development.review.recordedAt",
-          "before": "<at:53>",
-          "after": "<at:56>"
+          "before": "<at:70>",
+          "after": "<at:73>"
         },
         {
           "path": "development.review.verdict",
@@ -1473,8 +2577,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:54>",
-          "after": "<at:55>"
+          "before": "<at:71>",
+          "after": "<at:72>"
         }
       ]
     },
@@ -1511,7 +2615,7 @@
         {
           "path": "preview.recordedAt",
           "before": "<absent>",
-          "after": "<at:57>"
+          "after": "<at:74>"
         },
         {
           "path": "preview.revision",
@@ -1525,8 +2629,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:55>",
-          "after": "<at:58>"
+          "before": "<at:72>",
+          "after": "<at:75>"
         }
       ]
     },
@@ -1565,7 +2669,7 @@
         {
           "path": "evidence[0].id",
           "before": "<absent>",
-          "after": "<id:6>"
+          "after": "<id:7>"
         },
         {
           "path": "evidence[0].kind",
@@ -1580,7 +2684,7 @@
         {
           "path": "evidence[0].recordedAt",
           "before": "<absent>",
-          "after": "<at:59>"
+          "after": "<at:76>"
         },
         {
           "path": "evidence[0].revision",
@@ -1605,7 +2709,7 @@
         {
           "path": "evidence[1].id",
           "before": "<absent>",
-          "after": "<id:7>"
+          "after": "<id:8>"
         },
         {
           "path": "evidence[1].kind",
@@ -1625,7 +2729,7 @@
         {
           "path": "evidence[1].recordedAt",
           "before": "<absent>",
-          "after": "<at:60>"
+          "after": "<at:77>"
         },
         {
           "path": "evidence[1].revision",
@@ -1639,8 +2743,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:58>",
-          "after": "<at:61>"
+          "before": "<at:75>",
+          "after": "<at:78>"
         }
       ]
     },
@@ -1671,7 +2775,7 @@
         {
           "path": "inputs[0].sha256",
           "before": "<absent>",
-          "after": "<rev:3>"
+          "after": "<rev:6>"
         },
         {
           "path": "inputs[0].size",
@@ -1685,8 +2789,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:61>",
-          "after": "<at:62>"
+          "before": "<at:78>",
+          "after": "<at:79>"
         }
       ]
     },
@@ -1702,12 +2806,12 @@
         {
           "path": "capabilities.plugins[0].revision",
           "before": "<absent>",
-          "after": "<rev:4>"
+          "after": "<rev:7>"
         },
         {
           "path": "capabilities.skills[0].hash",
           "before": "<absent>",
-          "after": "<rev:5>"
+          "after": "<rev:8>"
         },
         {
           "path": "capabilities.skills[0].id",
@@ -1721,8 +2825,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:62>",
-          "after": "<at:63>"
+          "before": "<at:79>",
+          "after": "<at:80>"
         }
       ]
     },
@@ -1749,12 +2853,12 @@
         {
           "path": "stepContexts[0].promptHash",
           "before": "<absent>",
-          "after": "<rev:6>"
+          "after": "<rev:9>"
         },
         {
           "path": "stepContexts[0].recordedAt",
           "before": "<absent>",
-          "after": "<at:65>"
+          "after": "<at:82>"
         },
         {
           "path": "stepContexts[0].stage",
@@ -1774,7 +2878,7 @@
         {
           "path": "stepContexts[0].taskContextHash",
           "before": "<absent>",
-          "after": "<rev:3>"
+          "after": "<rev:6>"
         },
         {
           "path": "stepContexts[0].toolTokens",
@@ -1788,8 +2892,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:63>",
-          "after": "<at:64>"
+          "before": "<at:80>",
+          "after": "<at:81>"
         }
       ]
     },
@@ -1805,7 +2909,7 @@
         {
           "path": "operation.startedAt",
           "before": "<absent>",
-          "after": "<at:67>"
+          "after": "<at:84>"
         },
         {
           "path": "operation.status",
@@ -1814,8 +2918,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:64>",
-          "after": "<at:66>"
+          "before": "<at:81>",
+          "after": "<at:83>"
         }
       ]
     },
@@ -1826,7 +2930,7 @@
         {
           "path": "operation.finishedAt",
           "before": "<absent>",
-          "after": "<at:69>"
+          "after": "<at:86>"
         },
         {
           "path": "operation.status",
@@ -1835,8 +2939,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:66>",
-          "after": "<at:68>"
+          "before": "<at:83>",
+          "after": "<at:85>"
         }
       ]
     },
@@ -1877,7 +2981,7 @@
         {
           "path": "runs[0].recordedAt",
           "before": "<absent>",
-          "after": "<at:70>"
+          "after": "<at:87>"
         },
         {
           "path": "runs[0].stage",
@@ -1896,8 +3000,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:68>",
-          "after": "<at:71>"
+          "before": "<at:85>",
+          "after": "<at:88>"
         }
       ]
     },
@@ -1912,8 +3016,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:71>",
-          "after": "<at:72>"
+          "before": "<at:88>",
+          "after": "<at:89>"
         }
       ]
     },
@@ -1934,8 +3038,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:72>",
-          "after": "<at:73>"
+          "before": "<at:89>",
+          "after": "<at:90>"
         }
       ]
     },
@@ -1950,8 +3054,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:73>",
-          "after": "<at:74>"
+          "before": "<at:90>",
+          "after": "<at:91>"
         }
       ]
     },
@@ -1991,8 +3095,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:74>",
-          "after": "<at:75>"
+          "before": "<at:91>",
+          "after": "<at:92>"
         }
       ]
     },
@@ -2012,8 +3116,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:75>",
-          "after": "<at:76>"
+          "before": "<at:92>",
+          "after": "<at:93>"
         }
       ]
     },
@@ -2028,8 +3132,8 @@
       "changed": [
         {
           "path": "updatedAt",
-          "before": "<at:76>",
-          "after": "<at:77>"
+          "before": "<at:93>",
+          "after": "<at:94>"
         },
         {
           "path": "workerOutcome.findings[0]",
@@ -2059,8 +3163,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:77>",
-          "after": "<at:78>"
+          "before": "<at:94>",
+          "after": "<at:95>"
         }
       ]
     },
@@ -2086,8 +3190,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:78>",
-          "after": "<at:79>"
+          "before": "<at:95>",
+          "after": "<at:96>"
         }
       ]
     },
@@ -2118,8 +3222,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:79>",
-          "after": "<at:80>"
+          "before": "<at:96>",
+          "after": "<at:97>"
         }
       ]
     },
@@ -2141,7 +3245,7 @@
         {
           "path": "guidanceHistory[1].recordedAt",
           "before": "<absent>",
-          "after": "<at:81>"
+          "after": "<at:98>"
         },
         {
           "path": "pauseReason",
@@ -2165,8 +3269,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:80>",
-          "after": "<at:82>"
+          "before": "<at:97>",
+          "after": "<at:99>"
         }
       ]
     },
@@ -2198,12 +3302,12 @@
         {
           "path": "stop.stoppedAt",
           "before": "<absent>",
-          "after": "<at:83>"
+          "after": "<at:100>"
         },
         {
           "path": "updatedAt",
-          "before": "<at:82>",
-          "after": "<at:83>"
+          "before": "<at:99>",
+          "after": "<at:100>"
         }
       ]
     },
@@ -2225,7 +3329,7 @@
         {
           "path": "contractHistory[0].revisedAt",
           "before": "<absent>",
-          "after": "<at:84>"
+          "after": "<at:101>"
         },
         {
           "path": "contractHistory[0].version",
@@ -2249,7 +3353,7 @@
         },
         {
           "path": "planApproval.approvedAt",
-          "before": "<at:15>",
+          "before": "<at:13>",
           "after": "<absent>"
         },
         {
@@ -2284,7 +3388,7 @@
         },
         {
           "path": "preview.recordedAt",
-          "before": "<at:57>",
+          "before": "<at:74>",
           "after": "<absent>"
         },
         {
@@ -2319,13 +3423,13 @@
         },
         {
           "path": "stop.stoppedAt",
-          "before": "<at:83>",
+          "before": "<at:100>",
           "after": "<absent>"
         },
         {
           "path": "updatedAt",
-          "before": "<at:83>",
-          "after": "<at:85>"
+          "before": "<at:100>",
+          "after": "<at:102>"
         }
       ]
     },
@@ -2356,8 +3460,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:85>",
-          "after": "<at:86>"
+          "before": "<at:102>",
+          "after": "<at:103>"
         }
       ]
     },
@@ -2382,8 +3486,8 @@
         },
         {
           "path": "updatedAt",
-          "before": "<at:86>",
-          "after": "<at:87>"
+          "before": "<at:103>",
+          "after": "<at:104>"
         }
       ]
     }
@@ -2400,7 +3504,7 @@
       {
         "version": 1,
         "objective": "Build a cart page that shows totals in cents",
-        "revisedAt": "<at:84>"
+        "revisedAt": "<at:101>"
       }
     ],
     "guidanceHistory": [
@@ -2412,46 +3516,203 @@
       },
       {
         "instruction": "Approved; continue with the regression test",
-        "recordedAt": "<at:81>"
+        "recordedAt": "<at:98>"
       }
     ],
     "cognition": {
-      "revision": 6,
+      "revision": 8,
       "recipeVersion": 1,
       "summary": "Fix cart rounding in two steps",
       "candidates": [
         "backend"
       ],
-      "steps": [
+      "nodes": [
         {
           "id": "s1",
+          "kind": "investigate",
+          "phase": "investigate",
           "objective": "Read the cart code and list the rounding paths",
-          "mode": "investigate",
           "dependsOn": [],
+          "expertDecision": {
+            "reason": "the coordinator reads the code itself"
+          },
+          "host": "coordinator",
           "skillIds": [],
-          "status": "complete",
-          "statusReason": "Read src/cart.ts and the existing tests",
-          "revision": 1
+          "status": "done",
+          "claimedBy": "run-s1",
+          "revision": 2,
+          "activation": {
+            "host": "coordinator",
+            "runId": "run-s1",
+            "access": "read-only",
+            "inputs": []
+          },
+          "handoff": {
+            "nodeId": "s1",
+            "runId": "run-s1",
+            "artifacts": [],
+            "findings": [
+              {
+                "claim": "Rounding happens in two places",
+                "source": "src/cart.ts:3"
+              }
+            ],
+            "note": "Read src/cart.ts and listed the rounding paths",
+            "unresolved": [],
+            "contractVersion": 1
+          }
         },
         {
           "id": "s2",
+          "kind": "execute",
+          "phase": "execute",
           "objective": "Fix the rounding and add a regression test",
-          "mode": "implement",
           "dependsOn": [
             "s1"
           ],
+          "expertDecision": {
+            "expertId": "backend",
+            "reason": "the named expert owns the implementation"
+          },
+          "host": "worker",
+          "produces": [
+            "patch"
+          ],
+          "ownedPaths": [
+            "src"
+          ],
           "skillIds": [],
-          "expertId": "backend",
-          "status": "complete",
-          "statusReason": "工单 attempt-worker completed / merged"
+          "status": "done",
+          "claimedBy": "run-s2-redo-2",
+          "revision": 10,
+          "activation": {
+            "host": "worker",
+            "runId": "run-s2-redo-2",
+            "access": "write",
+            "inputs": [
+              {
+                "nodeId": "s1",
+                "key": "finding:0",
+                "hash": "<rev:3>"
+              }
+            ]
+          },
+          "statusReason": "工单 attempt-worker completed / merged",
+          "handoff": {
+            "nodeId": "s2",
+            "runId": "run-s2-redo-2",
+            "artifacts": [
+              {
+                "path": "deliverable.txt",
+                "hash": "<rev:4>",
+                "kind": "patch"
+              }
+            ],
+            "note": "Boundary tests added after review",
+            "unresolved": [],
+            "contractVersion": 1
+          },
+          "stale": false
+        },
+        {
+          "id": "gate",
+          "kind": "review",
+          "phase": "execute",
+          "objective": "Gate the fix before the final review",
+          "dependsOn": [],
+          "expertDecision": {
+            "reason": "the coordinator gates the integration itself"
+          },
+          "host": "coordinator",
+          "gateRole": "integration-gate",
+          "skillIds": [],
+          "status": "done",
+          "claimedBy": "run-gate",
+          "revision": 2,
+          "activation": {
+            "host": "coordinator",
+            "runId": "run-gate",
+            "access": "read-only",
+            "inputs": []
+          },
+          "handoff": {
+            "nodeId": "gate",
+            "runId": "run-gate",
+            "artifacts": [],
+            "findings": [
+              {
+                "claim": "The fix matches the objective",
+                "source": "deliverable.txt"
+              }
+            ],
+            "verdict": "pass",
+            "note": "Integration gate passed",
+            "unresolved": [],
+            "contractVersion": 1
+          }
+        },
+        {
+          "id": "s3",
+          "kind": "review",
+          "phase": "review",
+          "objective": "Check the result against the objective",
+          "dependsOn": [
+            "s2",
+            "gate"
+          ],
+          "expertDecision": {
+            "reason": "the coordinator reviews the result itself"
+          },
+          "host": "coordinator",
+          "skillIds": [],
+          "status": "done",
+          "claimedBy": "run-s3",
+          "revision": 2,
+          "activation": {
+            "host": "coordinator",
+            "runId": "run-s3",
+            "access": "read-only",
+            "inputs": [
+              {
+                "nodeId": "s2",
+                "key": "deliverable.txt",
+                "hash": "<rev:4>"
+              },
+              {
+                "nodeId": "s1",
+                "key": "finding:0",
+                "hash": "<rev:3>"
+              },
+              {
+                "nodeId": "gate",
+                "key": "finding:0",
+                "hash": "<rev:5>"
+              }
+            ]
+          },
+          "handoff": {
+            "nodeId": "s3",
+            "runId": "run-s3",
+            "artifacts": [],
+            "findings": [
+              {
+                "claim": "The result matches the objective",
+                "source": "src/cart.ts"
+              }
+            ],
+            "verdict": "pass",
+            "note": "Final review passed",
+            "unresolved": [],
+            "contractVersion": 1
+          }
         }
       ],
       "gaps": [
         {
           "kind": "tool",
           "description": "No CSV fixture generator",
-          "recordedAt": "<at:18>",
-          "resolvedAt": "<at:23>",
+          "recordedAt": "<at:31>",
+          "resolvedAt": "<at:40>",
           "resolution": "Wrote the fixture by hand"
         }
       ],
@@ -2459,12 +3720,19 @@
         {
           "revision": 2,
           "reason": "Initial plan",
-          "affectedSteps": [
+          "affectedNodes": [
             "s1",
-            "s2"
+            "s2",
+            "gate",
+            "s3"
           ],
           "recordedAt": "<at:11>"
         }
+      ],
+      "stages": [
+        "investigate",
+        "execute",
+        "review"
       ],
       "basedOnRevision": "<rev:1>",
       "scope": [
@@ -2473,13 +3741,21 @@
       "constraints": [
         "No API change"
       ],
+      "edges": [
+        {
+          "from": "s3",
+          "to": "s2",
+          "kind": "rework",
+          "traversals": 2
+        }
+      ],
       "skillSearches": [
         {
           "key": "csv-fixtures",
           "gapDescription": "No CSV fixture generator",
           "query": "csv fixture",
           "resultCount": 1,
-          "recordedAt": "<at:20>"
+          "recordedAt": "<at:33>"
         }
       ],
       "skillProposals": [
@@ -2493,29 +3769,44 @@
           "key": "csv-fixtures",
           "id": "<id:3>",
           "status": "installed",
-          "recordedAt": "<at:20>",
+          "recordedAt": "<at:33>",
           "installedSkillId": "csv-fixtures"
         }
       ],
       "taskSkillIds": [
         "csv-fixtures"
       ],
+      "expertProposals": [
+        {
+          "id": "<id:4>",
+          "temporaryExpert": {
+            "name": "任务内专家",
+            "description": "仅本任务",
+            "instructions": "只在本任务使用",
+            "skillIds": []
+          },
+          "status": "installed",
+          "recordedAt": "<at:36>",
+          "installedExpertId": "expert-local",
+          "resolvedAt": "<at:38>"
+        }
+      ],
       "instances": [
         {
           "id": "attempt-coordinator",
           "orderId": "coordinator",
-          "mode": "investigate",
+          "kind": "investigate",
           "skills": [],
           "decisionReason": "Coordinator inspects first",
           "contractVersion": 1,
-          "cognitionRevision": 6,
+          "cognitionRevision": 8,
           "baseRevision": "<rev:1>",
           "status": "completed",
-          "startedAt": "<at:25>",
+          "startedAt": "<at:42>",
           "findings": [
             "Coordinator inspection recorded"
           ],
-          "endedAt": "<at:49>"
+          "endedAt": "<at:66>"
         },
         {
           "id": "attempt-worker",
@@ -2528,7 +3819,7 @@
               "src"
             ],
             "resources": [],
-            "mode": "implement",
+            "kind": "execute",
             "agentId": "agent-1",
             "acceptance": [
               "Configured checks pass"
@@ -2538,7 +3829,7 @@
             "decisionReason": "Probe dispatch for characterization"
           },
           "decisionReason": "Probe dispatch for characterization",
-          "mode": "implement",
+          "kind": "execute",
           "expert": {
             "id": "backend",
             "name": "后端工程师",
@@ -2546,11 +3837,11 @@
           },
           "skills": [],
           "contractVersion": 1,
-          "cognitionRevision": 6,
+          "cognitionRevision": 8,
           "baseRevision": "<rev:1>",
           "status": "completed",
-          "startedAt": "<at:27>",
-          "activatedAt": "<at:29>",
+          "startedAt": "<at:44>",
+          "activatedAt": "<at:46>",
           "pid": 4242,
           "workRoot": "workers/attempt-worker",
           "worktreePath": "worker-agents/agent-1/project",
@@ -2558,7 +3849,7 @@
             "Rounding fixed"
           ],
           "integration": "merged",
-          "endedAt": "<at:43>",
+          "endedAt": "<at:60>",
           "integrationDecision": {
             "action": "integrate",
             "reason": "Patch matches the plan",
@@ -2576,7 +3867,7 @@
           "skillIds": [],
           "capabilityIds": [],
           "contextRevision": 1,
-          "mode": "implement",
+          "kind": "execute",
           "orderId": "s2",
           "lastAttemptId": "attempt-worker",
           "status": "completed"
@@ -2598,6 +3889,7 @@
     ],
     "status": "active",
     "phase": "plan",
+    "planApprovalMode": "auto",
     "goal": {
       "enabled": false,
       "budget": {
@@ -2619,8 +3911,8 @@
         "revision": "<rev:1>",
         "source": "evidence/build.log",
         "contractVersion": 1,
-        "id": "<id:6>",
-        "recordedAt": "<at:59>"
+        "id": "<id:7>",
+        "recordedAt": "<at:76>"
       },
       {
         "criterionId": "user-path",
@@ -2630,8 +3922,8 @@
         "previewId": "preview-1",
         "source": "evidence/user-path.log",
         "contractVersion": 1,
-        "id": "<id:7>",
-        "recordedAt": "<at:60>"
+        "id": "<id:8>",
+        "recordedAt": "<at:77>"
       }
     ],
     "runs": [
@@ -2645,12 +3937,12 @@
         "firstResponseMs": 3200,
         "outcome": "returned",
         "contractVersion": 1,
-        "recordedAt": "<at:70>"
+        "recordedAt": "<at:87>"
       }
     ],
     "preview": null,
     "createdAt": "<at:1>",
-    "updatedAt": "<at:87>",
+    "updatedAt": "<at:104>",
     "development": {
       "enabled": true,
       "repairAttempts": 1,
@@ -2660,18 +3952,18 @@
         "instanceId": "attempt-worker",
         "revision": "<rev:1>",
         "contractVersion": 1,
-        "recordedAt": "<at:56>"
+        "recordedAt": "<at:73>"
       }
     },
     "workerReceipts": [
       {
-        "id": "<id:4>",
+        "id": "<id:5>",
         "attemptId": "attempt-worker",
         "sourceRevision": "<rev:1>",
         "passed": true,
         "path": "check-logs/test.log",
         "kind": "check",
-        "recordedAt": "<at:32>"
+        "recordedAt": "<at:49>"
       }
     ],
     "workerCognition": {
@@ -2680,7 +3972,7 @@
         {
           "text": "alpha_check test passes",
           "evidence": [
-            "<id:4>"
+            "<id:5>"
           ]
         }
       ],
@@ -2691,7 +3983,7 @@
       "attemptId": "attempt-worker",
       "revision": 1,
       "sourceRevision": "<rev:1>",
-      "updatedAt": "<at:34>"
+      "updatedAt": "<at:51>"
     },
     "workerRequests": [
       {
@@ -2707,14 +3999,14 @@
         "contractVersion": 1,
         "sourceRevision": "<rev:1>",
         "status": "applied",
-        "recordedAt": "<at:37>",
+        "recordedAt": "<at:54>",
         "reason": "Installed csv-fixtures",
-        "resolvedAt": "<at:40>"
+        "resolvedAt": "<at:57>"
       }
     ],
     "workerMessages": [
       {
-        "id": "<id:5>",
+        "id": "<id:6>",
         "taskId": "<id:1>",
         "fromAgentId": "agent-1",
         "fromRunId": "attempt-worker",
@@ -2729,9 +4021,9 @@
     ],
     "workerMessageAcks": [
       {
-        "id": "<id:5>",
+        "id": "<id:6>",
         "agentId": null,
-        "acknowledgedAt": "<at:48>"
+        "acknowledgedAt": "<at:65>"
       }
     ],
     "inputs": [
@@ -2741,7 +4033,7 @@
         "path": "<root:2>\\inputs\\notes.txt",
         "mimeType": "text/plain",
         "size": 12,
-        "sha256": "<rev:3>",
+        "sha256": "<rev:6>",
         "uploadedAt": "<at:1>"
       }
     ],
@@ -2749,13 +4041,13 @@
       "plugins": [
         {
           "id": "comfyui",
-          "revision": "<rev:4>"
+          "revision": "<rev:7>"
         }
       ],
       "skills": [
         {
           "id": "csv-fixtures",
-          "hash": "<rev:5>",
+          "hash": "<rev:8>",
           "revision": "ffffffffffffffffffffffffffffffffffffffff"
         }
       ]
@@ -2764,21 +4056,21 @@
       {
         "stage": "coordinator",
         "model": "test/model",
-        "promptHash": "<rev:6>",
-        "taskContextHash": "<rev:3>",
+        "promptHash": "<rev:9>",
+        "taskContextHash": "<rev:6>",
         "taskContextBytes": 512,
         "systemTokens": 4900,
         "toolTokens": 4700,
         "contextShare": 0.1,
         "tools": 3,
-        "recordedAt": "<at:65>"
+        "recordedAt": "<at:82>"
       }
     ],
     "operation": {
       "runId": "run-operation",
-      "startedAt": "<at:67>",
+      "startedAt": "<at:84>",
       "status": "finished",
-      "finishedAt": "<at:69>"
+      "finishedAt": "<at:86>"
     },
     "checkpointStatus": "failed",
     "checkpoint": {

@@ -11,10 +11,12 @@ import {
   readTaskLog, replaceState, taskLogDir, writeSnapshot,
 } from "./task-events";
 import type { TaskActor, TaskEvent, TaskEventDraft, TaskEventPayloads, TaskEventPlan, WorkerStopReason } from "./task-events";
-import type { PauseReasonCode, StopReasonCode } from "./pause-reasons";
 import type { AgentMessage } from "./agent-mailbox";
 import type { CommandRequest } from "./command-approval";
+import type { ExpertSnapshot } from "./experts";
+import type { PauseReasonCode, StopReasonCode } from "./pause-reasons";
 import type { WebApproval } from "./web-permissions";
+import type { WorkOrder } from "./work-orders";
 
 export type EvidenceKind = "build" | "test" | "browser" | "asset" | "preview" | "source" | "artifact";
 export type TaskType = "web-product" | "code-change" | "research" | "file-work" | "general";
@@ -73,6 +75,8 @@ export interface LocalPreview {
 export interface RunRecord {
   model: string;
   stage?: "coordinator" | "implementation" | "review" | "worker" | "answer";
+  /** The plan node this run worked inside (§3.3); every run belongs to exactly one node. */
+  nodeId?: string;
   instanceId?: string;
   thinkingPolicyVersion?: number;
   contractVersion?: number;
@@ -89,7 +93,10 @@ export interface RunRecord {
   usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens: number; cost: number };
   /** Size of the fixed prompt and tool definitions this run's session sent with every request. */
   prompt?: { systemTokens: number; toolTokens: number; tools: number; contextShare: number | null; exact: boolean };
-  outcome: "returned" | "cancelled" | "budget" | "error" | "needs-input";
+  /** The expert's primary method that fell back to list mode this run (expert-scope §4.4 step 2). */
+  skillBudgetFallback?: { id: string; reason: string };
+  /** `node-switch` ends the run because the cursor moved to a node with a different expert or access (§3.6). */
+  outcome: "returned" | "cancelled" | "budget" | "error" | "needs-input" | "node-switch";
   failureReason?: string;
   recordedAt: string;
 }
@@ -113,16 +120,79 @@ export interface GuidanceRecord {
   status?: "recorded" | "delivered" | "processed";
 }
 
-export type ExecutionMode = "investigate" | "implement" | "review";
+/**
+ * Node types double as the three skeleton stages (§3.1): investigate, execute and review. A review-kind node may sit
+ * inside the execute stage as an intermediate gate. The pure rules live in the dependency-free plan-kind module so
+ * event reducers can share them without a module cycle.
+ */
+import { accessOf, type AccessLevel, type NodeHost, type PlanNodeKind } from "./plan-kind";
+
+export { accessOf, type AccessLevel, type NodeHost, type PlanNodeKind };
+
+/** A task-local expert the model composed (§4.3); it loads like any expert but never widens permissions. */
+export interface TemporaryExpert {
+  name: string;
+  description: string;
+  instructions: string;
+  skillIds: string[];
+}
+
+/** Which expert activates in a node, and why; required on every node (§4.3). */
+export interface ExpertDecision {
+  /** An expert from the library; absent means no expert activates and the host works the node itself. */
+  expertId?: string;
+  /** A task-local expert; mutually exclusive with expertId. */
+  temporaryExpert?: TemporaryExpert;
+  reason: string;
+}
+
+/** What a node hands downstream (§6.1): artifacts and findings, never conversation. */
+export interface PlanNodeHandoff {
+  nodeId: string;
+  runId: string;
+  expert?: { id: string; hash: string };
+  artifacts: Array<{ path: string; hash: string; kind: string }>;
+  findings?: Array<{ claim: string; source: string }>;
+  verdict?: "pass" | "changes-requested" | "inconclusive";
+  note: string;
+  unresolved: string[];
+  contractVersion: number;
+}
+
+/** The node lifecycle (§3.4), derived from node events and outputs — never model-reported. */
+export type PlanNodeStatus = "planned" | "ready" | "active" | "waiting" | "done" | "reopened" | "cancelled";
+
+/**
+ * A back-edge the plan declares (§3.1, §3.5): `rework` returns review findings to the execute node they came from;
+ * `premise` returns to an investigate node whose premise broke. `depends` edges derive from `dependsOn` and are not
+ * stored. `maxTraversals` caps automatic traversals (rework defaults to the two automatic repair rounds).
+ */
+export interface PlanEdge {
+  from: string;
+  to: string;
+  kind: "rework" | "premise";
+  maxTraversals?: number;
+  /** How many times the runtime traversed this edge; recorded on traversal. */
+  traversals?: number;
+}
+
+/** One upstream output a node consumed, snapshotted at entry so later exits can tell downstream work went stale (§3.5). */
+export interface ConsumedArtifact {
+  nodeId: string;
+  /** The artifact path, or `finding:<n>` for an upstream finding. */
+  key: string;
+  hash: string;
+}
+
 export interface AgentRecord {
   id: string;
-  expert?: import("./experts").ExpertSnapshot;
+  expert?: ExpertSnapshot;
   skillIds: string[];
-  skillSnapshots?: NonNullable<import("./work-orders").WorkOrder["skillSnapshots"]>;
+  skillSnapshots?: NonNullable<WorkOrder["skillSnapshots"]>;
   capabilityIds?: string[];
-  capabilitySnapshots?: NonNullable<import("./work-orders").WorkOrder["capabilitySnapshots"]>;
+  capabilitySnapshots?: NonNullable<WorkOrder["capabilitySnapshots"]>;
   contextRevision?: number;
-  mode: ExecutionMode;
+  kind: PlanNodeKind;
   orderId: string;
   lastAttemptId: string;
   status: "queued" | "running" | "returned" | "waiting-primary" | "completed" | "failed" | "cancelled";
@@ -138,19 +208,47 @@ export interface WorkerCognition {
   attemptId: string;
   updatedAt: string;
 }
-export interface CognitionStep {
+export interface PlanNode {
   id: string;
+  kind: PlanNodeKind;
+  /** The skeleton stage this node fills; a review-kind node may sit inside the execute stage as a gate (§3.1). */
+  phase: PlanNodeKind;
   objective: string;
-  mode: ExecutionMode;
   dependsOn: string[];
-  expertId?: string;
+  /** Required on every node (§4.3): which expert activates here, and why. */
+  expertDecision: ExpertDecision;
+  host: NodeHost;
+  /** Artifact types this node consumes and produces (§5); the handoff checks carries them. */
+  consumes?: string[];
+  produces?: string[];
+  /** The writable scope for execute nodes on code tasks (§7). */
+  ownedPaths?: string[];
+  /** Review nodes only: the role that must perform the gate (§6.2). */
+  gateRole?: string;
+  /** Skills explicitly added on top of the activated expert's package (§4.4 step 6). */
   skillIds: string[];
-  status: "planned" | "running" | "complete" | "blocked" | "cancelled";
+  /** Reducer-owned lifecycle derived from node events and outputs (§3.4); models never report it (§1.1). */
+  status: PlanNodeStatus;
   statusReason?: string;
-  /** Board revision of this step; every transition bumps it and callers pass the value they read (compare-and-swap). */
+  /** Board revision of this node; every transition bumps it and callers pass the value they read (compare-and-swap). */
   revision?: number;
-  /** The subagent attempt that claimed the step, when one did. */
+  /** The execution location that claimed the node, when one did. */
   claimedBy?: string;
+  /** Who runs the node and with what (§4.1): recorded with the entry, never a separate activation event. */
+  activation?: {
+    host: NodeHost;
+    runId: string;
+    access: AccessLevel;
+    expert?: { id: string; name: string; hash: string };
+    expertSnapshot?: ExpertSnapshot;
+    temporaryExpert?: TemporaryExpert;
+    /** Upstream artifacts as they stood at entry; an upstream re-exit with different hashes marks this stale (§3.5). */
+    inputs?: ConsumedArtifact[];
+  };
+  /** The exit record once the node is done (§6.1). */
+  handoff?: PlanNodeHandoff;
+  /** Upstream inputs changed after this node finished: the coordinator redoes it or keeps it knowingly (§3.5). */
+  stale?: boolean;
 }
 export interface CognitionState {
   revision: number;
@@ -161,14 +259,20 @@ export interface CognitionState {
   openQuestions?: string[];
   candidates: string[];
   taskSkillIds?: string[];
-  steps: CognitionStep[];
+  /** Proposals to save a task-local expert into the library; the user decides, like Skill proposals (§4.3). */
+  expertProposals?: Array<{ id: string; temporaryExpert: TemporaryExpert; status: "pending" | "rejected" | "installed"; installedExpertId?: string; recordedAt: string; resolvedAt?: string }>;
+  /** The three-stage skeleton written at task creation (§3.2); nodes fill it and cannot delete stages. */
+  stages?: PlanNodeKind[];
+  /** Declared back-edges (§3.5); `depends` edges live in each node's `dependsOn`. */
+  edges?: PlanEdge[];
+  nodes: PlanNode[];
   gaps: Array<{ kind: "method" | "tool" | "permission" | "context"; description: string; recordedAt: string; resolvedAt?: string; resolution?: string; blockingReason?: string }>;
-  amendments: Array<{ revision: number; reason: string; affectedSteps: string[]; recordedAt: string }>;
+  amendments: Array<{ revision: number; reason: string; affectedNodes: string[]; recordedAt: string }>;
   basedOnRevision?: string | null;
   skillSearches?: Array<{ key: string; gapDescription: string; query: string; resultCount: number; error?: string; recordedAt: string }>;
   skillProposals?: Array<{ id: string; key: string; name: string; description: string; source: string; revision: string; path: string; installs: number; requirements?: { tools: string[]; services: string[]; conflicts: string[] }; status: "pending" | "rejected" | "installed"; installedSkillId?: string; recordedAt: string }>;
   agents?: AgentRecord[];
-  instances?: Array<{ id: string; agentId?: string; parentId?: string; orderId: string; mode: ExecutionMode; expert?: { id: string; name: string; hash: string }; skills: NonNullable<import("./work-orders").WorkOrder["skillSnapshots"]>; contractVersion: number; cognitionRevision: number; baseRevision: string | null; status: "queued" | "running" | "returned" | "completed" | "blocked" | "failed" | "cancelled"; integration?: "pending" | "merged" | "conflict"; decisionReason?: string; integrationDecision?: { action: "integrate" | "reject"; reason: string; runId: string; contractVersion: number; sourceRevision: string | null; recordedAt: string }; workRoot?: string; worktreePath?: string; order?: import("./work-orders").WorkOrder; stopReason?: WorkerStopReason; pid?: number; activatedAt?: string; startedAt: string; endedAt?: string; findings?: string[] }>;
+  instances?: Array<{ id: string; agentId?: string; parentId?: string; orderId: string; kind: PlanNodeKind; expert?: { id: string; name: string; hash: string }; skills: NonNullable<WorkOrder["skillSnapshots"]>; contractVersion: number; cognitionRevision: number; baseRevision: string | null; status: "queued" | "running" | "returned" | "completed" | "blocked" | "failed" | "cancelled"; integration?: "pending" | "merged" | "conflict"; decisionReason?: string; integrationDecision?: { action: "integrate" | "reject"; reason: string; runId: string; contractVersion: number; sourceRevision: string | null; recordedAt: string }; workRoot?: string; worktreePath?: string; order?: WorkOrder; stopReason?: WorkerStopReason; pid?: number; activatedAt?: string; startedAt: string; endedAt?: string; findings?: string[] }>;
 }
 export interface DevelopmentState {
   enabled: true;
@@ -204,6 +308,8 @@ export interface TaskState {
   status: "active" | "stopped" | "complete" | "needs-input";
   phase?: TaskPhase;
   planApproval?: { contractVersion: number; cognitionRevision: number; sourceRevision: string; approvedAt: string };
+  /** The launch switch: "auto" approves the plan the moment it is recorded; "review" waits for the user (§0). */
+  planApprovalMode?: "auto" | "review";
   goal?: { enabled: boolean; budget?: GoalBudget; noProgressRuns?: number; stopReason?: GoalStopReason; revision?: number };
   pendingQuestion?: string;
   /** Why a `needs-input` task waits; the workbench derives its resume buttons from this code (plan §4.4). */
@@ -260,6 +366,14 @@ export interface WorkerRequestRecord {
   commandReceipt?: { id: string; status: string; exitCode?: number; logPath?: string; revision?: string };
   recordedAt: string;
   resolvedAt?: string;
+}
+
+/**
+ * The launch switch for tasks recorded before it was stored: a task sitting in the plan lane was launched with review,
+ * anything else was launched with auto approval. Legacy tasks keep behaving as they did.
+ */
+export function planApprovalModeOf(state: Pick<TaskState, "planApprovalMode" | "phase">): "auto" | "review" {
+  return state.planApprovalMode ?? (state.phase === "plan" || state.phase === "plan-review" ? "review" : "auto");
 }
 
 
@@ -354,11 +468,14 @@ export class TaskLedger {
       contractVersion: 1,
       contractHistory: [],
       guidanceHistory: [],
-      cognition: { revision: 1, recipeVersion: 1, summary: input.objective.trim(), candidates: [], steps: [], gaps: [], amendments: [] },
+      cognition: { revision: 1, recipeVersion: 1, summary: input.objective.trim(), candidates: [], nodes: [], gaps: [], amendments: [] },
       projectRoot,
       criteria: input.criteria,
       status: "active",
-      phase: input.startMode ?? "execute",
+      // Every task starts in the plan lane. "execute" (自动批准) approves the plan the moment it is recorded and the
+      // run continues; "plan" (等待审批) stops for the user's review. The plan-first guard holds either way.
+      phase: "plan",
+      planApprovalMode: input.startMode === "plan" ? "review" : "auto",
       goal: { enabled: input.continueUntilAccepted ?? false, ...(input.goalBudget ? { budget: input.goalBudget } : {}) },
       revision: await fingerprintSource(projectRoot),
       evidence: [],
@@ -370,6 +487,8 @@ export class TaskLedger {
     };
     const ledger = new TaskLedger(file, state, 0);
     await ledger.commit(() => ({ type: "task/created", payload: { state } }));
+    // The skeleton is runtime-owned (§3.2): every task starts with the three stages; plans fill them, never delete them.
+    await ledger.commit(() => ({ type: "graph/skeleton-created", payload: { stages: ["investigate", "execute", "review"] } }));
     return ledger;
   }
 
@@ -474,12 +593,105 @@ export class TaskLedger {
     await this.commit(() => ({ type: "plan/approved", payload: { approval: { ...expected, approvedAt: new Date().toISOString() } } }));
   }
 
-  async updateStep(id: string, status: CognitionStep["status"], reason: string): Promise<void> {
+  /** Cursor entry (§3.3): the runtime moves into a ready node; its type decides access, its decision the expert (§3.6). */
+  async enterNode(input: { nodeId: string; host: NodeHost; runId: string; expert?: ExpertSnapshot; temporaryExpert?: TemporaryExpert }): Promise<void> {
+    const node = this.state.cognition?.nodes.find(item => item.id === input.nodeId);
+    if (!node) throw new Error(`计划中没有节点：${input.nodeId}`);
+    await this.commit(() => ({
+      type: "node/entered",
+      payload: {
+        nodeId: input.nodeId, host: input.host, runId: input.runId, access: accessOf(node.kind),
+        ...(input.expert ? { expert: { id: input.expert.id, name: input.expert.name, hash: input.expert.hash }, expertSnapshot: input.expert } : {}),
+        ...(input.temporaryExpert ? { temporaryExpert: input.temporaryExpert } : {}),
+        startedAt: new Date().toISOString(),
+      },
+    }));
+  }
+
+  /**
+   * Exit a node with its handoff record (§6.1). The exit conditions are runtime-checked (§3.4): findings with sources
+   * for investigation, declared artifacts with matching hashes for execution, a bound verdict for review. Status is
+   * derived from this record; models never report it directly.
+   */
+  async exitNode(input: { nodeId: string; runId: string; expert?: { id: string; hash: string }; artifacts: PlanNodeHandoff["artifacts"]; findings?: PlanNodeHandoff["findings"]; verdict?: PlanNodeHandoff["verdict"]; note: string; unresolved: string[] }): Promise<void> {
+    const node = this.state.cognition?.nodes.find(item => item.id === input.nodeId);
+    if (!node) throw new Error(`计划中没有节点：${input.nodeId}`);
+    if (node.status === "done" || node.status === "cancelled") throw new Error(`节点已结束：${input.nodeId}`);
+    // A dispatched node belongs to its work order: only the order's result can close it, so a plan-side exit can
+    // never forge acceptance for delegated work.
+    if (this.state.cognition?.instances?.some(instance => instance.orderId === input.nodeId)) throw new Error(`节点 ${input.nodeId} 已派发给工单，退出由工单结果决定`);
+    if (!input.note.trim()) throw new Error("交接记录必须说明做了什么、哪些待核验");
+    if (node.kind === "investigate") {
+      if (!input.findings?.length || input.findings.some(item => !item.claim.trim() || !item.source.trim())) throw new Error("调查节点的发现必须逐条带依据（文件片段、网页来源或用户素材）");
+    }
+    if (node.kind === "execute") {
+      const produced = new Set(input.artifacts.map(item => item.kind));
+      const missing = (node.produces ?? []).find(kind => !produced.has(kind));
+      if (missing) throw new Error(`执行节点缺少声明的产物：${missing}`);
+      for (const artifact of input.artifacts) {
+        const path = resolve(this.state.projectRoot, artifact.path);
+        const contents = await readFile(path).catch(() => null);
+        if (!contents || createHash("sha256").update(contents).digest("hex") !== artifact.hash) throw new Error(`交接产物不存在或哈希不符：${artifact.path}`);
+      }
+    }
+    if (node.kind === "review") {
+      if (!input.verdict) throw new Error("审查节点必须给出 gate 结论");
+      if (!input.findings?.length || input.findings.some(item => !item.claim.trim() || !item.source.trim())) throw new Error("审查结论必须引用产物或源码原文");
+    }
+    await this.commit(() => ({
+      type: "node/exited",
+      payload: {
+        nodeId: input.nodeId, runId: input.runId, ...(input.expert ? { expert: input.expert } : {}),
+        artifacts: input.artifacts, ...(input.findings ? { findings: input.findings } : {}), ...(input.verdict ? { verdict: input.verdict } : {}),
+        note: input.note, unresolved: input.unresolved, contractVersion: this.state.contractVersion ?? 1,
+        exitedAt: new Date().toISOString(),
+      },
+    }));
+    // §3.5: a changes-requested verdict walks the plan's rework edge automatically, up to its cap (the two automatic
+    // repair rounds by default); past the cap the task pauses for the user instead of looping.
+    if (input.verdict === "changes-requested") {
+      const edge = this.state.cognition?.edges?.find(item => item.kind === "rework" && item.from === input.nodeId);
+      if (edge) {
+        const traversals = edge.traversals ?? 0;
+        const maximum = edge.maxTraversals ?? 2;
+        if (traversals < maximum) await this.reopenNode({ nodeId: edge.to, edge: "rework", sourceNodeId: input.nodeId, reason: `审查退回修改：${input.note}` });
+        else await this.needInput(`审查已连续退回 ${traversals + 1} 轮，等待用户决定如何继续`, "question");
+      }
+    }
+  }
+
+  /**
+   * Reopen a node (§3.5): walk a declared `rework`/`premise` back-edge from a source node, or redo a node marked
+   * stale because its upstream inputs changed. The reopened node re-enters after this and its exit re-derives what
+   * downstream work is stale.
+   */
+  async reopenNode(input: { nodeId: string; edge?: "rework" | "premise"; sourceNodeId?: string; reason: string }): Promise<void> {
+    await this.commit(() => ({
+      type: "node/reopened",
+      payload: { nodeId: input.nodeId, ...(input.edge ? { edge: input.edge } : {}), ...(input.sourceNodeId ? { sourceNodeId: input.sourceNodeId } : {}), reason: input.reason, recordedAt: new Date().toISOString() },
+    }));
+  }
+
+  /** A node pauses here (§3.5): the pause code hangs on the node, and resuming returns to it. */
+  async waitNode(nodeId: string, pause: PauseReasonCode): Promise<void> {
+    await this.commit(() => ({ type: "node/waiting", payload: { nodeId, pause } }));
+  }
+
+  /**
+   * Propose saving a task-local expert into the library (§4.3): it stays task-local until the user approves, exactly
+   * like a Skill proposal.
+   */
+  async proposeTemporaryExpert(temporaryExpert: TemporaryExpert): Promise<string> {
+    let id!: string;
     await this.commit(() => {
-      const step = this.state.cognition?.steps.find(item => item.id === id);
-      // Compare-and-swap on the board revision: a concurrent claim or completion makes this call re-plan.
-      return { type: "step/changed", payload: { id, status, reason, expectedRevision: step?.revision ?? 0 } };
+      id = randomUUID();
+      return { type: "expert-proposal/recorded", payload: { proposal: { id, temporaryExpert, status: "pending", recordedAt: new Date().toISOString() } } };
     });
+    return id;
+  }
+
+  async decideExpertProposal(id: string, decision: "installed" | "rejected", installedExpertId?: string): Promise<void> {
+    await this.commit(() => ({ type: "expert-proposal/decided", payload: { id, decision, ...(installedExpertId ? { installedExpertId } : {}), resolvedAt: new Date().toISOString() } }));
   }
 
   async enableDevelopmentWorkflow(): Promise<void> {
@@ -493,8 +705,20 @@ export class TaskLedger {
     await this.commit(() => ({ type: "candidates/set", payload: { candidates: ids } }));
   }
 
-  async reviseCognition(input: { summary: string; candidates: string[]; steps: CognitionStep[]; reason: string; scope?: string[]; constraints?: string[]; openQuestions?: string[] }): Promise<void> {
+  async reviseCognition(input: { summary: string; candidates: string[]; nodes: PlanNode[]; edges?: PlanEdge[]; reason: string; scope?: string[]; constraints?: string[]; openQuestions?: string[] }): Promise<void> {
     await this.commit(() => ({ type: "plan/revised", payload: { input, recordedAt: new Date().toISOString() } }));
+    if (planApprovalModeOf(this.state) !== "auto" || !this.state.cognition?.nodes.length) return;
+    // 计划自动批准: the recorded plan is approved at once, so the same run moves into execution without a review
+    // pause. Anything that blocks approval (empty plan, a source fingerprint that moved) leaves the task in the review
+    // lane instead of executing an unapproved plan, and the reason is recorded.
+    try {
+      if (this.state.phase === "plan") await this.submitPlanForReview();
+      if (this.state.phase === "plan-review") {
+        await this.approvePlan({ contractVersion: this.state.contractVersion ?? 1, cognitionRevision: this.state.cognition.revision, sourceRevision: this.state.revision ?? "" });
+      }
+    } catch (error) {
+      await this.recordFailure(`计划自动批准未完成：${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   async recordCapabilityGap(kind: CognitionState["gaps"][number]["kind"], description: string): Promise<void> {
@@ -521,21 +745,27 @@ export class TaskLedger {
     await this.commit(() => ({ type: "skill-proposal/decided", payload: { id, decision, ...(installedSkillId ? { installedSkillId } : {}), resolvedAt: new Date().toISOString() } }));
   }
 
-  async recordDispatch(input: { id: string; orderId: string; mode: ExecutionMode; expert?: { id: string; name: string; hash: string }; skills: Array<{ id: string; hash: string; revision: string }>; decisionReason?: string }): Promise<void> {
+  async recordDispatch(input: { id: string; orderId: string; kind: PlanNodeKind; expert?: { id: string; name: string; hash: string }; skills: Array<{ id: string; hash: string; revision: string }>; decisionReason?: string }): Promise<void> {
     this.assertActive();
     if (this.state.cognition?.instances?.some(item => item.id === input.id)) return;
     await this.commit(() => ({ type: "worker/dispatched", payload: { ...input, startedAt: new Date().toISOString() } }));
   }
 
-  async queueWorker(input: { id: string; parentId?: string; order: import("./work-orders").WorkOrder; expert?: { id: string; name: string; hash: string } }): Promise<void> {
+  async queueWorker(input: { id: string; parentId?: string; order: WorkOrder; expert?: { id: string; name: string; hash: string } }): Promise<void> {
     const { expert: expertSnapshot, ...order } = input.order;
     await this.commit(() => ({
       type: "worker/queued",
       payload: { attemptId: input.id, ...(input.parentId ? { parentId: input.parentId } : {}), order, ...(expertSnapshot ? { expertSnapshot } : {}), ...(input.expert ? { expert: input.expert } : {}), startedAt: new Date().toISOString() },
     }));
+    // One subagent maps to one node (§3.3): the first attempt enters the node and records its activation with the
+    // expert snapshot (§4.1). Continuations of an entered node do not re-enter.
+    const node = this.state.cognition?.nodes.find(item => item.id === order.id);
+    if (node && ["planned", "ready", "reopened"].includes(node.status)) {
+      await this.enterNode({ nodeId: node.id, host: "worker", runId: input.id, ...(expertSnapshot ? { expert: expertSnapshot } : {}) });
+    }
   }
 
-  async updateWorker(id: string, status: "running" | "returned" | "completed" | "blocked" | "failed" | "cancelled", patch: { workRoot?: string; worktreePath?: string; findings?: string[]; integration?: "pending" | "merged" | "conflict"; integrationDecision?: NonNullable<CognitionState["instances"]>[number]["integrationDecision"]; skills?: NonNullable<import("./work-orders").WorkOrder["skillSnapshots"]>; capabilities?: NonNullable<import("./work-orders").WorkOrder["capabilitySnapshots"]>; cognition?: AgentRecord["cognition"] } = {}): Promise<void> {
+  async updateWorker(id: string, status: "running" | "returned" | "completed" | "blocked" | "failed" | "cancelled", patch: { workRoot?: string; worktreePath?: string; findings?: string[]; integration?: "pending" | "merged" | "conflict"; integrationDecision?: NonNullable<CognitionState["instances"]>[number]["integrationDecision"]; skills?: NonNullable<WorkOrder["skillSnapshots"]>; capabilities?: NonNullable<WorkOrder["capabilitySnapshots"]>; cognition?: AgentRecord["cognition"] } = {}): Promise<void> {
     await this.commit(() => {
       const instance = this.state.cognition?.instances?.find(item => item.id === id);
       if (!instance || !instance.order) throw new Error("Worker attempt not found");
@@ -756,6 +986,9 @@ export class TaskLedger {
 
   async needInput(question: string, reason?: PauseReasonCode): Promise<void> {
     await this.commit(() => ({ type: "status/changed", payload: { status: "needs-input", question, ...(reason ? { reason } : {}) } }));
+    // The pause hangs on the node this run is inside (§3.5); resuming returns to the same node.
+    const active = this.state.cognition?.nodes.find(node => node.status === "active" && node.activation?.runId === this.runId);
+    if (active && reason) await this.waitNode(active.id, reason);
   }
 
   private assertActive(): void {

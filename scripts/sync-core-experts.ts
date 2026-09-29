@@ -13,7 +13,8 @@ const add = addAt >= 0 ? (args[addAt + 1] ?? "").split(",").map(item => item.tri
 const dataRoot = resolve(args.find((arg, index) => !arg.startsWith("--") && index !== addAt + 1) ?? join(repo, ".alpha"));
 
 type Persona = { name: string; description: string; instructions: string; skillIds: string[] };
-type IndexEntry = { id: string; name: string; description: string; file: string; skill?: string };
+/** Committed history is immutable: entries before the primarySkill rename carried `skill`. */
+type IndexEntry = { id: string; name: string; description: string; file: string; primarySkill?: string; skill?: string };
 
 function git(...command: string[]): string | null {
   const result = Bun.spawnSync(["git", ...command], { cwd: repo, stdout: "pipe", stderr: "pipe" });
@@ -27,7 +28,7 @@ function committedVersions(templateId: string, file: string): Persona[] {
     const index = git("show", `${commit}:presets/agents/index.json`);
     const entry = index ? (JSON.parse(index) as { presets: IndexEntry[] }).presets.find(item => item.id === templateId) : undefined;
     const persona = entry ? git("show", `${commit}:presets/agents/${entry.file}`) : null;
-    return entry && persona !== null ? [{ name: entry.name, description: entry.description, instructions: persona.trim(), skillIds: entry.skill ? [`alpha-core:${entry.skill}`] : [] }] : [];
+    return entry && persona !== null ? [{ name: entry.name, description: entry.description, instructions: persona.trim(), skillIds: (entry.primarySkill ?? entry.skill) ? [`alpha-core:${entry.primarySkill ?? entry.skill}`] : [] }] : [];
   });
 }
 
@@ -44,7 +45,7 @@ for (const copy of installed) {
   const template = templates.find(item => item.id === copy.basedOn);
   const entry = index.presets.find(item => item.id === copy.basedOn);
   if (!template || !entry) { report.push({ id: copy.id, status: "no-template" }); continue; }
-  if (samePersona(personaOf(copy), personaOf(template)) && skillHashes(copy) === skillHashes(template)) { report.push({ id: copy.id, status: "current" }); continue; }
+  if (samePersona(personaOf(copy), personaOf(template)) && skillHashes(copy) === skillHashes(template) && copy.package?.revision === template.package?.revision) { report.push({ id: copy.id, status: "current" }); continue; }
   const unedited = samePersona(personaOf(copy), personaOf(template)) || committedVersions(template.id, entry.file).some(version => samePersona(personaOf(copy), version));
   report.push({ id: copy.id, status: unedited ? "refresh" : "edited" });
 }

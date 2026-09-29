@@ -6,6 +6,7 @@ import { importCodeWorkspace } from "../src/runtime/workspace-import";
 import { applyCodeChanges, reviewCodeApply } from "../src/runtime/workspace-apply";
 import { runCodeCheck } from "../src/runtime/code-check";
 import { acceptCodeChange } from "../src/runtime/code-acceptance";
+import { recordApprovedPlan } from "./support/approved-plan";
 import { finalizeProjectTurn, prepareProjectTurn } from "../src/runtime/project-state";
 
 async function git(cwd: string, ...args: string[]): Promise<void> {
@@ -94,6 +95,7 @@ test("applying a reviewed code change stops on an independent source edit", asyn
     await mkdir(source);
     await writeFile(join(source, "app.js"), "original");
     const ledger = await importCodeWorkspace({ sourcePath: source, productsRoot: join(root, "products"), dataRoot, objective: "Fix copy" });
+    await recordApprovedPlan(ledger);
     await writeFile(join(ledger.state.projectRoot, "app.js"), "fixed");
     await ledger.refreshRevision();
     await ledger.recordEvidence({ criterionId: "change", kind: "asset", revision: ledger.state.revision!, passed: true, source: "review.json" });
@@ -137,11 +139,12 @@ test("shared code acceptance requires review and current check evidence before c
     await writeFile(join(source, "package.json"), JSON.stringify({ scripts: { test: "bun -e \"console.log('passed')\"" } }));
     await writeFile(join(source, "app.js"), "before");
     const ledger = await importCodeWorkspace({ sourcePath: source, productsRoot: join(root, "products"), dataRoot, objective: "Fix app" });
+    await recordApprovedPlan(ledger);
     await ledger.enableDevelopmentWorkflow();
     await writeFile(join(ledger.state.projectRoot, "app.js"), "after");
     await ledger.refreshRevision();
     expect(await acceptCodeChange({ ledger, dataRoot, runId: "first" })).toBe(false);
-    expect(ledger.completionGaps()).toEqual(["development-review"]);
+    expect(ledger.completionGaps()).toEqual(["gate"]);
     await ledger.recordDevelopmentReview({ verdict: "pass", findings: [], instanceId: "review-1" });
     expect(await acceptCodeChange({ ledger, dataRoot, runId: "second", complete: false })).toBe(true);
     expect(ledger.state.status).toBe("active");

@@ -18,10 +18,10 @@ await writeFile(join(product, "index.html"), `<!doctype html><html lang="zh"><me
 await writeFile(join(product, "src", "ui.js"), `export function label() { return "待实现"; }\n`);
 await writeFile(join(product, "src", "data.js"), `export function value() { return "待实现"; }\n`);
 const presets = await new ExpertStore(dataRoot).enabled();
-const orders = bindWorkOrders([
+const orders = await bindWorkOrders([
   { id: "frontend", objective: 'In src/ui.js, replace only the returned Chinese string "待实现" with "前端已就绪". Keep the function and all other files unchanged.', ownedPaths: ["src/ui.js"], resources: ["ui"]},
   { id: "backend", objective: 'In src/data.js, replace only the returned Chinese string "待实现" with "后端已就绪". Keep the function and all other files unchanged.', ownedPaths: ["src/data.js"], resources: ["data"]},
-], presets);
+], presets, [], dataRoot);
 const events: string[] = [];
 const report = await runModelWorkOrders({
   projectRoot: product, dataRoot, taskId: randomUUID(), baseRevision: await fingerprintSource(product), orders,

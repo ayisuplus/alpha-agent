@@ -3,7 +3,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { PreparedExtension } from "@oh-my-pi/pi-coding-agent";
 import type { WorkOrder } from "./work-orders";
 import type { TaskPhase } from "./task-ledger";
-import { REVIEW_PAUSE_TOOL_NAMES } from "./planning-policy";
+import { PLANNING_TOOL_NAMES, REVIEW_PAUSE_TOOL_NAMES } from "./planning-policy";
 
 function inside(root: string, path: string): boolean {
   const remainder = relative(root, path);
@@ -126,13 +126,16 @@ export async function checkFileToolCall(toolName: string, input: Record<string, 
 }
 
 /** OMP fires tool_call before scheduling and again for direct tool dispatches. Fail closed on missing edit targets. */
-export function fileToolGuard(projectRoot: string, order?: WorkOrder, protectedPaths: string[] = [], direct = false, reviewing = false, phase?: () => TaskPhase | undefined, parentWorkers?: { assertParentWrite(path: string): void; assertParentTool(name: string): void }, onRead?: (path: string) => void): PreparedExtension {
+export function fileToolGuard(projectRoot: string, order?: WorkOrder, protectedPaths: string[] = [], direct = false, reviewing = false, phase?: () => TaskPhase | undefined, requiresPlan?: () => boolean, parentWorkers?: { assertParentWrite(path: string): void; assertParentTool(name: string): void }, onRead?: (path: string) => void): PreparedExtension {
   return {
     path: "alpha:file-tool-guard",
     resolvedPath: "alpha:file-tool-guard",
     error: null,
     factory: api => {
       api.on("tool_call", async event => {
+        // Plan first: before a plan is recorded only the planning tools may run, and the rejection happens per call so
+        // the session keeps its tool set and the run continues into execution right after alpha_plan records it.
+        if (requiresPlan?.() && !(PLANNING_TOOL_NAMES as readonly string[]).includes(event.toolName)) return { block: true, reason: "先用 alpha_plan 记录计划" };
         if (phase?.() === "plan-review" && !(REVIEW_PAUSE_TOOL_NAMES as readonly string[]).includes(event.toolName)) return { block: true, reason: "Plan changed and is awaiting user review" };
         if (direct && ["read", "grep", "edit", "write"].includes(event.toolName)) return;
         try { await checkFileToolCall(event.toolName, event.input as Record<string, unknown>, projectRoot, order, protectedPaths, reviewing, parentWorkers, onRead); }

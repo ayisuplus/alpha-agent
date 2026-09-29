@@ -15,7 +15,7 @@
       "description": "全栈开发的需求边界、模块职责、接口契约和技术取舍；architecture, system design, API contracts。",
       "line": "development",
       "file": "solution-architect.md",
-      "skill": "design-system-contracts"
+      "primarySkill": "design-system-contracts"
     },
     {
       "id": "ui-designer",
@@ -23,7 +23,7 @@
       "description": "基于真实参考设计用户流程、界面状态、布局和可访问性；UI UX design, accessibility。",
       "line": "development",
       "file": "ui-designer.md",
-      "skill": "design-interface"
+      "primarySkill": "design-interface"
     },
     {
       "id": "frontend",
@@ -31,7 +31,7 @@
       "description": "页面逻辑、组件、状态与交互实现，接口接入和浏览器验证；frontend React TypeScript CSS。",
       "line": "development",
       "file": "frontend.md",
-      "skill": "implement-frontend"
+      "primarySkill": "implement-frontend"
     },
     {
       "id": "backend",
@@ -39,7 +39,7 @@
       "description": "后端 API、数据库迁移、鉴权、事务与并发一致性；backend database SQL authentication。",
       "line": "development",
       "file": "backend.md",
-      "skill": "implement-backend"
+      "primarySkill": "implement-backend"
     },
     {
       "id": "test-automation",
@@ -47,7 +47,7 @@
       "description": "缺陷复现、回归测试、独立代码审查与安全边界验证；testing regression debugging code review security。",
       "line": "development",
       "file": "test-automation.md",
-      "skill": "verify-code"
+      "primarySkill": "verify-code"
     },
     {
       "id": "release-engineer",
@@ -55,7 +55,7 @@
       "description": "构建打包、CI/CD、部署、健康检查、回滚和故障定位；deployment release DevOps reliability。",
       "line": "development",
       "file": "release-engineer.md",
-      "skill": "release-service"
+      "primarySkill": "release-service"
     },
     {
       "id": "game-designer",
@@ -63,7 +63,7 @@
       "description": "2D 游戏核心循环、机制优先级、数值与经济系统、关卡结构与难度曲线、教学与反馈契约；game design core loop mechanics economy level design balance。",
       "line": "game",
       "file": "game-designer.md",
-      "skill": "design-game-systems"
+      "primarySkill": "design-game-systems"
     },
     {
       "id": "gameplay-engineer",
@@ -71,7 +71,7 @@
       "description": "2D 游戏主循环、场景状态机、碰撞与手感、输入、存档、图集批处理与帧预算实现；2D game engine gameplay loop collision physics sprite input performance。",
       "line": "game",
       "file": "gameplay-engineer.md",
-      "skill": "implement-gameplay"
+      "primarySkill": "implement-gameplay"
     },
     {
       "id": "game-artist",
@@ -79,7 +79,7 @@
       "description": "2D 游戏像素与矢量风格规范、精灵图集、帧动画与骨骼动画、瓦片场景、UI 皮肤与特效；pixel art sprite atlas tileset animation UI skin VFX。",
       "line": "game",
       "file": "game-artist.md",
-      "skill": "craft-game-art"
+      "primarySkill": "craft-game-art"
     },
     {
       "id": "game-playtest",
@@ -87,7 +87,7 @@
       "description": "2D 游戏试玩验证、数值平衡核对、难度曲线与手感验收、性能稳定性与缺陷回归；playtest balance difficulty curve difficulty tuning QA performance regression。",
       "line": "game",
       "file": "game-playtest.md",
-      "skill": "playtest-game"
+      "primarySkill": "playtest-game"
     },
     {
       "id": "literature-researcher",
@@ -95,7 +95,7 @@
       "description": "AI 与计算机论文检索与引用追溯、精读对比、证据矩阵、引用核验、Related Work 素材与研究空白；literature review search citations evidence。",
       "line": "research",
       "file": "literature-researcher.md",
-      "skill": "review-literature"
+      "primarySkill": "review-literature"
     },
     {
       "id": "experiment-designer",
@@ -103,7 +103,7 @@
       "description": "AI 实验设计与复现：假设与判据、数据划分与泄漏检查、公平基线、消融、种子与算力预算、停止规则；experiment design ablation reproducibility benchmark evaluation。",
       "line": "research",
       "file": "experiment-designer.md",
-      "skill": "design-experiments"
+      "primarySkill": "design-experiments"
     },
     {
       "id": "data-analyst",
@@ -111,7 +111,7 @@
       "description": "科研数据分析：统计单位与配对结构、效应量与置信区间、检验与多重比较、多种子多数据集汇总、科研图表；statistics data analysis uncertainty visualization。",
       "line": "research",
       "file": "data-analyst.md",
-      "skill": "analyze-results"
+      "primarySkill": "analyze-results"
     },
     {
       "id": "paper-writer",
@@ -119,7 +119,7 @@
       "description": "学术论文、综述、学位论文章节与基金申请书的写作、修改与审稿回复，主张—证据对照与一致性检查；scientific writing manuscript peer review rebuttal。",
       "line": "research",
       "file": "paper-writer.md",
-      "skill": "write-manuscript"
+      "primarySkill": "write-manuscript"
     },
     {
       "id": "content-strategist",
@@ -127,7 +127,28 @@
       "description": "选题、受众定位、长短文案、平台改编和发布物料；content strategy copywriting editorial。",
       "line": "content",
       "file": "content-strategist.md",
-      "skill": "create-content"
+      "primarySkill": "create-content",
+      "handoff": {
+        "role": "content-strategy",
+        "consumes": [
+          "brief",
+          "source-material"
+        ],
+        "produces": [
+          "topic-plan",
+          "post-copy",
+          "visual-brief"
+        ],
+        "next": [
+          "story-script",
+          "article-writing",
+          "visual-direction",
+          "platform-ops"
+        ],
+        "gate": [
+          "compliance"
+        ]
+      }
     },
     {
       "id": "story-writer",
@@ -135,7 +156,24 @@
       "description": "故事人物、冲突、场景、对白和短片剧本；story screenplay narrative character dialogue。",
       "line": "content",
       "file": "story-writer.md",
-      "skill": "write-story"
+      "primarySkill": "write-story",
+      "handoff": {
+        "role": "story-script",
+        "consumes": [
+          "brief",
+          "topic-plan"
+        ],
+        "produces": [
+          "story-script"
+        ],
+        "next": [
+          "visual-direction",
+          "platform-ops"
+        ],
+        "gate": [
+          "compliance"
+        ]
+      }
     },
     {
       "id": "article-writer",
@@ -143,7 +181,25 @@
       "description": "非虚构文章的立意、结构、成稿与改稿润色：深度长文、评论观点、科普解读、随笔、演讲稿、书评；essay op-ed long-form nonfiction editing。",
       "line": "content",
       "file": "article-writer.md",
-      "skill": "write-articles"
+      "primarySkill": "write-articles",
+      "handoff": {
+        "role": "article-writing",
+        "consumes": [
+          "brief",
+          "topic-plan",
+          "source-material"
+        ],
+        "produces": [
+          "article-draft",
+          "post-copy"
+        ],
+        "next": [
+          "platform-ops"
+        ],
+        "gate": [
+          "compliance"
+        ]
+      }
     },
     {
       "id": "visual-director",
@@ -151,7 +207,25 @@
       "description": "真实参考、资产一致性、分镜、图像提示、视频生成包与音画节奏；visual storyboard image video audio。",
       "line": "content",
       "file": "visual-director.md",
-      "skill": "direct-visuals"
+      "primarySkill": "direct-visuals",
+      "handoff": {
+        "role": "visual-direction",
+        "consumes": [
+          "visual-brief",
+          "story-script"
+        ],
+        "produces": [
+          "visual-asset",
+          "visual-brief"
+        ],
+        "next": [
+          "platform-ops",
+          "live-ops"
+        ],
+        "gate": [
+          "compliance"
+        ]
+      }
     },
     {
       "id": "short-video-operator",
@@ -159,7 +233,26 @@
       "description": "抖音为主的定位起号、发布优化、流量池诊断与长效赛马，兼顾快手老铁生态；Douyin Kuaishou short video growth。",
       "line": "content",
       "file": "short-video-operator.md",
-      "skill": "grow-short-video"
+      "primarySkill": "grow-short-video",
+      "handoff": {
+        "role": "platform-ops",
+        "consumes": [
+          "topic-plan",
+          "post-copy",
+          "story-script",
+          "visual-asset"
+        ],
+        "produces": [
+          "platform-plan",
+          "post-copy"
+        ],
+        "next": [
+          "growth-analysis"
+        ],
+        "gate": [
+          "compliance"
+        ]
+      }
     },
     {
       "id": "bilibili-operator",
@@ -167,7 +260,25 @@
       "description": "B站分区文化、中长视频选题系列化、标题封面、弹幕三连设计与投稿增长；Bilibili UP主 danmaku community。",
       "line": "content",
       "file": "bilibili-operator.md",
-      "skill": "grow-bilibili"
+      "primarySkill": "grow-bilibili",
+      "handoff": {
+        "role": "platform-ops",
+        "consumes": [
+          "topic-plan",
+          "story-script",
+          "visual-asset"
+        ],
+        "produces": [
+          "platform-plan",
+          "post-copy"
+        ],
+        "next": [
+          "growth-analysis"
+        ],
+        "gate": [
+          "compliance"
+        ]
+      }
     },
     {
       "id": "xiaohongshu-planner",
@@ -175,7 +286,25 @@
       "description": "搜索关键词、种草选题、封面标题、笔记结构与搜索推荐双流量；Xiaohongshu RED note SEO planting。",
       "line": "content",
       "file": "xiaohongshu-planner.md",
-      "skill": "plant-xiaohongshu"
+      "primarySkill": "plant-xiaohongshu",
+      "handoff": {
+        "role": "platform-ops",
+        "consumes": [
+          "topic-plan",
+          "story-script",
+          "visual-asset"
+        ],
+        "produces": [
+          "platform-plan",
+          "post-copy"
+        ],
+        "next": [
+          "growth-analysis"
+        ],
+        "gate": [
+          "compliance"
+        ]
+      }
     },
     {
       "id": "wechat-operator",
@@ -183,7 +312,25 @@
       "description": "视频号社交裂变、公众号完读、小绿书与公私域联动；WeChat Channels 公众号 private traffic。",
       "line": "content",
       "file": "wechat-operator.md",
-      "skill": "grow-wechat"
+      "primarySkill": "grow-wechat",
+      "handoff": {
+        "role": "platform-ops",
+        "consumes": [
+          "topic-plan",
+          "article-draft",
+          "visual-asset"
+        ],
+        "produces": [
+          "platform-plan",
+          "post-copy"
+        ],
+        "next": [
+          "growth-analysis"
+        ],
+        "gate": [
+          "compliance"
+        ]
+      }
     },
     {
       "id": "content-growth-analyst",
@@ -191,7 +338,22 @@
       "description": "跨平台指标口径、漏斗诊断、对标拆解、PDCA复盘与增长假设验证；content analytics review PDCA benchmark。",
       "line": "content",
       "file": "content-growth-analyst.md",
-      "skill": "review-content-analytics"
+      "primarySkill": "review-content-analytics",
+      "handoff": {
+        "role": "growth-analysis",
+        "consumes": [
+          "platform-plan",
+          "post-copy"
+        ],
+        "produces": [
+          "analytics-report"
+        ],
+        "next": [
+          "content-strategy",
+          "platform-ops"
+        ],
+        "gate": []
+      }
     },
     {
       "id": "live-stream-operator",
@@ -199,7 +361,26 @@
       "description": "人货场搭建、直播脚本话术、场控 SOP、起号破层与播后复盘；live stream commerce Douyin Channels。",
       "line": "content",
       "file": "live-stream-operator.md",
-      "skill": "run-live-stream"
+      "primarySkill": "run-live-stream",
+      "handoff": {
+        "role": "live-ops",
+        "consumes": [
+          "topic-plan",
+          "story-script",
+          "visual-asset"
+        ],
+        "produces": [
+          "live-plan",
+          "platform-plan"
+        ],
+        "next": [
+          "platform-ops",
+          "growth-analysis"
+        ],
+        "gate": [
+          "compliance"
+        ]
+      }
     },
     {
       "id": "compliance-reviewer",
@@ -207,7 +388,23 @@
       "description": "强制标注、广告法、特殊品类资质、版权与平台红线的发布前审核分级；compliance moderation China platforms。",
       "line": "content",
       "file": "compliance-reviewer.md",
-      "skill": "check-content-compliance"
+      "primarySkill": "check-content-compliance",
+      "handoff": {
+        "role": "compliance",
+        "consumes": [
+          "article-draft",
+          "story-script",
+          "post-copy",
+          "visual-asset",
+          "platform-plan",
+          "live-plan"
+        ],
+        "produces": [
+          "compliance-verdict"
+        ],
+        "next": [],
+        "gate": []
+      }
     },
     {
       "id": "doc-writer",
@@ -215,7 +412,7 @@
       "description": "Word 文档撰写、Markdown 转 Word、格式套版、公文排版、修订追踪与报告交付；docx Word report proposal。",
       "line": "office",
       "file": "doc-writer.md",
-      "skill": "craft-documents"
+      "primarySkill": "craft-documents"
     },
     {
       "id": "data-sheet-expert",
@@ -223,7 +420,7 @@
       "description": "Excel/CSV 数据清洗、公式、透视表、条件统计、图表生成与数据报表；excel spreadsheet data analysis。",
       "line": "office",
       "file": "data-sheet-expert.md",
-      "skill": "process-data"
+      "primarySkill": "process-data"
     },
     {
       "id": "presentation-designer",
@@ -231,7 +428,7 @@
       "description": "演示文稿从零制作、结构重组、美化编辑与演讲备注；PPT slides presentation deck。",
       "line": "office",
       "file": "presentation-designer.md",
-      "skill": "build-slides"
+      "primarySkill": "build-slides"
     },
     {
       "id": "document-processor",
@@ -239,7 +436,7 @@
       "description": "PDF 创建/合并/拆分/水印/表单填写，多办公格式互转与内容提取；PDF convert OCR document processing。",
       "line": "office",
       "file": "document-processor.md",
-      "skill": "handle-documents"
+      "primarySkill": "handle-documents"
     },
     {
       "id": "file-manager",
@@ -247,7 +444,7 @@
       "description": "本地文件语义搜索、分类整理方案规划、大文件与重复文件清理分析；file organization search cleanup。",
       "line": "office",
       "file": "file-manager.md",
-      "skill": "organize-files"
+      "primarySkill": "organize-files"
     }
   ]
 }

@@ -1,13 +1,17 @@
 // Builds a restricted OMP session the way Alpha does (no model call) and prints how the system prompt is composed:
-// OMP's own prompt, the project's context files, then Alpha's runtime contract. Run: bun run scripts/probe-session-prompt.ts
+// OMP's own prompt, the project's context files, then Alpha's runtime contract, plus what the coordinator would load
+// by default: Skill 数、MCP 数与提示词 token. Run: bun run scripts/probe-session-prompt.ts
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createAgentSession, SessionManager } from "@oh-my-pi/pi-coding-agent";
+import { SkillPluginStore } from "../src/plugins/third-party";
+import { capabilityPool } from "../src/runtime/capability-pool";
 import { projectContextFiles } from "../src/runtime/context-files";
 import { ompRegistry } from "../src/runtime/models";
 import { DEFAULT_MODEL } from "../src/runtime/model-policy";
 import { ompSessionSettings, sessionEditMode } from "../src/runtime/omp-settings";
+import { promptFootprint } from "../src/runtime/prompt-budget";
 import { alphaContract, isCodeWork, sessionToolNames, type SessionFacts } from "../src/runtime/session-profile";
 import { TaskLedger } from "../src/runtime/task-ledger";
 
@@ -20,8 +24,15 @@ try {
   const model = modelRegistry.getAvailable().find(item => `${item.provider}/${item.id}` === DEFAULT_MODEL) ?? modelRegistry.getAvailable()[0];
   if (!model) throw new Error("No authenticated model");
   const selector = `${model.provider}/${model.id}`;
+  // What the coordinator loads when the task records no explicit selection: every enabled Skill, MCP from the pool.
+  const dataRoot = join(process.env.ALPHA_WORKSPACE_ROOT ?? resolve(import.meta.dir, ".."), ".alpha");
+  const defaultSkills = await new SkillPluginStore(dataRoot).loadSkills();
+  const pool = await capabilityPool(dataRoot);
+  const mcpServers = pool.filter(item => item.kind === "mcp-server" && item.enabled);
+  const mcpTools = pool.filter(item => item.kind === "mcp-tool" && item.enabled);
+  console.log(`default capability load from ${dataRoot}: ${defaultSkills.length} skills (${defaultSkills.map(skill => skill.name).join(", ") || "none"}), ${mcpServers.length} MCP servers (${mcpServers.map(item => item.id).join(", ") || "none"}), ${mcpTools.length} MCP tools`);
   for (const role of ["coordinator", "answer"] as const) {
-    const facts: SessionFacts = { role, ledger, direct: false, experts: [], skills: [], pluginToolNames: [], pluginInstructions: [], mcpToolNames: [], hooksLoaded: false, officeReadToolNames: [], canDispatch: true, browserConnected: false };
+    const facts: SessionFacts = { role, ledger, direct: false, experts: [], skills: defaultSkills, pluginToolNames: [], pluginInstructions: [], mcpToolNames: [], hooksLoaded: false, officeReadToolNames: [], canDispatch: true, browserConnected: false };
     const settings = await ompSessionSettings(project, join(root, "omp"), { pinHashline: isCodeWork(ledger.state.taskType) });
     const toolNames = sessionToolNames(facts).filter(name => ["read", "grep", "edit", "write", "ast_grep", "lsp"].includes(name));
     const { session } = await createAgentSession({
@@ -33,8 +44,10 @@ try {
     });
     try {
       const prompt = session.agent.state.systemPrompt.join("\n\n");
+      const footprint = promptFootprint(session.agent.state, model);
       const at = (text: string) => prompt.indexOf(text);
       console.log(`\n=== ${role} · model ${selector} · edit mode ${sessionEditMode(settings, selector)} · ${prompt.length} chars`);
+      console.log(`prompt tokens: ${footprint.systemTokens} system + ${footprint.toolTokens} tools (${footprint.tools} tools, exact=${footprint.exact})`);
       console.log("tools:", session.agent.state.tools.map(tool => tool.name).join(", "));
       console.log("omp role line at", at("Oh My Pi coding harness"), "· context file at", at("Use pnpm for every script"), "· Alpha contract at", at("ALPHA RUNTIME CONTRACT"));
       console.log("contract ends the prompt:", prompt.trimEnd().endsWith(alphaContract(facts).trimEnd().slice(-80)));

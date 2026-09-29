@@ -30,7 +30,7 @@ await mkdir(join(dataRoot, "evidence"), { recursive: true });
 const buildLog = join(dataRoot, "evidence", "build.log");
 await writeFile(buildLog, "probe build passed");
 await task.recordEvidence({ criterionId: "build", kind: "build", passed: true, source: buildLog, revision: task.state.revision! });
-await task.reviseCognition({ summary: "先检查界面布局", reason: "探针计划", candidates: [], steps: [{ id: "inspect", objective: "检查当前界面", mode: "investigate", dependsOn: [], skillIds: [], status: "planned" }] });
+await task.reviseCognition({ summary: "先检查界面布局", reason: "探针计划", candidates: [], nodes: [{ id: "inspect", objective: "检查当前界面", kind: "investigate", phase: "investigate", dependsOn: [], expertDecision: { reason: "探针自行调查" }, host: "coordinator", skillIds: [], status: "planned" }, { id: "work", objective: "完成界面调整", kind: "execute", phase: "execute", dependsOn: ["inspect"], expertDecision: { reason: "探针自行执行" }, host: "coordinator", skillIds: [], status: "planned" }, { id: "review", objective: "检查调整", kind: "review", phase: "review", dependsOn: ["work"], expertDecision: { reason: "探针自行检查" }, host: "coordinator", skillIds: [], status: "planned" }] });
 await task.submitPlanForReview();
 const socket = createServer();
 await new Promise<void>(resolveReady => socket.listen(0, "127.0.0.1", resolveReady));

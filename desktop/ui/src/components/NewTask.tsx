@@ -78,7 +78,7 @@ export function NewTask() {
     <button className="new-task-context" aria-expanded={setupOpen || !projectReady} aria-controls="new-task-setup" onClick={() => setSetupOpen(value => !value)} title="更改项目、工作目录和运行方式">
       <FolderClosed size={14} aria-hidden />
       <strong>{selectedProject?.name ?? "临时工作区"}</strong><span>·</span><span className="new-task-context-path" title={selectedMount?.path}>{selectedMount?.path ?? (selectedProject?.mounts.length ? "请选择主工作目录" : "Alpha 管理的工作区")}</span>
-      <span>·</span><span>{draftConfig.startMode === "plan" ? "先规划后执行" : "直接开始"}{draftConfig.continueUntilAccepted ? " · 持续推进" : ""}</span>
+      <span>·</span><span>{draftConfig.startMode === "plan" ? "先规划后执行" : "自动批准计划"}{draftConfig.continueUntilAccepted ? " · 持续推进" : ""}</span>
       <ChevronDown size={14} aria-hidden className="new-task-context-chevron" />
     </button>
     {(setupOpen || !projectReady) && <div id="new-task-setup" className="new-task-setup-panel"><NewTaskSetup /></div>}

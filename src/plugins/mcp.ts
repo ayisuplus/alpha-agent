@@ -59,7 +59,14 @@ export async function readPluginMCP(root: string, id: string): Promise<PluginMCP
   return { id, root, servers };
 }
 
-export async function connectPluginMCP(projectRoot: string, packs: PluginMCPConfig[]): Promise<{ manager: MCPManager; tools: CustomTool[]; errors: string[] }> {
+/** One live MCP connection for a set of plugin packs: the guarded tools and the failures that need the user. */
+export interface PluginMCPConnection {
+  manager: MCPManager;
+  tools: CustomTool[];
+  errors: string[];
+}
+
+export async function connectPluginMCP(projectRoot: string, packs: PluginMCPConfig[]): Promise<PluginMCPConnection> {
   const manager = new MCPManager(projectRoot, null);
   const configs = Object.assign({}, ...packs.map(pack => Object.fromEntries(Object.entries(pack.servers).map(([name, config]) => [
     name, "command" in config ? { ...config, cwd: config.cwd ?? projectRoot } : config,

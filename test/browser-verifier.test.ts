@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { parsePlan, verifyBrowserPlan } from "../src/runtime/browser-verifier";
 import { TaskLedger } from "../src/runtime/task-ledger";
 import { VisibleBrowser } from "../src/runtime/visible-browser";
+import { recordApprovedPlan } from "./support/approved-plan";
 
 const steps = [
   { action: "fill", selector: "#name", value: "Alpha {{nonce}}" },
@@ -59,6 +60,7 @@ test("each verification attempt keeps its own evidence and source changes cannot
     const ledger = await TaskLedger.create(dataRoot, { objective: "Build app", projectRoot: product, criteria: [
       { id: "build", kind: "build", description: "Build" }, { id: "user-path", kind: "browser", description: "Browser" },
     ] });
+    await recordApprovedPlan(ledger);
     const revision = ledger.state.revision!;
     await ledger.recordEvidence({ criterionId: "build", kind: "build", revision, passed: true, source: "build.log" });
     server = Bun.serve({ port: 0, fetch: () => new Response("ok", { headers: { "x-alpha-preview-id": "preview-one", "x-alpha-revision": revision } }) });
@@ -97,7 +99,7 @@ test("each verification attempt keeps its own evidence and source changes cannot
     await verifyBrowserPlan(ledger, 1234, dataRoot);
     expect(ledger.state.status).toBe("active");
     expect(ledger.state.evidence.findLast(item => item.kind === "browser")?.passed).toBe(true);
-    expect(ledger.completionGaps()).toContain("development-review");
+    expect(ledger.completionGaps()).toContain("gate");
     await ledger.recordDevelopmentReview({ verdict: "pass", findings: [], instanceId: "review-1" });
     await ledger.complete();
     await ledger.reopen("check changed source");
