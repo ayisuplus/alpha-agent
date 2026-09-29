@@ -353,3 +353,28 @@ test("alpha_plan rejects a gate role nobody can perform while the plan is still 
     expect(accepted.isError).toBeUndefined();
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 });
+
+test("alpha_plan rejects a worker-hosted node when the task type cannot dispatch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "alpha-host-check-"));
+  try {
+    const projectRoot = join(root, "project");
+    await mkdir(projectRoot);
+    const ledger = await TaskLedger.create(join(root, "state"), { objective: "Write a summary", projectRoot, taskType: "general", criteria: [] });
+    const [plan] = createCognitionTools(ledger, join(root, "state"));
+    const workOrderNode = { id: "draft", objective: "Draft the summary", kind: "execute", phase: "execute", dependsOn: [], host: "worker", expertDecision: { reason: "a specialist writes it" }, skillIds: [] };
+    const rejected = await plan.execute("plan", { summary: "Do the task", reason: "task start", candidates: [], nodes: [
+      { id: "scan", objective: "Read the material", kind: "investigate", phase: "investigate", dependsOn: [], host: "coordinator", expertDecision: { reason: "the coordinator reads it" }, skillIds: [] },
+      { ...workOrderNode, id: "work" },
+      { id: "review", objective: "Check the summary", kind: "review", phase: "review", dependsOn: ["work"], host: "coordinator", expertDecision: { reason: "the coordinator checks it" }, skillIds: [] },
+    ] } as never, undefined, undefined as never);
+    expect(rejected.isError).toBe(true);
+    expect(String(rejected.content[0].type === "text" ? rejected.content[0].text : "")).toContain("不派发子代理");
+    const accepted = await plan.execute("plan-2", { summary: "Do the task", reason: "task start", candidates: [], nodes: [
+      { id: "scan", objective: "Read the material", kind: "investigate", phase: "investigate", dependsOn: [], host: "coordinator", expertDecision: { reason: "the coordinator reads it" }, skillIds: [] },
+      { id: "work", objective: "Draft the summary", kind: "execute", phase: "execute", dependsOn: ["scan"], host: "coordinator", expertDecision: { reason: "the coordinator drafts it" }, skillIds: [] },
+      { id: "review", objective: "Check the summary", kind: "review", phase: "review", dependsOn: ["work"], host: "coordinator", expertDecision: { reason: "the coordinator checks it" }, skillIds: [] },
+    ] } as never, undefined, undefined as never);
+    expect(accepted.isError).toBeUndefined();
+    expect(ledger.state.cognition?.nodes.every(node => node.host === "coordinator")).toBe(true);
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
+});

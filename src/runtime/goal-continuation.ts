@@ -39,12 +39,13 @@ export function planGraphSignature(ledger: TaskLedger): string {
   return JSON.stringify({ revision: ledger.state.revision, nodes: (ledger.state.cognition?.nodes ?? []).map(node => `${node.id}:${node.status}`) });
 }
 
-/** A node the coordinator still owes work on: one it entered and has not exited, or one ready to enter (§3.3). */
+/**
+ * A node the coordinator still owes work on: one it entered without exiting, or one ready to start — a ready node
+ * hosted by a worker is the coordinator's to dispatch, so it counts as actionable too (§3.3).
+ */
 export function planActionableNode(ledger: TaskLedger): string | null {
   const nodes = ledger.state.cognition?.nodes ?? [];
-  return nodes.find(node => node.status === "active" && node.host === "coordinator")?.id
-    ?? nodes.find(node => node.status === "ready" && node.host === "coordinator")?.id
-    ?? null;
+  return nodes.find(node => node.status === "active")?.id ?? nodes.find(node => node.status === "ready")?.id ?? null;
 }
 
 /**

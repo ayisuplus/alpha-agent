@@ -24,13 +24,16 @@ try {
   const model = modelRegistry.getAvailable().find(item => `${item.provider}/${item.id}` === DEFAULT_MODEL) ?? modelRegistry.getAvailable()[0];
   if (!model) throw new Error("No authenticated model");
   const selector = `${model.provider}/${model.id}`;
-  // What the coordinator loads when the task records no explicit selection: every enabled Skill, MCP from the pool.
+  // §4.2: a task with no explicit selection loads nothing; the user's enabled Skills stay available for
+  // alpha_capability_search and alpha_skill_read. The catalog count and the expert-packaged share are the P1 metric.
   const dataRoot = join(process.env.ALPHA_WORKSPACE_ROOT ?? resolve(import.meta.dir, ".."), ".alpha");
-  const defaultSkills = await new SkillPluginStore(dataRoot).loadSkills();
+  const defaultSkills = await new SkillPluginStore(dataRoot).loadSkills([]);
   const pool = await capabilityPool(dataRoot);
-  const mcpServers = pool.filter(item => item.kind === "mcp-server" && item.enabled);
-  const mcpTools = pool.filter(item => item.kind === "mcp-tool" && item.enabled);
-  console.log(`default capability load from ${dataRoot}: ${defaultSkills.length} skills (${defaultSkills.map(skill => skill.name).join(", ") || "none"}), ${mcpServers.length} MCP servers (${mcpServers.map(item => item.id).join(", ") || "none"}), ${mcpTools.length} MCP tools`);
+  const byKind = new Map<string, number>();
+  for (const item of pool) byKind.set(item.kind, (byKind.get(item.kind) ?? 0) + 1);
+  const expertPackaged = pool.filter(item => item.kind === "skill" && item.id.startsWith("expert-")).length;
+  console.log(`catalog from ${dataRoot}: ${pool.length} entries (${[...byKind].map(([kind, count]) => `${kind} ${count}`).join(", ")}), expert-packaged skills ${expertPackaged}`);
+  console.log(`task default load (no explicit selection): ${defaultSkills.length} skills${defaultSkills.length ? ` (${defaultSkills.map(skill => skill.name).join(", ")})` : ""}, 0 MCP servers`);
   for (const role of ["coordinator", "answer"] as const) {
     const facts: SessionFacts = { role, ledger, direct: false, experts: [], skills: defaultSkills, pluginToolNames: [], pluginInstructions: [], mcpToolNames: [], hooksLoaded: false, officeReadToolNames: [], canDispatch: true, browserConnected: false };
     const settings = await ompSessionSettings(project, join(root, "omp"), { pinHashline: isCodeWork(ledger.state.taskType) });

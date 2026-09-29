@@ -80,6 +80,9 @@ export function createCognitionTools(ledger: TaskLedger, dataRoot: string, hooks
             if (node.skillIds.some(id => !available.has(id))) throw new Error(`Skill 未安装、未启用或不属于所选专家：${node.skillIds.find(id => !available.has(id))}`);
             return { ...node, expertDecision: decision, status: "planned" as const };
           });
+          // A worker-hosted node needs alpha_spawn, which only dispatching task types expose; otherwise the node can
+          // never run. Rejecting it here keeps the plan executable instead of stranding ready work.
+          if (!taskProfile(ledger.state.taskType).dispatch && nodes.some(node => node.host === "worker")) throw new Error("该任务类型不派发子代理：节点必须由主会话执行（host: coordinator）");
           const stages = new Set(nodes.map(node => node.phase));
           for (const stage of ["investigate", "execute", "review"] as const) if (!stages.has(stage)) throw new Error(`调查、执行、审查三个阶段都必须至少有一个节点：缺少 ${stage}`);
           // §6.2: the review stage must cover the task type's default gates and every gate the used experts declare;
