@@ -453,6 +453,10 @@ gate 的来源与承担者：
 
 ## 附录 A：P0 量化基线（2026-09-29 实测）
 
+### A.0.1 基线数据存档说明（2026-09-29 补记）
+
+P6 各轮使用了 `--label p6-round-N`，与 P0 基线的 `artifacts/eval-2026-09-29-p6-round-2/`、`-round-3/` 目录名冲突：round-2 的 10 任务全量结果被本轮评测覆盖（其代表性任务数字已在上文 A.3 表格中留档，这是本文档对该轮的权威记录）；round-3 的全量结果已在覆盖前复制到 `artifacts/eval-2026-09-29-p0-baseline-round-3/`。此后评测标签改用 `p6-graph-round-N`，避免再次覆盖基线。
+
 ### A.0 P6 评测环境变更（2026-09-29 实测记录）
 
 P6 端到端评测开始时，默认模型 `xiaomi-token-plan-cn/mimo-v2.6-flash`（P0 基线所用）已严重限速：同一探针从 P0 的秒级变为 **84.75s**（`bun run probe:model`，一次 ALPHA_OK），超过运行时 45s 无响应上限，5 个任务全部以 `stop.reason=model` 停止、0 次工具调用。对照：`xiaomi-token-plan-cn/mimo-v2.6-pro` 2.9s、`deepseek/deepseek-flash` 0.7s。
