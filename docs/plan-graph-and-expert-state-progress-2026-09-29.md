@@ -32,7 +32,9 @@
 
 | F6 | 冒烟中图跑到第 3 个节点时暂停：模型给审查节点起了 `gateRole: "self-check"`，没有任何专家能承担 → 运行到一半记能力缺口 | 计划校验只检查"任务默认 gate 与专家声明 gate 有没有节点"，没有检查节点自创的 gateRole 有没有承担者 | `alpha_plan` 用 `gateActorFor` 在记录计划前校验每个审查节点的 gateRole：没人能承担就报错并列出可用角色，让模型当场改计划（工具描述同时写明 gateRole 的取值口径） |
 
-回归测试：F1/F2 在 `test/plan-first.test.ts`（含 `settleBoundary` 的边界结算），F4/F6 在 `test/cognitive-workflow.test.ts`；均验证过"修复前失败、修复后通过"（`git stash` 对照）。
+| F7 | 图跑通后的完整轮：`content-pipeline` 与 `approval-loop` 停在 `active`——协调者做完一个节点就停了，`draft`/`apply` 一直 `ready`，没人推进；`content-pipeline` 还因为停在只读的 `research` 节点而报"会话没有写文件工具"的能力缺口 | 运行以 `returned` 结束后，非目标模式的任务没有任何继续机制（goal 模式才有 `nextGoalCycle`） | `goal-continuation.nextPlanCycle`：批准的图里还有 `active`/`ready` 的协调者节点时，driver 自动续跑并提示"用 alpha_step 结束已完成的节点，再做下一个就绪节点"；连续两轮图与证据都没变化则记失败停下（与 goal 模式同一套无进展规则）；goal 模式仍走自己的续跑 |
+
+回归测试：F1/F2 在 `test/plan-first.test.ts`（含 `settleBoundary` 的边界结算与 `nextPlanCycle` 的推进规则），F4/F6 在 `test/cognitive-workflow.test.ts`；均验证过"修复前失败、修复后通过"（`git stash` 对照）。
 
 另：`totalTokens` 里 DeepSeek 会计入 prompt 缓存命中（第一轮 approval-loop 9.75M 中 7.38M 是 cacheRead），评测报告已拆成"新输入+输出 + 缓存读"两列，跨模型对比只用前者。
 
@@ -40,6 +42,7 @@
 - 迭代过程中被缺陷中断的三轮不计入对比，作为证据保留：
   - `artifacts/eval-2026-09-29-p6-round-1-preboundary/`（暴露 F1–F3；5/5 通过但任务被提前评分）
   - `artifacts/eval-2026-09-29-p6-round-1-boundary-incomplete/`（修复 F1–F3 后暴露 F4–F6；0/5）
+  - `artifacts/eval-2026-09-29-p6-round-1-stalled/`（修复 F4–F6 后暴露 F7：`sales-question`/`lru-cache`/`stale-premise` 通过，`content-pipeline`/`approval-loop` 停在图中间；3/5）
   - `artifacts/eval-2026-09-29-p6-round-1-provider-down/`、`…-xiaomi-partial/`（模型与额度问题）
 - 冒烟验证（`sales-question` 单任务）：图跑通、任务 `complete`、独立检查通过，新输入+输出 29,511 tokens（P0 同任务 28,946），轮次 1→4——小任务开销的可比口径见下一轮完整评测。
 - 第二轮（方案附录 A.3 要求"至少跑两轮取区间"）未跑。
