@@ -66,6 +66,18 @@
 | `premise` 回边未走通（只有 redo 重开） | 归因于场景设计：`stale-premise` 的虚构前提在调查阶段就能被发现，模型靠重新规划推进。要稳定触发需让矛盾在执行后才暴露，属场景改进（待做），机制本身由 `test/plan-graph.test.ts` 的 premise 回边测试覆盖 |
 | 评测标签覆盖基线目录 | `eval/run.ts`：目标目录已有 `results.json` 时拒绝覆盖（需 `--force`），并在 `results.json` 写入被测 `revision` 与 `model` |
 
+### F10–F12：演练压出的三个运行时缺陷（2026-09-29 收尾）
+
+把内容任务改成"合规流程演练"（初稿按要求原样抄录运营原话，再交给合规 gate）后连跑四轮，压出并修复：
+
+| # | 现象（证据） | 根因 | 修复 |
+|---|---|---|---|
+| F10 | 演练第一轮直接停住：模型把 `deliver`（执行）排在 `compliance-gate`（审查）之后，两边都进不去 | 方案 §3.2 规定"阶段顺序固定"，但计划校验只要求"每阶段至少一个节点"，没有禁止依赖跨阶段倒挂；阶段闸门于是把图锁死 | `plan/revised` reducer 与 `alpha_plan` 都拒绝"依赖指向更晚阶段"（回退只能走 rework/premise 回边）；driver 对"有未完成节点但无可进入节点"的图记失败并停下，不再静默 |
+| F11 | 演练第二轮：`draft` 还在进行中，验收却按"已产出文件"要配置检查，报错提前结束循环，合规节点永远没机会跑 | `verifyCycle` 无条件跑验收；验收本就只适用于"图跑完"的产物 | 只要有未完成节点就跳过验收（与 node-switch、worker-integration 同一层级），由计划图续跑接管 |
+| F12 | 演练第三轮：`draft` 因暂停停在 `waiting`，恢复后运行时反而去进别的节点，随后判"计划图被挡住" | 运行入口与续跑判定只认 `active/ready/reopened`，漏了 `waiting` | `waiting` 与 `active` 同列待办（优先级紧随其后），运行入口与自动批准边界都可重新进入 |
+
+三处都有回归测试（`test/plan-first.test.ts` / `test/cognitive-workflow.test.ts`），全套 513/513。
+
 ### 3. 审查者会话路径是死代码（§12 收尾）
 - `executionMode: "review"` 全仓库无生产者：`omp-runner.ts` 的 `reviewing` 分支、`session-profile.ts` 的 reviewer 提示词与工具表、`createDevelopmentReviewTool`(`alpha_review_result`) 实际都到不了。真实路径是 kind=`review` 的 work order（worker 角色，`alpha_worker_result`）。
 - 按方案 §12"不保留调查、执行、审查三类子代理类型"，应删除这些分支；`test/cognitive-runtime.test.ts:76` 直接调用 `createDevelopmentReviewTool`，需要一并迁移或删除。
