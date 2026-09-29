@@ -2,10 +2,10 @@
 
 ## 当前版本：0.2.0（2026-09-30 重构发版）
 
-根目录入口为 `Alpha-Setup-0.2.0-x64.exe`。原始安装包位于 `release/alpha-installer-2026-09-29T22-47-26-380Z/`，便携包位于 `release/alpha-portable-2026-09-29T22-37-26-834Z/`。0.1.1 的两个发行目录、当日一次被 0.2.0 取代的中间便携包（`alpha-portable-2026-09-29T22-22-54-674Z`，内容为浏览器授权修复前的构建）以及旧根目录 EXE 均移入 `release/archive/`（EXE 在 `release/archive/root-launchers/`），原文件完整保留。
+根目录入口为 `Alpha-Setup-0.2.0-x64.exe`。原始安装包位于 `release/alpha-installer-2026-09-29T22-56-27-925Z/`，便携包位于 `release/alpha-portable-2026-09-29T22-37-26-834Z/`。0.1.1 的两个发行目录、当日被取代的中间构建（便携包 `alpha-portable-2026-09-29T22-22-54-674Z`（浏览器授权修复前）与安装包 `alpha-installer-2026-09-29T22-47-26-380Z`（措辞修订前））以及旧根目录 EXE 均移入 `release/archive/`（EXE 在 `release/archive/root-launchers/`），原文件完整保留。
 
-- 安装包大小：560,000,882 字节。
-- SHA-256：`FDC5C3019AA97818BB2123A473326F60CB76CCFFCAB0EE13C4394F077AF23A55`。根目录副本与原始构建文件哈希一致。
+- 安装包大小：560,000,886 字节。
+- SHA-256：`C59297CD7DD6E445F07463CDC5B88FEC0DE30F9A597B51EC4796444F08DFDC58`。根目录副本与原始构建文件哈希一致。
 - 内容：原生 sidecar + OMP 18.4.3 + 30 个 Alpha Skill（`presets/alpha-plugin`）+ 天枢证据层 + `alpha_office`/媒体能力 + 浏览器宿主 + 纸墨桌面（0.2.0 架构见 [原生 OMP 重构](2026-09-29-omp-native-refactor.md)）。
 - 验证：`bun run check`；`bun run test` 62 项原生测试（含 native-launch、native-imports、native-capabilities、native-tianshu、native-browser-consent、native-comfy-client）；`bun run validate:skills` 30 个 Skill；便携包探针（UI 哈希、OMP RPC、Office 链）与安装包内探针通过；真实模型端到端冒烟（身份/合规 Skill 阅读、alpha_office 产出、浏览器会话级授权与页面打开）。
 - 边界：安装器未签名（SmartScreen 可能提示）；新安装器的完整安装流程本轮未在本机重新执行（与 0.1.1 相同口径）；ComfyUI 生成需用户自备服务，不在离线探针内。
