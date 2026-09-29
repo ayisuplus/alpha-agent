@@ -43,7 +43,6 @@ import { readProjectMemory } from "./project-state";
 import { createExpertTools } from "./expert-tools";
 import { createWorkerResultTool } from "./worker-result-tool";
 import { createWorkerCapabilityTool } from "./worker-capability-tool";
-import { createDevelopmentReviewTool } from "./development-review-tool";
 import { createSkillResourceTool } from "./skill-resource-tool";
 import { resolvePoolSkill } from "./capability-pool";
 import { createCapabilityMCPTool } from "./capability-mcp-tool";
@@ -92,9 +91,7 @@ export interface RunOptions {
   workerContext?: Pick<TaskState, "taskType" | "workspaceOrigin" | "capabilities" | "permissionMode">;
   onWorkerRead?: (path: string) => void;
   /** review: independent read-only source review; answer: read-only reply to a follow-up question, never changes the task. */
-  executionMode?: "review" | "answer";
-  reviewInstanceId?: string;
-  reviewExpert?: ExpertSnapshot;
+  executionMode?: "answer";
   workerExpert?: ExpertSnapshot;
   /** Local ComfyUI endpoint for the media tools; the tools' own default applies when omitted. */
   comfyUrl?: string;
@@ -183,10 +180,8 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   if (options.workOrder?.fullAccess && (!/^[0-9a-f-]{36}$/.test(authorizationTaskId) || !options.authorizationRoot)) throw new Error("Worker authorization context is missing");
   const pluginStore = new SkillPluginStore(authorizationRoot);
   const direct = options.existingLedger?.state.workspaceOrigin?.kind === "direct" || (options.workOrder?.fullAccess && options.workerContext?.workspaceOrigin?.kind === "direct");
-  const reviewing = options.executionMode === "review";
   const answering = options.executionMode === "answer";
   const workerReadOnly = !!options.workOrder && orderKind(options.workOrder) !== "execute";
-  if (reviewing && options.reviewExpert) verifyExpertSnapshot(options.reviewExpert);
   const expertStore = new ExpertStore(dataRoot);
   const ledger = options.existingLedger ?? await TaskLedger.create(dataRoot, {
     objective: options.objective,
@@ -208,10 +203,10 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   });
   if (ledger.state.projectRoot !== projectRoot) throw new Error("Existing task belongs to a different project");
   if (ledger.state.status !== "active" && !answering) throw new Error(`Task is ${ledger.state.status}`);
-  if (ledger.state.phase === "plan-review" && !reviewing && !answering) throw new Error("Plan is awaiting user review");
+  if (ledger.state.phase === "plan-review" && !answering) throw new Error("Plan is awaiting user review");
   // A task whose launch switch waits for user review plans in the restricted planner role; 自动批准 tasks plan inside
   // the full coordinator session, where the plan-first guard rejects non-planning calls until alpha_plan records one.
-  const planning = ledger.state.phase === "plan" && planApprovalModeOf(ledger.state) === "review" && !reviewing && !answering && !options.workOrder;
+  const planning = ledger.state.phase === "plan" && planApprovalModeOf(ledger.state) === "review" && !answering && !options.workOrder;
   const profile = taskProfile(ledger.state.taskType);
   let needsInputReason: string | null = null;
   let abortSessionForInput: (() => void) | null = null;
@@ -246,7 +241,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   await options.onLedger?.(ledger);
 
   let mcp: Awaited<ReturnType<SkillPluginStore["loadMCP"]>> | null = null;
-  try { if (!options.workOrder && !direct && !reviewing && !planning && !answering && profile.thirdParty) mcp = await pluginStore.loadMCP(projectRoot, ledger.state.capabilities?.plugins.map(item => item.id)); }
+  try { if (!options.workOrder && !direct && !planning && !answering && profile.thirdParty) mcp = await pluginStore.loadMCP(projectRoot, ledger.state.capabilities?.plugins.map(item => item.id)); }
   catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     await ledger.needInput(`已指定的 MCP 工具无法加载：${reason}。请修复服务或说明如何继续。`, "approval");
@@ -276,10 +271,10 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
         if (!plugin?.enabled || plugin.revision !== selected.revision) throw new Error(`Selected plugin is unavailable or changed: ${selected.id}`);
       }
     }
-    experts = options.workOrder || reviewing ? [] : await expertStore.enabled();
+    experts = options.workOrder ? [] : await expertStore.enabled();
     // §3.6/§4.3: the cursor's node decides this run's expert and access; nothing activates outside the graph. The
     // runtime enters the next ready coordinator node here, so every run belongs to exactly one node (§3.3).
-    if (!options.workOrder && !reviewing && !answering && ledger.state.phase === "execute") {
+    if (!options.workOrder && !answering && ledger.state.phase === "execute") {
       const nodes = ledger.state.cognition?.nodes ?? [];
       runNode = nodes.find(node => node.status === "active" && node.host === "coordinator");
       if (!runNode) {
@@ -311,8 +306,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     // No explicit selection means no Skills: the coordinator's pool is empty and installed Skills are read on demand
     // through alpha_capability_search and alpha_skill_read (§4.2). Workers take their order's snapshots instead.
     const selectedSkillIds = options.workOrder ? undefined : ledger.state.capabilities?.skills.map(item => item.id) ?? [];
-    const loadedSkills = options.workOrder || directExpert || nodeTemporary ? [] : reviewing ? (options.reviewExpert?.skillIds?.length ? await pluginStore.loadSkills() : []) : await pluginStore.loadSkills(selectedSkillIds);
-    const reviewBundled = reviewing && options.reviewExpert ? await expertStore.loadBundledSkills(options.reviewExpert) : [];
+    const loadedSkills = options.workOrder || directExpert || nodeTemporary ? [] : await pluginStore.loadSkills(selectedSkillIds);
     if (directExpert || nodeTemporary) {
       // Expert activation mounts the expert's own state (§4.4): persona, packaged Skills ∪ explicit extras, declared
       // MCP. The primary method body is injected unless it would fill the prompt share the fixed prompt has left; the
@@ -329,18 +323,16 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       const skill = (directScope?.skills ?? loadedSkills).find(item => item.name === selected.id);
       if (!skill || await hashSkillDirectory(skill.baseDir) !== selected.hash) throw new Error(`Selected Skill is unavailable or changed: ${selected.id}`);
     }
-    skills = reviewing ? (options.reviewExpert?.skillIds ?? []).map(id => reviewBundled.find(item => item.name === id) ?? loadedSkills.find(item => item.name === id)).filter((item): item is NonNullable<typeof item> => !!item) : options.workOrder ? await loadWorkerSkillSnapshots(dataRoot, options.workOrder) : (directScope?.skills ?? loadedSkills);
-    if (reviewing && skills.length !== (options.reviewExpert?.skillIds?.length ?? 0)) throw new Error("Review expert Skill snapshot is missing");
-    if (reviewing && skills.length) await validateSkillBindings([{ id: "final-review", objective: "Review", kind: "review", ownedPaths: [], resources: [], skillIds: skills.map(item => item.name) }], skills);
+    skills = options.workOrder ? await loadWorkerSkillSnapshots(dataRoot, options.workOrder) : (directScope?.skills ?? loadedSkills);
     if (options.workOrder && skills.length !== (options.workOrder.skillIds?.length ?? 0)) throw new Error("Worker Skill snapshot is missing");
-    hooks = options.workOrder || direct || reviewing || planning || answering || !profile.thirdParty ? [] : await pluginStore.loadHooks(ledger.state.capabilities?.plugins.map(item => item.id));
+    hooks = options.workOrder || direct || planning || answering || !profile.thirdParty ? [] : await pluginStore.loadHooks(ledger.state.capabilities?.plugins.map(item => item.id));
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     if (answering) throw new Error(`专家或 Skill 无法加载：${reason}`);
     await ledger.needInput(`专家或 Skill 无法加载：${reason}`, "capability");
     throw new NeedsInputError(reason);
   }
-  if (!options.workOrder && !reviewing && !answering) await ledger.setInitialCandidates(initialExpertCandidates(ledger.state.objective, experts));
+  if (!options.workOrder && !answering) await ledger.setInitialCandidates(initialExpertCandidates(ledger.state.objective, experts));
 
   const permission = options.workOrder?.fullAccess && direct
     ? { mode: options.workerContext?.permissionMode ?? "ask" as const, roots: [projectRoot] }
@@ -363,18 +355,18 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       throw new NeedsInputError(reason);
     }
   }
-  const role: SessionRole = options.workOrder ? "worker" : reviewing ? "reviewer" : answering ? "answer" : planning ? "planner" : "coordinator";
+  const role: SessionRole = options.workOrder ? "worker" : answering ? "answer" : planning ? "planner" : "coordinator";
   const settings = await ompSessionSettings(projectRoot, join(dataRoot, "omp"), { pinHashline: isCodeWork(ledger.state.taskType) });
-  const directFileTools = !reviewing && permission && ledger.state.projectId
+  const directFileTools = permission && ledger.state.projectId
     ? await createDirectFileTools({ taskId: ledger.state.id, projectId: ledger.state.projectId, projectVersion: ledger.state.projectVersion ?? 0, projectRoot, dataRoot, mode: permission.mode, editMode: sessionEditMode(settings, selector), onNeedsInput: (reason, code) => pauseForInput(reason, code ?? "approval") })
     : [];
 
   const nodeAccess: AccessLevel = runNode ? accessOf(runNode.kind) : "write";
-  const allPlugins = (options.workOrder && !options.workOrder.fullAccess) || reviewing || planning || answering || nodeAccess === "read-only"
+  const allPlugins = (options.workOrder && !options.workOrder.fullAccess) || planning || answering || nodeAccess === "read-only"
     ? { tools: [], instructions: [] }
     : direct ? { tools: [], instructions: [] }
     : loadBuiltinPlugins({ projectRoot, dataRoot: authorizationRoot, url: options.comfyUrl, enabled: options.plugins, generation: options.generation, ledger });
-  const officeReadTools = !options.workOrder && (reviewing || planning || answering) ? createOfficePlugin({ ledger, dataRoot: authorizationRoot, readOnly: true }).tools : [];
+  const officeReadTools = !options.workOrder && (planning || answering) ? createOfficePlugin({ ledger, dataRoot: authorizationRoot, readOnly: true }).tools : [];
   const plugins = options.workOrder ? { ...allPlugins, tools: allPlugins.tools.filter(tool => options.workOrder!.capabilitySnapshots?.some(item => item.kind === "builtin-tool" && item.id === tool.name)) } : allPlugins;
   const reservedToolNames = ["read", "grep", "edit", "write", "alpha_build", "alpha_check", "alpha_command", "alpha_source", "alpha_search", "alpha_crawl", "alpha_site", "alpha_document", "alpha_spawn", "alpha_browser", ...plugins.tools.map(tool => tool.name)];
   if (mcpTools.some(tool => reservedToolNames.includes(tool.name))) {
@@ -387,7 +379,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
 
   const facts: SessionFacts = {
     role, ledger, direct: !!direct, permissionMode: permission?.mode, workOrder: options.workOrder, workerExpert: options.workerExpert,
-    reviewExpert: options.reviewExpert, directExpert, expertScope: directScope, nodeAccess: runNode ? nodeAccess : undefined, currentNode: runNode, experts, skills, pluginToolNames: plugins.tools.map(tool => tool.name),
+    directExpert, expertScope: directScope, nodeAccess: runNode ? nodeAccess : undefined, currentNode: runNode, experts, skills, pluginToolNames: plugins.tools.map(tool => tool.name),
     pluginInstructions: plugins.instructions, mcpToolNames: mcpTools.map(tool => tool.name), hooksLoaded: hooks.length > 0,
     officeReadToolNames: officeReadTools.map(tool => tool.name), canDispatch: !!options.getWorkerSupervisor,
     browserConnected: !!(options.browser || options.browserProxyDir),
@@ -413,7 +405,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       (reason, code) => pauseForInput(reason, code ?? "approval"));
     const coordinatorBrowser = (readOnly: boolean) => createBrowserTool(() => options.browserAccess?.() === false || options.getWorkerSupervisor && !options.getWorkerSupervisor().claimBrowser("coordinator") ? null : options.browser ?? null, dataRoot, options.browserUrl, webContext, readOnly);
     // On-demand pool reads stay inside the active expert's package: no session may take another expert's bundled Skill.
-    const activeExpertId = options.workerExpert?.id ?? options.reviewExpert?.id ?? directExpert?.id;
+    const activeExpertId = options.workerExpert?.id ?? directExpert?.id;
     const skillReader = () => createSkillResourceTool(skills, async id => (await resolvePoolSkill(dataRoot, id, activeExpertId)).skill);
     const attachments = () => profile.attachments ? [createTaskInputTool(ledger)] : [];
     const delivery: Record<DeliveryTool, () => CustomTool> = {
@@ -441,8 +433,6 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
           ...mcpTools,
         ];
       }
-      case "reviewer":
-        return [...common, ...attachments(), createDevelopmentReviewTool(ledger, options.reviewInstanceId ?? randomUUID(), projectRoot), coordinatorBrowser(true)];
       case "answer":
         return [...common, ...attachments(), skillReader()];
       case "planner":
@@ -469,7 +459,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   if (!options.workOrder || options.workOrder.agentId) await mkdir(sessionsDir, { recursive: true });
   const sessionManager = options.workOrder?.agentId
     ? await SessionManager.open(join(sessionsDir, "worker.jsonl"), sessionsDir, undefined, { initialCwd: projectRoot, throwIfMissing: !!options.existingLedger })
-    : options.workOrder || reviewing ? SessionManager.inMemory(projectRoot) : await SessionManager.open(join(sessionsDir, `${ledger.state.id}.jsonl`), sessionsDir, undefined, { initialCwd: projectRoot });
+    : options.workOrder ? SessionManager.inMemory(projectRoot) : await SessionManager.open(join(sessionsDir, `${ledger.state.id}.jsonl`), sessionsDir, undefined, { initialCwd: projectRoot });
   const usageBefore = sessionManager.getUsageStatistics();
   let created: Awaited<ReturnType<typeof createAgentSession>>;
   try { created = await createAgentSession({
@@ -489,7 +479,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     customTools: sessionCustomTools(),
     autoApprove: true,
     disableExtensionDiscovery: true,
-     preloadedPreparedExtensions: [fileToolGuard(projectRoot, options.workOrder, profile.uploads ? ["inputs"] : [], direct && !reviewing && !options.workOrder, reviewing || planning || workerReadOnly, () => ledger.state.phase, !answering && !reviewing && !options.workOrder ? () => !hasRecordedPlan(ledger.state) : undefined, options.getWorkerSupervisor?.(), options.onWorkerRead), ...hooks],
+    preloadedPreparedExtensions: [fileToolGuard(projectRoot, options.workOrder, profile.uploads ? ["inputs"] : [], direct && !options.workOrder, planning || workerReadOnly, () => ledger.state.phase, !answering && !options.workOrder ? () => !hasRecordedPlan(ledger.state) : undefined, options.getWorkerSupervisor?.(), options.onWorkerRead), ...hooks],
     enableMCP: false,
     enableLsp: toolNames.includes("lsp"),
     lspReadOnly: true,
@@ -510,7 +500,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   try {
     assertFileToolGuardLoaded(created.extensionsResult.extensions);
     const fileTools = created.session.agent.state.tools.filter(tool => ["read", "grep", "edit", "write"].includes(tool.name));
-    if (direct && !reviewing && (fileTools.some(tool => !tool.description.startsWith("Alpha sandbox proxy.")) || !fileTools.some(tool => tool.name === "read"))) {
+    if (direct && (fileTools.some(tool => !tool.description.startsWith("Alpha sandbox proxy.")) || !fileTools.some(tool => tool.name === "read"))) {
       throw new Error("A native file tool bypassed the sandbox proxy; refusing to start the model");
     }
   }
@@ -610,14 +600,14 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   options.signal?.addEventListener("abort", onAbort, { once: true });
   if (options.signal?.aborted) onAbort();
   try {
-    const memory = !options.workOrder && !reviewing ? await readProjectMemory(dataRoot, projectRoot, ledger) : "";
+    const memory = !options.workOrder ? await readProjectMemory(dataRoot, projectRoot, ledger) : "";
     const request = answering ? `Follow-up question from the user about this task (answer it; the task itself does not change):\n${options.objective}` : options.existingLedger ? taskPrompt(ledger.state, options.objective) : options.objective;
     // Model-visible means logged: the task context block goes to the content-addressed store, its hash to the log.
     try {
       const tools = session.agent.state.tools;
       const blob = await writePromptBlob(dataRoot, request);
       await ledger.recordStepContext({
-        stage: options.workOrder ? "worker" : reviewing ? "review" : answering ? "answer" : "coordinator",
+        stage: options.workOrder ? "worker" : answering ? "answer" : "coordinator",
         model: selector,
         promptHash: promptHash([alphaContract(facts), request, tools.map(tool => `${tool.name}\n${tool.description}\n${JSON.stringify(tool.parameters)}`)].join("\n\n")),
         taskContextHash: blob.hash,
@@ -683,7 +673,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     if (outcome === "needs-input") throw new NeedsInputError(failureReason);
     const perRunBudget = budgetReason === `Model run exceeded ${wallTimeMs} ms` && remainingTime > wallTimeMs
       || budgetReason === `Model run exceeded ${maxToolCalls} tool calls` && remainingCalls > maxToolCalls;
-    if (perRunBudget && !options.workOrder && !reviewing && options.getWorkerSupervisor && ledger.state.status === "active") {
+    if (perRunBudget && !options.workOrder && options.getWorkerSupervisor && ledger.state.status === "active") {
       await ledger.recordFailure(failureReason);
       return ledger;
     }
@@ -710,7 +700,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       totalTokens: Math.max(0, usageAfter.totalTokens - usageBefore.totalTokens),
       cost: Math.max(0, usageAfter.cost - usageBefore.cost),
     };
-    await ledger.recordRun({ model: selector, stage: options.workOrder ? "worker" : reviewing ? "review" : answering ? "answer" : "coordinator", nodeId: options.workOrder?.id ?? runNode?.id, instanceId: options.workOrder?.instanceId ?? options.reviewInstanceId, thinkingPolicyVersion: ROLE_THINKING_POLICY_VERSION, toolCalls, compactions, compactionFailures, maxToolCalls, wallTimeMs, elapsedMs: Math.round(performance.now() - started), ...(firstResponseMs === undefined ? {} : { firstResponseMs: Math.round(firstResponseMs) }), usage, ...(footprint ? { prompt: footprint } : {}), ...(directScope?.budgetFallback ? { skillBudgetFallback: directScope.budgetFallback } : {}), outcome, failureReason });
+    await ledger.recordRun({ model: selector, stage: options.workOrder ? "worker" : answering ? "answer" : "coordinator", nodeId: options.workOrder?.id ?? runNode?.id, instanceId: options.workOrder?.instanceId, thinkingPolicyVersion: ROLE_THINKING_POLICY_VERSION, toolCalls, compactions, compactionFailures, maxToolCalls, wallTimeMs, elapsedMs: Math.round(performance.now() - started), ...(firstResponseMs === undefined ? {} : { firstResponseMs: Math.round(firstResponseMs) }), usage, ...(footprint ? { prompt: footprint } : {}), ...(directScope?.budgetFallback ? { skillBudgetFallback: directScope.budgetFallback } : {}), outcome, failureReason });
     try { await sessionManager.flush(); }
     finally {
       try { await session.dispose(); }

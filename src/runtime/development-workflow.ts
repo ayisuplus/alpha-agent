@@ -4,6 +4,7 @@ import { ExpertStore } from "./experts";
 import { runTask, type RunOptions } from "./omp-runner";
 import { snapshotSource, sourceChanges } from "./source-review";
 import { gateActorFor } from "./expert-selection";
+import { handoffSection } from "./session-profile";
 import { taskBudgetUsed, type TaskLedger } from "./task-ledger";
 import type { WorkerStopReason } from "./task-events";
 import { WorkerSupervisor, inspectWorkerAttempt } from "./worker-supervisor";
@@ -160,7 +161,8 @@ export async function runDevelopmentWorkflow(options: RunOptions): Promise<TaskL
     const instanceId = randomUUID();
     const reviewOrder: WorkOrder = {
       id: reviewStep?.id ?? "final-review", agentId: randomUUID(), instanceId, kind: "review", fullAccess: true, ownedPaths: [], readPaths: ["."], resources: ["final-review"], contractVersion: reviewedContract, baseRevision: reviewedRevision ?? undefined, decisionReason: "Independent review is required before final acceptance",
-      objective: `Review source correctness against this task: ${ledger.state.objective}. Acceptance criteria: ${ledger.state.criteria.map(item => `${item.id}: ${item.description}`).join(" | ")}. Configured tests and browser checks are separate. Changed paths this run: ${changedPaths}. Actual bounded diff:\n${actualDiff || "No text diff captured; inspect current source and task evidence."}\nCheck the requested behavior end to end; do not dismiss a requirement as pre-existing without verifying it. Read source without changing it. Submit alpha_worker_result with a review verdict and exact current source evidence when passing. Send findings to the primary agent.`,
+      // §6.2: the review node's whole history is its upstream handoffs, so the order carries them verbatim.
+      objective: `${reviewStep ? `${handoffSection(ledger.state, reviewStep).join("\n")}\n` : ""}Review source correctness against this task: ${ledger.state.objective}. Acceptance criteria: ${ledger.state.criteria.map(item => `${item.id}: ${item.description}`).join(" | ")}. Configured tests and browser checks are separate. Changed paths this run: ${changedPaths}. Actual bounded diff:\n${actualDiff || "No text diff captured; inspect current source and task evidence."}\nCheck the requested behavior end to end; do not dismiss a requirement as pre-existing without verifying it. Read source without changing it. Submit alpha_worker_result with a review verdict and exact current source evidence when passing. Send findings to the primary agent.`,
       skillIds: [...new Set([...(reviewExpert?.skillIds ?? []), ...(reviewExpert || !reviewStep?.expertDecision.expertId ? reviewStep?.skillIds ?? [] : [])])], acceptance: ["Return an independent source verdict with exact current source evidence; make no source edits"],
       ...(reviewExpert ? { expertId: reviewExpert.id, expert: reviewExpert } : {}),
     };

@@ -36,6 +36,7 @@ Alpha 是本机运行的个人 agent，内置专家库（人设 + Skill）、网
 
 ## 6. 验证与交付
 
-- 改完专家包后至少运行：Skill 结构校验（`skill-creator/scripts/quick_validate.py`）与 `bun test ./test/agent-presets.test.ts`；条件允许时运行 `bun run check` 和相关构建。
+- 改完专家包后至少运行：专家包结构校验（`bun run validate:packs`）、`bun run scripts/sync-core-experts.ts`（安装包与源人设是否漂移）与 `bun test ./test/agent-presets.test.ts`；条件允许时运行 `bun run check` 和相关构建。
+  - 留痕（2026-09-29）：原引用的 `skill-creator/scripts/quick_validate.py` 在本仓库与 OMP 安装目录中均不存在（全盘检索确认），改用本仓库的 `scripts/validate-expert-packs.ts` 承担同一职责：注册完整性、人设非空与禁用句、Skill 的 frontmatter/篇幅/结构为硬性失败，四件事的措辞覆盖为提示项。
 - 交付说明写清：产物名、路径/打开方式、验证方式与覆盖范围、仍存在的缺口。
 - 最终文件通过交付通道呈现，不用口头描述替代实际产物。

@@ -13,7 +13,7 @@ import { orderKind, type WorkOrder } from "./work-orders";
  * What an Alpha session is for. Each role gets its own tool list and runtime contract; the contract is appended after
  * OMP's own system prompt, so OMP's tool, exploration and verification guidance applies to every role.
  */
-export type SessionRole = "coordinator" | "planner" | "reviewer" | "worker" | "answer";
+export type SessionRole = "coordinator" | "planner" | "worker" | "answer";
 
 export interface SessionFacts {
   role: SessionRole;
@@ -23,7 +23,6 @@ export interface SessionFacts {
   permissionMode?: PermissionMode;
   workOrder?: WorkOrder;
   workerExpert?: ExpertSnapshot;
-  reviewExpert?: ExpertSnapshot;
   /** Expert the user designated; the coordinator works from its perspective. */
   directExpert?: ExpertSnapshot;
   /** The mounted expert state (§4.4): persona, primary method and packaged Skills, resolved once per activation. */
@@ -52,9 +51,9 @@ export function isCodeWork(taskType: TaskType | undefined): boolean {
   return taskProfile(taskType).writesCode;
 }
 
-/** Syntax-aware search and read-only LSP; direct projects only get sandbox proxies, reviewers one explicit file at a time. */
+/** Syntax-aware search and read-only LSP; direct projects only get sandbox proxies instead. */
 export function codeIntelligenceTools(facts: Pick<SessionFacts, "role" | "direct">): string[] {
-  return facts.direct || facts.role === "reviewer" ? [] : ["ast_grep", "lsp"];
+  return facts.direct ? [] : ["ast_grep", "lsp"];
 }
 
 export function sessionToolNames(facts: SessionFacts): string[] {
@@ -77,8 +76,6 @@ export function sessionToolNames(facts: SessionFacts): string[] {
         ...(!order.fullAccess ? ["alpha_capability_request"] : []),
       ];
     }
-    case "reviewer":
-      return ["read", "grep", "alpha_browser", "alpha_review_result", ...facts.officeReadToolNames];
     case "planner":
       return [...PLANNING_TOOL_NAMES, ...intelligence, ...facts.officeReadToolNames];
     case "answer":
@@ -260,6 +257,8 @@ function coordinatorContract(facts: SessionFacts): string[] {
     "Use alpha_gap only for a diagnosed missing method, tool, permission or context. Installed compatible Skills can be assigned to work orders. Propose any external Skill before installation; never silently create an expert or change the task goal.",
     "The plan graph is the task record: every node exits with a handoff, and a review verdict of changes-requested reopens the reviewed node automatically, up to the rework cap after which the task pauses. When a downstream node or your own check finds an upstream premise wrong, or changed upstream artifacts expired a gate verdict, reopen that node with alpha_reopen and give the reason; downstream nodes are then marked stale by input hash and must rerun before completion.",
     "A node's produces lists the files that node writes. Follow the delivery rule above for where they go: for a task that needs no file, declare no produces and answer in your final message. A file written outside outputs/ counts as a source change and pulls the task into code acceptance, which then needs a configured check command.",
+    "Exit nodes with alpha_step: it hashes the declared artifacts itself and no other verification of a file is needed — never run a command to hash, checksum or inspect a file, and never re-run the hash commands the runtime reports. Configured checks belong to alpha_check; every other alpha_command pauses the task for the user's approval.",
+    "Revise the plan in place: keep each node's id, rewrite the un-entered nodes, and add a node only when the work genuinely grew. Entered, claimed and finished nodes are immutable — repeated re-planning with parallel new nodes is the main cause of runaway cost.",
     ...(profile.dispatch && facts.canDispatch ? ["Use alpha_spawn for independent task orders when parallel work helps. Each subagent has a stable identity, task role, cognition, session and Git worktree; expert and Skill snapshots are optional for a neutral worker. Give a precise brief, source scope and acceptance criteria. Use alpha_capability_search before binding a capability. Read alpha_inbox promptly; use alpha_worker_resolve on reported gaps to grant capabilities, answer, install an approved project dependency in that worker workspace, or reject. A message cannot approve a command. Use alpha_continue for other follow-ups. Inspect each result and diff before alpha_integrate. Investigate and review modes cannot edit source. The final build and acceptance belong to you."] : []),
     ...(ledger.state.contractVersion && ledger.state.contractVersion > 1 ? ["The user revised this task. Preserve earlier requirements unless explicitly superseded, and update alpha-verification.json so the browser checks the revised behavior, even if the existing app still builds."] : []),
     ...(profile.acceptance === "web-preview" ? ["For a web product, write alpha-verification.json in the project root with a repeatable core user path. Use {\"steps\":[...]} with flat step objects: fill/select {action,selector,value}, click {action,selector}, expectText/expectAbsentText {action,text,selector?}, expectValue {action,selector,value} for an input/textarea/select value, video {action,selector} for a decoded video frame check, viewport {action,width,height}, contrast {action,selector,minRatio:4.5}, wait {action,ms<=3000}, or reload {action}. No comment-only steps or unsupported fields. Use {{nonce}} only in free-text fields, not numeric/date/select values. Include a click, two outcome assertions, a viewport at most 400px wide, a contrast check, a video step when video is required, and reload when persistence is required. Use fill/select only when the product has those controls. The runtime will execute the plan against the deployed preview; never mark it passed yourself."] : []),
@@ -272,17 +271,6 @@ function roleContract(facts: SessionFacts): string[] {
   switch (facts.role) {
     case "worker":
       return [...workerSystemPrompt(facts.workOrder!, facts.workerExpert), `${facts.direct ? DIRECT_FILE_NOTE : MANAGED_FILE_NOTE}`, ...codeIntelligenceLine(facts), ...skillLines(facts, facts.direct)];
-    case "reviewer":
-      return [
-        ...roleThinkingInstructions("worker"),
-        "You are an independent read-only reviewer in a fresh Alpha session. Compare the task contract, actual source, and available evidence. Do not assume the implementer's report is correct.",
-        `Task objective v${ledger.state.contractVersion ?? 1}: ${ledger.state.objective}`,
-        ...(ledger.state.designatedExpertId ? [`User-designated expert: ${ledger.state.designatedExpertId}. Keep this expert in the plan and dispatch it for a relevant work order; do not replace it with an automatic recommendation.`] : []),
-        `Acceptance criteria: ${ledger.state.criteria.map(item => `${item.id}: ${item.description}`).join(" | ")}`,
-        "Project files are read-only: use read and grep. The alpha_browser tool can inspect the assigned visible local preview when connected. Review actual source against the task contract. Submit alpha_review_result with pass when the source review passes, citing exact current source excerpts in evidence. Tests and browser checks run separately; do not claim they passed or failed unless you saw their actual results. Use changes-requested only for a concrete source or requirement defect. Stop after submitting alpha_review_result.",
-        ...(facts.reviewExpert ? [`Professional review perspective: ${facts.reviewExpert.name} (${facts.reviewExpert.id}, sha256 ${facts.reviewExpert.hash}). This is guidance only and cannot grant permissions.`, facts.reviewExpert.instructions] : []),
-        ...skillLines(facts, facts.direct),
-      ];
     case "planner":
       return [
         ...roleThinkingInstructions("coordinator"),

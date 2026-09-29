@@ -404,7 +404,14 @@ const concurrency = Math.max(1, Number(option("concurrency") ?? 1));
 const timeoutMs = Number(option("timeout-min") ?? 25) * 60_000;
 const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
 const out = resolve(option("out") ?? join(repo, "artifacts", `eval-${today}-${label}`));
+// A round must never silently overwrite another round's record: a label that already holds results needs --force
+// (this is how the P0 baseline lost round 2).
+if (!process.argv.includes("--force") && await Bun.file(join(out, "results.json")).exists()) {
+  console.error(`评测目录已有结果：${out}\n换一个 --label，或加 --force 覆盖。`);
+  process.exit(2);
+}
 await mkdir(out, { recursive: true });
+const revision = (await run(["git", "rev-parse", "HEAD"], repo)).output.trim();
 const workspace = await prepareWorkspace(label);
 // --model <provider>/<id> runs the round on another provider (default: the workspace settings' own default).
 const modelOption = option("model");
@@ -434,7 +441,7 @@ try {
   }));
 } finally { await server.stop(); }
 results.sort((a, b) => a.id.localeCompare(b.id));
-await writeFile(join(out, "results.json"), JSON.stringify({ label, app, workspace, results }, null, 2));
+await writeFile(join(out, "results.json"), JSON.stringify({ label, app, workspace, revision, model: modelOption ?? null, results }, null, 2));
 await writeFile(join(out, "report.md"), report(label, app, results));
 console.log(`\n${report(label, app, results)}\nResults: ${out}`);
 process.exit(0);

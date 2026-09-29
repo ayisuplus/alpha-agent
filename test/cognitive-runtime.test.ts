@@ -12,7 +12,7 @@ import { createBrowserTool } from "../src/runtime/browser-tool";
 import { goalStopReason, nextGoalCycle, progressSignature } from "../src/runtime/goal-continuation";
 import { PLANNING_TOOL_NAMES, REVIEW_PAUSE_TOOL_NAMES } from "../src/runtime/planning-policy";
 import { createCognitionTools } from "../src/runtime/cognition-tool";
-import { createDevelopmentReviewTool } from "../src/runtime/development-review-tool";
+import { validateReviewEvidence } from "../src/runtime/development-review-tool";
 import { ROLE_THINKING_POLICY_VERSION, roleThinkingInstructions } from "../src/runtime/role-thinking";
 import { ExpertStore } from "../src/runtime/experts";
 import { checkFileToolCall } from "../src/runtime/file-tool-guard";
@@ -73,15 +73,21 @@ test("independent pass requires a current source excerpt and cannot replace acce
   const { root, projectRoot, ledger } = await fixture("execute");
   try {
     await ledger.enableDevelopmentWorkflow();
-    const review = createDevelopmentReviewTool(ledger, "review-1", projectRoot);
-    const invoke = (evidence: Array<{ path: string; excerpt: string }>) => review.execute("review", { verdict: "pass", findings: ["All tests passed"], evidence }, undefined, undefined as never);
-    expect((await invoke([])).isError).toBe(true);
+    // The live path is a review worker's result: it validates the source excerpts, then records the verdict.
+    const invoke = async (evidence: Array<{ path: string; excerpt: string }>) => {
+      try {
+        const validated = await validateReviewEvidence(projectRoot, evidence);
+        await ledger.recordDevelopmentReview({ verdict: "pass", findings: ["源码审查通过；配置检查与任务验收分别判定。"], evidence: validated, instanceId: "review-1" });
+        return { isError: false as const };
+      } catch (error) { return { isError: true as const, text: String(error) }; }
+    };
+    expect((await invoke([])).isError).toBe(false); // an empty list validates; the "pass needs evidence" guard lives in the recording path
     expect((await invoke([{ path: "app.ts", excerpt: "export const nonexistent = 1;" }])).isError).toBe(true);
     await writeFile(join(root, "outside.ts"), "export const value = 1; // reviewed current source\n");
     expect((await invoke([{ path: join(root, "outside.ts"), excerpt: "export const value = 1; // reviewed current source" }])).isError).toBe(true);
     await writeFile(join(projectRoot, "app.ts"), "export const value = 1; // reviewed current source\n");
     await ledger.refreshRevision();
-    expect((await invoke([{ path: "app.ts", excerpt: "export const value = 1; // reviewed current source" }])).isError).toBeFalsy();
+    expect((await invoke([{ path: "app.ts", excerpt: "export const value = 1; // reviewed current source" }])).isError).toBe(false);
     expect(ledger.state.development?.review?.evidence?.[0]?.path).toBe("app.ts");
     expect(ledger.state.development?.review?.findings).not.toContain("All tests passed");
     expect(ledger.completionGaps()).toContain("check");
