@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { attachBrowserConsent } from "./browser-consent";
 import { createComfyPlugin } from "./comfyui/register";
 import { registerOfficeTools } from "./office/register";
 
@@ -30,4 +31,5 @@ export default function alphaCapabilities(pi: ExtensionAPI): void {
 
   registerOfficeTools(pi, ctx);
   for (const tool of createComfyPlugin({ projectRoot: ctx.projectRoot, dataRoot: ctx.dataRoot }).tools) pi.registerTool(tool);
+  attachBrowserConsent(pi, { sessionId: id, dataRoot });
 }

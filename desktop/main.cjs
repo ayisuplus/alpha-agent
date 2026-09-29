@@ -1,203 +1,207 @@
 const { app, BaseWindow, dialog, ipcMain, Menu, Notification, screen, shell: electronShell, WebContentsView } = require("electron");
 const { spawn } = require("node:child_process");
-const { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } = require("node:fs");
-const { randomBytes, randomUUID } = require("node:crypto");
-const { lookup } = require("node:dns").promises;
-const http = require("node:http");
+const { mkdirSync, readFileSync, realpathSync, writeFileSync } = require("node:fs");
+const { connect } = require("node:net");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
+// Per-run token for the local sidecar API; the renderer receives it only through the preload bridge.
+const serverToken = require("node:crypto").randomBytes(32).toString("hex");
 const workspaceRoot = path.resolve(process.env.ALPHA_WORKSPACE_ROOT || root);
 const userData = path.join(workspaceRoot, ".alpha", "electron-profile");
 mkdirSync(userData, { recursive: true });
 app.setName("Alpha");
 app.setPath("userData", userData);
 const primary = app.requestSingleInstanceLock();
-const cdpPort = process.env.ALPHA_CDP_PORT;
-if (!cdpPort) throw new Error("ALPHA_CDP_PORT is required");
-app.commandLine.appendSwitch("remote-debugging-port", cdpPort);
-// Browser verification takes screenshots of the preview; without this, Windows occlusion tracking stops painting the
-// window whenever other windows cover it and the verifier's screenshot times out. (A minimized window still pauses.)
-app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 
 let sidecar;
 let window;
 let shell;
-let preview;
-let browserBridge;
-let bridgePort;
-const bridgeToken = randomBytes(32).toString("hex");
-const webTabs = new Map();
-const webAllowed = new Map();
-let visibleWebTab = null;
 
-async function targetId(webContents) {
-  const debuggerApi = webContents.debugger;
-  const attached = debuggerApi.isAttached();
-  if (!attached) debuggerApi.attach("1.3");
-  try {
-    const result = await debuggerApi.sendCommand("Target.getTargetInfo");
-    const id = result?.targetInfo?.targetId;
-    if (typeof id !== "string" || !id) throw new Error("Browser target identity is unavailable");
-    return id;
-  } finally {
-    if (!attached && debuggerApi.isAttached()) debuggerApi.detach();
-  }
+// ── Alpha 浏览器宿主（独立 Electron 进程，见 desktop/browser-host.cjs）─────────────────────────
+// 宿主只在 127.0.0.1 随机端口开放 CDP，供 OMP 原生 browser 工具（browser.cdpUrl）与下方的只读面板使用；
+// 桌面窗口本身不开任何调试端口、没有 HTTP 桥，也不出现在任何 CDP 目标中。
+let host;
+let hostCdpUrl = null; // http://127.0.0.1:<port>
+let hostControl = null; // 宿主控制连接（127.0.0.1，逐行 JSON；断开即宿主退出）
+let hostStatus = { available: false, port: null, reason: "浏览器宿主未启动" };
+const screencasts = new Map(); // targetId → { socket, nextId, pending: Map<number, Function> }
+
+/** 打包形态用发行包自带的 Electron（<bundle>/node_modules/electron/dist）；开发态同一路径即仓库内 Electron。 */
+function electronExecutable() {
+  const bundled = path.join(root, "node_modules", "electron", "dist", process.platform === "win32" ? "electron.exe" : "electron");
+  try { realpathSync(bundled); return bundled; } catch { return process.execPath; }
 }
 
-function webUrl(raw) {
-  try {
-    const url = new URL(raw);
-    return url.protocol === "https:" && !url.username && !url.password && url.hostname !== "localhost" ? url.href : null;
-  } catch { return null; }
+function publishHostStatus(reason) {
+  hostStatus = hostCdpUrl
+    ? { available: true, port: Number(new URL(hostCdpUrl).port) }
+    : { available: false, port: null, reason: reason ?? hostStatus.reason };
+  shell?.webContents.send("alpha:browser-host-status-changed", hostStatus);
 }
 
-function closeWebTab(tabId) {
-  const tab = webTabs.get(tabId);
-  if (!tab) return;
-  webTabs.delete(tabId);
-  webAllowed.delete(tabId);
-  if (visibleWebTab === tabId) visibleWebTab = null;
-  if (window && !window.isDestroyed()) window.contentView.removeChildView(tab.view);
-  if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
-  if (shell && !shell.webContents.isDestroyed()) shell.webContents.send("alpha:web-tab-closed", tabId);
-}
-
-async function createWebTab(url, taskId) {
-  if (webTabs.size >= 18) throw new Error("Alpha has reached the browser tab limit");
-  if (!window || !/^[0-9a-f-]{36}$/.test(taskId)) throw new Error("Browser tab has no desktop task owner");
-  const safeUrl = webUrl(url);
-  if (!safeUrl) throw new Error("Web tabs require a public HTTPS URL");
-  const tabId = randomUUID();
-  const view = new WebContentsView({ webPreferences: { partition: "persist:alpha-web", contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
-  window.contentView.addChildView(view);
-  view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
-  webTabs.set(tabId, { view, taskId });
-  webAllowed.set(tabId, new Set([new URL(safeUrl).origin]));
-  view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  shell?.webContents.send("alpha:web-tab-request", { taskId, tabId });
-  try {
-    await new Promise((resolve, reject) => {
-      const contents = view.webContents;
-      let settled = false;
-      let readyTimer;
-      const cleanup = () => {
-        clearTimeout(timer);
-        clearTimeout(readyTimer);
-        contents.off("did-navigate", onNavigate);
-        contents.off("dom-ready", onReady);
-        contents.off("did-fail-load", onFailure);
-      };
-      const finish = error => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        if (error) reject(error);
-        else resolve();
-      };
-      const onNavigate = (_event, url) => {
-        if (url.startsWith("https:") && !readyTimer) readyTimer = setTimeout(() => finish(), 4_000);
-      };
-      const onReady = () => { if (contents.getURL().startsWith("https:")) finish(); };
-      const onFailure = (_event, code, description, _url, isMainFrame) => {
-        if (isMainFrame && code !== -3) finish(new Error(`Web page load failed: ${description}`));
-      };
-      const timer = setTimeout(() => finish(new Error(`Web page load timed out: ${contents.getURL()}`)), 20_000);
-      contents.on("did-navigate", onNavigate);
-      contents.on("dom-ready", onReady);
-      contents.on("did-fail-load", onFailure);
-      void contents.loadURL(safeUrl).then(() => finish(), error => finish(error));
+function startBrowserHost() {
+  return new Promise(resolve => {
+    host = spawn(electronExecutable(), [path.join(__dirname, "browser-host.cjs")], {
+      cwd: root,
+      env: { ...process.env, ALPHA_WORKSPACE_ROOT: workspaceRoot },
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
     });
-    const tab = { tabId, targetId: await targetId(view.webContents), url: view.webContents.getURL(), title: view.webContents.getTitle() };
-    return tab;
+    let buffer = "";
+    let settled = false;
+    const finish = url => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(url);
+    };
+    const timeout = setTimeout(() => finish(null), 30_000);
+    host.stdout.on("data", chunk => {
+      buffer += chunk.toString();
+      for (;;) {
+        const newline = buffer.indexOf("\n");
+        if (newline < 0) break;
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        const match = /^ALPHA_BROWSER_HOST_READY (\d+) (\d+)$/.exec(line);
+        if (match) {
+          hostCdpUrl = `http://127.0.0.1:${match[1]}`;
+          hostControl = connect({ host: "127.0.0.1", port: Number(match[2]) });
+          hostControl.on("error", () => {});
+          hostControl.once("connect", () => {
+            publishHostStatus();
+            finish(hostCdpUrl);
+          });
+        } else if (line) console.log(line);
+      }
+    });
+    host.stderr.on("data", chunk => console.error(chunk.toString()));
+    host.once("error", () => finish(null));
+    host.once("exit", () => {
+      hostCdpUrl = null;
+      for (const targetId of [...screencasts.keys()]) stopScreencast(targetId);
+      publishHostStatus("浏览器宿主已退出");
+      finish(null);
+    });
+  });
+}
+
+async function cdpPageEntries() {
+  if (!hostCdpUrl) throw new Error("浏览器宿主不可用");
+  const response = await fetch(`${hostCdpUrl}/json/list`);
+  if (!response.ok) throw new Error(`浏览器宿主 CDP 查询失败：HTTP ${response.status}`);
+  const targets = await response.json();
+  return targets
+    .filter(target => target.type === "page" && typeof target.webSocketDebuggerUrl === "string" && !String(target.url).startsWith("devtools://"))
+    .map(target => ({ targetId: target.id, url: String(target.url ?? ""), title: String(target.title ?? ""), webSocketDebuggerUrl: target.webSocketDebuggerUrl }));
+}
+
+function pushScreencastFrame(targetId, params) {
+  if (!shell || shell.webContents.isDestroyed()) return;
+  shell.webContents.send("alpha:browser-screencast-frame", {
+    targetId,
+    format: "jpeg",
+    data: params.data,
+    metadata: {
+      offsetTop: params.offsetTop,
+      pageScaleFactor: params.pageScaleFactor,
+      deviceWidth: params.deviceWidth,
+      deviceHeight: params.deviceHeight,
+      scrollOffsetX: params.scrollOffsetX,
+      scrollOffsetY: params.scrollOffsetY,
+      timestamp: params.timestamp,
+    },
+  });
+}
+
+async function startScreencast(targetId, maxDimension) {
+  if (screencasts.has(targetId)) return;
+  const entry = (await cdpPageEntries()).find(item => item.targetId === targetId);
+  if (!entry) throw new Error("浏览器宿主中没有这个页面目标");
+  const socket = new WebSocket(entry.webSocketDebuggerUrl);
+  const stream = { socket, nextId: 0, pending: new Map() };
+  const call = (method, params = {}) => new Promise((resolve, reject) => {
+    const id = ++stream.nextId;
+    stream.pending.set(id, { resolve, reject });
+    socket.send(JSON.stringify({ id, method, params }));
+  });
+  socket.onmessage = message => {
+    const frame = JSON.parse(message.data);
+    if (frame.id && stream.pending.has(frame.id)) {
+      const pending = stream.pending.get(frame.id);
+      stream.pending.delete(frame.id);
+      if (frame.error) pending.reject(new Error(frame.error.message));
+      else pending.resolve(frame.result);
+      return;
+    }
+    if (frame.method === "Page.screencastFrame") {
+      pushScreencastFrame(targetId, frame.params ?? {});
+      void call("Page.screencastFrameAck", { sessionId: frame.params?.sessionId }).catch(() => {});
+    }
+  };
+  socket.onclose = () => {
+    screencasts.delete(targetId);
+    if (!shell || shell.webContents.isDestroyed()) return;
+    shell.webContents.send("alpha:browser-screencast-frame", { targetId, format: "jpeg", data: null, error: "页面截屏流已结束" });
+  };
+  await new Promise((resolve, reject) => {
+    socket.onopen = resolve;
+    socket.onerror = () => reject(new Error("无法连接浏览器宿主的页面目标"));
+  });
+  screencasts.set(targetId, stream);
+  try {
+    await call("Page.startScreencast", { format: "jpeg", quality: 70, maxWidth: maxDimension, maxHeight: maxDimension });
+    // 隐身（屏幕外）的宿主窗口没有自发的合成帧，截屏流冷启动可能不出首帧：强制一帧唤醒（结果丢弃）。
+    await call("Page.captureScreenshot", { format: "jpeg" }).catch(() => {});
   } catch (error) {
-    closeWebTab(tabId);
+    screencasts.delete(targetId);
+    socket.close();
     throw error;
   }
 }
 
-function publicAddress(address) {
-  const lower = address.toLowerCase();
-  if (lower === "::" || lower === "::1" || lower.startsWith("::ffff:") || lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe80:")) return false;
-  const bytes = address.split(".").map(Number);
-  if (bytes.length !== 4) return true;
-  const [a, b] = bytes;
-  return a > 0 && a < 224 && a !== 10 && a !== 127 && !(a === 100 && b >= 64 && b <= 127) && !(a === 169 && b === 254) && !(a === 172 && b >= 16 && b <= 31) && !(a === 192 && (b === 168 || b === 0)) && !(a === 198 && (b === 18 || b === 19));
+function stopScreencast(targetId) {
+  const stream = screencasts.get(targetId);
+  if (!stream) return;
+  screencasts.delete(targetId);
+  stream.socket.send(JSON.stringify({ id: ++stream.nextId, method: "Page.stopScreencast" }));
+  stream.socket.close();
 }
 
-function installWebRequestBoundary() {
-  const { session } = require("electron");
-  session.fromPartition("persist:alpha-web").webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
-    void (async () => {
-      try {
-        const url = new URL(details.url);
-        if (!["http:", "https:"].includes(url.protocol)) return details.resourceType === "mainFrame" || url.protocol === "file:";
-        if (url.hostname === "localhost" || url.hostname.endsWith(".local")) return true;
-        const addresses = await lookup(url.hostname, { all: true });
-        if (!addresses.length || addresses.some(item => !publicAddress(item.address))) return true;
-        const owner = [...webTabs].find(([, tab]) => tab.view.webContents.id === details.webContentsId);
-        return details.resourceType === "mainFrame" && owner && !webAllowed.get(owner[0])?.has(url.origin);
-      } catch { return true; }
-    })().then(cancel => callback({ cancel }), () => callback({ cancel: true }));
-  });
+function sendHostCommand(message) {
+  if (!hostControl || hostControl.destroyed || !hostControl.writable) return false;
+  hostControl.write(`${JSON.stringify(message)}\n`);
+  return true;
 }
 
-function bridgeResponse(response, status, body) {
-  response.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
-  response.end(JSON.stringify(body));
+/** 面板矩形（工作台 CSS 像素）→ 屏幕坐标，交给宿主窗口做“接管”。 */
+function panelScreenRect(value) {
+  if (!window || !shell || !value || typeof value !== "object") return null;
+  const numbers = ["x", "y", "width", "height"].map(key => Number(value[key]));
+  if (!numbers.every(Number.isFinite)) return null;
+  const [x, y, width, height] = numbers;
+  if (width < 120 || height < 80) return null;
+  const zoom = shell.webContents.getZoomFactor();
+  const content = window.getContentBounds();
+  return {
+    x: Math.round(content.x + x * zoom),
+    y: Math.round(content.y + y * zoom),
+    width: Math.round(width * zoom),
+    height: Math.round(height * zoom),
+  };
 }
-
-async function startBrowserBridge() {
-  browserBridge = http.createServer(async (request, response) => {
-    if (request.headers["x-alpha-bridge-token"] !== bridgeToken) return bridgeResponse(response, 403, { error: "Forbidden" });
-    try {
-      const url = new URL(request.url, "http://127.0.0.1");
-      const chunks = [];
-      for await (const chunk of request) {
-        chunks.push(chunk);
-        if (Buffer.concat(chunks).length > 16_000) throw new Error("Bridge request too large");
-      }
-      const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
-      if (url.pathname === "/tabs" && request.method === "POST") return bridgeResponse(response, 200, await createWebTab(body.url, body.taskId));
-      if (url.pathname === "/tabs" && request.method === "GET") {
-        const tabs = await Promise.all([...webTabs].map(async ([tabId, tab]) => ({ tabId, targetId: await targetId(tab.view.webContents), url: tab.view.webContents.getURL(), title: tab.view.webContents.getTitle() })));
-        return bridgeResponse(response, 200, { tabs });
-      }
-      const tab = /^\/tabs\/([0-9a-f-]{36})$/.exec(url.pathname);
-      if (tab && webTabs.has(tab[1])) {
-        if (request.method === "POST") {
-          const owner = webTabs.get(tab[1]);
-          window?.focus();
-          shell?.webContents.send("alpha:web-tab-request", { taskId: owner.taskId, tabId: tab[1] });
-          return bridgeResponse(response, 200, { focused: true });
-        }
-        if (request.method === "DELETE") { closeWebTab(tab[1]); return bridgeResponse(response, 200, { closed: true }); }
-      }
-      const allow = /^\/tabs\/([0-9a-f-]{36})\/allow$/.exec(url.pathname);
-      if (allow && request.method === "POST" && webAllowed.has(allow[1])) {
-        const origin = webUrl(body.url);
-        if (!origin) throw new Error("Invalid browser navigation URL");
-        webAllowed.get(allow[1]).add(new URL(origin).origin);
-        return bridgeResponse(response, 200, { allowed: true });
-      }
-      if (url.pathname === "/preview-target" && request.method === "GET" && preview) return bridgeResponse(response, 200, { targetId: await targetId(preview.webContents), url: preview.webContents.getURL() });
-      return bridgeResponse(response, 404, { error: "Not found" });
-    } catch (error) {
-      return bridgeResponse(response, 400, { error: error instanceof Error ? error.message : String(error) });
-    }
-  });
-  await new Promise((resolve, reject) => {
-    browserBridge.once("error", reject);
-    browserBridge.listen(0, "127.0.0.1", () => { browserBridge.off("error", reject); resolve(); });
-  });
-  bridgePort = browserBridge.address().port;
-}
-const emptyPreview = "data:text/html," + encodeURIComponent("<title>Alpha preview</title><style>body{font-family:system-ui;background:#f6f7f9;color:#4d5968;display:grid;place-items:center;height:100vh;margin:0}</style><p>选择任务后，产品预览将在这里打开</p>");
+// ────────────────────────────────────────────────────────────────────────────────────────────────
 
 function startSidecar() {
   return new Promise((resolve, reject) => {
     const executable = process.env.ALPHA_BUN_PATH || "bun";
-    sidecar = spawn(executable, ["run", "src/native/server.ts"], { cwd: root, env: { ...process.env, ALPHA_ELECTRON_VERSION: process.versions.electron, ALPHA_BROWSER_BRIDGE_PORT: String(bridgePort), ALPHA_BROWSER_BRIDGE_TOKEN: bridgeToken }, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    sidecar = spawn(executable, ["run", "src/native/server.ts"], {
+      cwd: root,
+      env: { ...process.env, ALPHA_ELECTRON_VERSION: process.versions.electron, ALPHA_SERVER_TOKEN: serverToken, ...(hostCdpUrl ? { ALPHA_BROWSER_CDP_URL: hostCdpUrl } : {}) },
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let buffer = "";
     let errorTail = "";
     const timeout = setTimeout(() => { sidecar.kill(); reject(new Error(`Alpha sidecar did not start\n${errorTail}`)); }, 60_000);
@@ -220,26 +224,6 @@ function startSidecar() {
     sidecar.once("error", error => { clearTimeout(timeout); reject(error); });
     sidecar.once("exit", code => { clearTimeout(timeout); if (!window) reject(new Error(`Alpha sidecar exited: ${code}\n${errorTail}`)); });
   });
-}
-
-function previewBounds(value) {
-  if (!value || typeof value !== "object") return null;
-  const numbers = ["x", "y", "width", "height"].map(key => value[key]);
-  if (!numbers.every(item => typeof item === "number" && Number.isFinite(item))) return null;
-  return { x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3], visible: value.visible === true };
-}
-
-function nativeBounds(rect) {
-  const zoom = shell.webContents.getZoomFactor();
-  const { width, height } = window.getContentBounds();
-  const x = Math.min(Math.max(Math.round(rect.x * zoom), 0), width);
-  const y = Math.min(Math.max(Math.round(rect.y * zoom), 0), height);
-  return { x, y, width: Math.min(Math.max(Math.round(rect.width * zoom), 0), width - x), height: Math.min(Math.max(Math.round(rect.height * zoom), 0), height - y) };
-}
-
-function hideWebTab() {
-  if (visibleWebTab && webTabs.has(visibleWebTab)) webTabs.get(visibleWebTab).view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
-  visibleWebTab = null;
 }
 
 const windowStateFile = path.join(workspaceRoot, ".alpha", "window-state.json");
@@ -265,24 +249,14 @@ function saveWindowState() {
   } catch (error) { console.error("ALPHA_WINDOW_STATE_FAILED", error); }
 }
 
-// Page zoom is shared per host name in Chromium, so the default zoom menu would also zoom the 127.0.0.1 product
-// preview under verification. The workbench scales itself instead; this menu keeps editing and developer entries only.
 function installMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { role: "editMenu", label: "编辑" },
     { label: "开发", submenu: [
       { label: "重新载入工作台", accelerator: "CmdOrCtrl+R", click: () => shell?.webContents.reload() },
       { label: "工作台开发者工具", accelerator: "CmdOrCtrl+Shift+I", click: () => shell?.webContents.toggleDevTools() },
-      { label: "预览开发者工具", click: () => preview?.webContents.toggleDevTools() },
     ] },
   ]));
-}
-
-function localPreviewUrl(value) {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" && url.hostname === "127.0.0.1" ? url.href : null;
-  } catch { return null; }
 }
 
 if (!primary) {
@@ -293,8 +267,10 @@ app.on("second-instance", () => window?.focus());
 app.whenReady().then(async () => {
   try {
     app.setAppUserModelId("Alpha");
-    installWebRequestBoundary();
-    await startBrowserBridge();
+    // 浏览器宿主先行：拿到 CDP 端口后经 ALPHA_BROWSER_CDP_URL 传给 sidecar（由 launch.ts 写入
+    // 生成配置的 browser.cdpUrl；不会进入模型进程环境）。宿主不可用时照常启动，浏览器面板提示
+    // “当前为不可见模式”，OMP 回退自己的默认浏览器。
+    await startBrowserHost();
     const port = await startSidecar();
     installMenu();
     const saved = savedWindowState();
@@ -306,12 +282,9 @@ app.whenReady().then(async () => {
     window.on("close", () => { clearTimeout(saveTimer); saveWindowState(); });
     window.on("focus", () => window.flashFrame(false));
     shell = new WebContentsView({ webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true } });
-    preview = new WebContentsView({ webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false } });
     window.contentView.addChildView(shell);
-    window.contentView.addChildView(preview);
-    // The workbench owns the whole window; it reports where the preview slot is and the preview view is placed over it.
-    // A hidden preview gets empty bounds (View.setVisible(true) did not bring a hidden view back on Windows).
-    preview.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    // The workbench owns the whole window and reports where browser panels go; it scales itself,
+    // so pinch zoom stays off to keep its layout math exact.
     const layout = () => {
       const { width, height } = window.getContentBounds();
       shell.setBounds({ x: 0, y: 0, width, height });
@@ -319,49 +292,12 @@ app.whenReady().then(async () => {
     layout();
     window.on("resize", layout);
     window.on("closed", () => {
-      for (const tabId of [...webTabs.keys()]) closeWebTab(tabId);
+      for (const targetId of [...screencasts.keys()]) stopScreencast(targetId);
       shell.webContents.close();
-      preview.webContents.close();
       window = null;
     });
     shell.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    preview.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    // Pinch zoom would change the page scale the verifier measures against.
     void shell.webContents.setVisualZoomLevelLimits(1, 1);
-    void preview.webContents.setVisualZoomLevelLimits(1, 1);
-    ipcMain.on("alpha:preview", (event, url) => {
-      if (event.sender !== shell.webContents) return;
-      const allowed = localPreviewUrl(url);
-      if (allowed) void preview.webContents.loadURL(allowed);
-    });
-    ipcMain.on("alpha:preview-clear", event => {
-      if (event.sender === shell.webContents) void preview.webContents.loadURL(emptyPreview);
-    });
-    ipcMain.on("alpha:preview-bounds", (event, value) => {
-      if (event.sender !== shell.webContents || !window) return;
-      const rect = previewBounds(value);
-      if (!rect) return;
-      if (rect.visible) hideWebTab();
-      const wasHidden = preview.getBounds().width === 0;
-      preview.setBounds(rect.visible ? nativeBounds(rect) : { x: 0, y: 0, width: 0, height: 0 });
-      if (rect.visible && wasHidden) preview.webContents.focus();
-    });
-    ipcMain.on("alpha:web-bounds", (event, tabId, value) => {
-      if (event.sender !== shell.webContents || !window) return;
-      if (tabId === null) { hideWebTab(); return; }
-      const rect = previewBounds(value);
-      if (!rect || !webTabs.has(tabId)) return;
-      if (!rect.visible) {
-        if (visibleWebTab === tabId) hideWebTab();
-        return;
-      }
-      const changed = visibleWebTab !== tabId;
-      if (changed) hideWebTab();
-      preview.setBounds({ x: 0, y: 0, width: 0, height: 0 });
-      webTabs.get(tabId).view.setBounds(nativeBounds(rect));
-      visibleWebTab = tabId;
-      if (changed) webTabs.get(tabId).view.webContents.focus();
-    });
     ipcMain.handle("alpha:open-folder", async (event, directory) => {
       if (event.sender !== shell.webContents || typeof directory !== "string") return "不允许打开这个目录";
       try {
@@ -378,7 +314,8 @@ app.whenReady().then(async () => {
       if (event.sender !== shell.webContents || typeof value !== "string") return false;
       let url;
       try { url = new URL(value); } catch { return false; }
-      if (url.protocol !== "https:" && !localPreviewUrl(value)) return false;
+      const localDevServer = url.protocol === "http:" && url.hostname === "127.0.0.1";
+      if (url.protocol !== "https:" && !localDevServer) return false;
       await electronShell.openExternal(value);
       return true;
     });
@@ -400,9 +337,54 @@ app.whenReady().then(async () => {
     ipcMain.on("alpha:attention", event => {
       if (event.sender === shell.webContents && !window.isFocused()) window.flashFrame(true);
     });
-    await preview.webContents.loadURL(emptyPreview);
+    // ── 浏览器面板 IPC（契约详见 desktop/preload.cjs 顶部注释）────────────────────────────────────
+    ipcMain.handle("alpha:server-token", event => {
+      if (event.sender !== shell.webContents) return null;
+      return serverToken;
+    });
+    ipcMain.handle("alpha:browser-host-status", event => {
+      if (event.sender !== shell.webContents) return { available: false, port: null, reason: "未授权的调用方" };
+      return hostStatus;
+    });
+    ipcMain.handle("alpha:browser-tabs", async event => {
+      if (event.sender !== shell.webContents) return { available: false, tabs: [], error: "未授权的调用方" };
+      try {
+        const entries = await cdpPageEntries();
+        return { available: true, tabs: entries.map(({ targetId, url, title }) => ({ targetId, url, title })) };
+      } catch (error) {
+        return { available: false, tabs: [], error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+    ipcMain.handle("alpha:browser-screencast", async (event, request) => {
+      if (event.sender !== shell.webContents) return { ok: false, error: "未授权的调用方" };
+      const targetId = request?.targetId;
+      const action = request?.action;
+      if (typeof targetId !== "string" || !targetId || (action !== "start" && action !== "stop")) return { ok: false, error: "参数不合法" };
+      try {
+        const maxDimension = Math.min(Math.max(Math.round(Number(request.maxDimension)) || 1280, 160), 2560);
+        if (action === "start") await startScreencast(targetId, maxDimension);
+        else stopScreencast(targetId);
+        return { ok: true };
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    });
+    ipcMain.handle("alpha:browser-takeover", (event, request) => {
+      if (event.sender !== shell.webContents) return { ok: false, error: "未授权的调用方" };
+      const rect = panelScreenRect(request?.rect);
+      if (!rect) return { ok: false, error: "面板矩形不合法" };
+      const targetId = typeof request?.targetId === "string" && request.targetId ? request.targetId : undefined;
+      return sendHostCommand({ op: "show", ...rect, targetId })
+        ? { ok: true }
+        : { ok: false, error: "浏览器宿主不可用" };
+    });
+    ipcMain.handle("alpha:browser-handback", event => {
+      if (event.sender !== shell.webContents) return { ok: false, error: "未授权的调用方" };
+      return sendHostCommand({ op: "hide" }) ? { ok: true } : { ok: false, error: "浏览器宿主不可用" };
+    });
+    // ────────────────────────────────────────────────────────────────────────────────────────────
     await shell.webContents.loadURL(`http://127.0.0.1:${port}/ui/`);
-    console.log(`ALPHA_DESKTOP_READY ${port} ${cdpPort}`);
+    console.log(`ALPHA_DESKTOP_READY ${port}`);
   } catch (error) {
     console.error(error);
     const detail = error instanceof Error ? error.message : String(error);
@@ -417,7 +399,10 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => app.quit());
 app.on("before-quit", () => {
-  if (sidecar?.pid && process.platform === "win32") spawn("taskkill.exe", ["/T", "/F", "/PID", String(sidecar.pid)], { windowsHide: true, stdio: "ignore" }).unref();
-  else sidecar?.kill();
-  browserBridge?.close();
+  sendHostCommand({ op: "quit" });
+  for (const child of [sidecar, host]) {
+    if (!child?.pid) continue;
+    if (process.platform === "win32") spawn("taskkill.exe", ["/T", "/F", "/PID", String(child.pid)], { windowsHide: true, stdio: "ignore" }).unref();
+    else child.kill();
+  }
 });

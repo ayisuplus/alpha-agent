@@ -1,83 +1,142 @@
-import { createHash, randomUUID } from "node:crypto";
-import { copyFile, mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, extname, join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import type { CapabilityContext } from "../extension";
-import { editOffice, exportOfficePdf, officeRuntimeStatus, readOffice, type OfficeWorkspace } from "./office-runtime";
+import {
+  officeConvert,
+  officeCreate,
+  officeEdit,
+  officeInspect,
+  officePdf,
+  officePreview,
+  OfficeError,
+  type ConvertFormat,
+  type OfficeResult,
+  type PdfParams,
+  type SlideSpec,
+} from "./office-runtime";
 
-type Input = NonNullable<OfficeWorkspace["state"]["inputs"]>[number];
-const result = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }] });
-const failure = (error: unknown) => ({ content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }], isError: true });
+/** edit operations: union discriminated by `op` (office-spec 6.3). */
+const editOperation = type({ op: "'replace_text'", paragraph: "number", expected: "string", replacement: "string" })
+  .or({ op: "'insert_paragraph'", after: "number", text: "string", "style?": "string" })
+  .or({ op: "'add_table_row'", table: "string", cells: "(string | number)[]" })
+  .or({ op: "'set_cells'", sheet: "string", range: "string", values: "unknown[][]" })
+  .or({ op: "'add_slide'", after: "number", title: "string", bullets: "string[]", "layout?": "'title' | 'title_content' | 'blank'" })
+  .or({ op: "'remove_slide'", index: "number" })
+  .or({ op: "'duplicate_slide'", index: "number", after: "number" })
+  .or({ op: "'set_shape'", slide: "number", shape: "number", "text?": "string", "image?": "string" });
 
-/** Registers the alpha_office_* tools against the session's managed Office inputs. */
+const sheetSpec = type({ "name?": "string", headers: "string[]", rows: "unknown[][]", "widths?": "number[]" });
+const slideSpec = type({ title: "string", bullets: "string[]", "layout?": "'title' | 'title_content' | 'blank'" });
+
+/** pdf actions: union discriminated by `action` (office-spec 6.3). */
+const pdfParameters = type({ action: "'merge'", paths: "string[]", "name?": "string" })
+  .or({ action: "'split'", paths: "string[]", "name?": "string", "ranges?": "number[][]" })
+  .or({ action: "'rotate'", paths: "string[]", "name?": "string", "pages?": "number[]", "degrees?": "number" })
+  .or({ action: "'watermark'", paths: "string[]", "name?": "string", text: "string", "fontSize?": "number", "opacity?": "number", "degrees?": "number" })
+  .or({ action: "'extract'", paths: "string[]", "name?": "string", pages: "number[]" });
+
+const officeParameters = type({
+  action: "'inspect' | 'edit' | 'create' | 'convert' | 'pdf' | 'preview'",
+  "path?": "string",
+  "ops?": editOperation.array(),
+  "kind?": "'docx' | 'xlsx' | 'pptx' | 'pdf'",
+  "name?": "string",
+  "content?": "string",
+  "data?": type({ sheets: sheetSpec.array() }).or({ "name?": "string", headers: "string[]", rows: "unknown[][]", "widths?": "number[]" }),
+  "outline?": slideSpec.array(),
+  "layout?": "'title' | 'title_content' | 'blank'",
+  "to?": "'docx' | 'xlsx' | 'pptx' | 'pdf' | 'html' | 'odt' | 'ods' | 'odp'",
+  "pdf?": pdfParameters,
+  "pages?": "number[]",
+});
+
+interface OfficeToolParams {
+  action: "inspect" | "edit" | "create" | "convert" | "pdf" | "preview";
+  path?: string;
+  ops?: unknown[];
+  kind?: "docx" | "xlsx" | "pptx" | "pdf";
+  name?: string;
+  content?: string;
+  data?: unknown;
+  outline?: SlideSpec[];
+  layout?: "title" | "title_content" | "blank";
+  to?: ConvertFormat;
+  pdf?: PdfParams;
+  pages?: number[];
+}
+
+function requirePath(path: unknown, action: string): string {
+  if (typeof path !== "string" || !path.trim()) throw new OfficeError(`${action} 需要 path`);
+  return path;
+}
+
+function sessionInput(params: OfficeToolParams): Record<string, unknown> {
+  if (params.action === "create") return { kind: params.kind, name: params.name };
+  if (params.action === "pdf") return { paths: params.pdf?.paths, pdfAction: params.pdf?.action };
+  return { path: params.path, ...(params.action === "convert" ? { to: params.to } : {}), ...(params.pages ? { pages: params.pages } : {}) };
+}
+
+/** preview/before PNGs ride along as ImageContent so the desktop card can show thumbnails. */
+async function previewImages(projectRoot: string, result: OfficeResult): Promise<Array<{ type: "image"; data: string; mimeType: string }>> {
+  const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+  for (const artifact of result.artifacts) {
+    for (const png of [artifact.preview, artifact.before]) {
+      if (!png) continue;
+      const bytes = await readFile(isAbsolute(png) ? png : join(projectRoot, png)).catch(() => undefined);
+      if (bytes) images.push({ type: "image", data: bytes.toString("base64"), mimeType: "image/png" });
+    }
+  }
+  return images;
+}
+
+/** Registers the single alpha_office tool (plan 6.3: one tool, path in / path out). */
 export function registerOfficeTools(pi: ExtensionAPI, ctx: CapabilityContext): void {
-  const inputsFile = join(ctx.dataRoot, "native", "office", `${ctx.sessionId}.json`);
-  let saveQueue = Promise.resolve();
-
-  async function workspace(): Promise<OfficeWorkspace> {
-    const inputs = await readFile(inputsFile, "utf8").then(text => JSON.parse(text) as Input[], () => [] as Input[]);
-    return { state: { id: ctx.sessionId, projectRoot: ctx.projectRoot, inputs } };
-  }
-  async function saveInput(input: Input): Promise<void> {
-    saveQueue = saveQueue.then(async () => {
-      await mkdir(dirname(inputsFile), { recursive: true });
-      const inputs = (await workspace()).state.inputs ?? [];
-      const temp = `${inputsFile}.${process.pid}.tmp`;
-      await writeFile(temp, JSON.stringify([...inputs, input], null, 2));
-      await rename(temp, inputsFile);
-    });
-    return saveQueue;
-  }
-
   pi.registerTool({
-    name: "alpha_office_status", label: "Office runtime", description: "Check the local Office engine; this does not open a file.",
-    parameters: type({}), async execute() { return result(await officeRuntimeStatus()); },
-  });
-  pi.registerTool({
-    name: "alpha_office_attach", label: "Attach an existing Office file", loadMode: "discoverable",
-    description: "Copy a local DOCX, XLSX, PPTX, or PDF into this session's managed inputs. The original file is unchanged. Returns an ID for read/edit/export.",
-    parameters: type({ path: "string" }),
-    async execute(_callId, args: { path: string }) {
+    name: "alpha_office",
+    label: "Office documents",
+    description: "Work on office documents by project path. Actions: inspect (editable paragraph/table/sheet/slide addresses and unsupported structures), edit (targeted ops written to a new <name>.alpha-v<N> copy; the original is never overwritten), create (markdown content to docx/pdf, table data to xlsx, outline to pptx, written to outputs/), convert (soffice conversion into outputs/), pdf (merge, split, rotate, watermark, extract with pdf-lib), preview (render pages to outputs/previews/*.png). Reading document text is the native read tool's job. inspect, edit, create docx/pdf/pptx, convert, and preview of office files need local LibreOffice; create xlsx and the pdf actions never do, and missing LibreOffice returns an explicit gap.",
+    parameters: officeParameters,
+    approval: "write",
+    async execute(_callId, params: OfficeToolParams, signal) {
       try {
-        const source = await realpath(args.path);
-        const extension = extname(source).slice(1).toLowerCase();
-        if (!["docx", "xlsx", "pptx", "pdf"].includes(extension)) throw new Error("Unsupported Office file type");
-        const info = await stat(source);
-        if (!info.isFile() || info.size > 100_000_000) throw new Error("Office file is unavailable or too large");
-        const contents = await readFile(source);
-        const hash = createHash("sha256").update(contents).digest("hex");
-        const inputId = randomUUID();
-        const directory = join(ctx.dataRoot, "task-inputs", ctx.sessionId);
-        await mkdir(directory, { recursive: true });
-        const target = join(directory, `${inputId}.${extension}`);
-        await copyFile(source, target);
-        if (createHash("sha256").update(await readFile(target)).digest("hex") !== hash) throw new Error("Office attachment changed during copy");
-        const input: Input = { id: inputId, name: basename(source), path: target, sha256: hash, mimeType: "", size: info.size, uploadedAt: new Date().toISOString() };
-        await saveInput(input);
-        return result({ id: inputId, name: input.name, sha256: hash, original: source });
-      } catch (error) { return failure(error); }
+        const projectRoot = ctx.projectRoot;
+        let result;
+        switch (params.action) {
+          case "inspect":
+            result = await officeInspect({ projectRoot }, requirePath(params.path, "inspect"), signal);
+            break;
+          case "edit":
+            result = await officeEdit({ projectRoot }, requirePath(params.path, "edit"), params.ops ?? [], signal);
+            break;
+          case "create":
+            result = await officeCreate({ projectRoot }, {
+              kind: params.kind ?? (() => { throw new OfficeError("create 需要 kind"); })(),
+              name: params.name ?? (() => { throw new OfficeError("create 需要 name"); })(),
+              content: params.content,
+              data: params.data,
+              outline: params.outline,
+              layout: params.layout,
+            }, signal);
+            break;
+          case "convert":
+            result = await officeConvert({ projectRoot }, requirePath(params.path, "convert"), params.to ?? (() => { throw new OfficeError("convert 需要 to"); })(), params.name, signal);
+            break;
+          case "pdf":
+            result = await officePdf({ projectRoot }, params.pdf ?? (() => { throw new OfficeError("pdf 动作需要 pdf 参数"); })(), signal);
+            break;
+          default:
+            result = await officePreview({ projectRoot }, requirePath(params.path, "preview"), params.pages, signal);
+            break;
+        }
+        pi.appendEntry("alpha-office", { action: params.action, input: sessionInput(params), artifacts: result.artifacts });
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result) }, ...(await previewImages(ctx.projectRoot, result))],
+        };
+      } catch (error) {
+        return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+      }
     },
-  });
-  pi.registerTool({
-    name: "alpha_office_read", label: "Read Office or PDF", loadMode: "discoverable",
-    description: "Read a managed Office/PDF attachment or output by ID. Reports unsupported structures and OCR gaps.",
-    parameters: type({ id: "string" }),
-    async execute(_callId, args: { id: string }, signal) { try { return result(await readOffice(await workspace(), ctx.dataRoot, args.id, false, signal)); } catch (error) { return failure(error); } },
-  });
-  pi.registerTool({
-    name: "alpha_office_edit", label: "Edit Office or PDF copy", loadMode: "discoverable",
-    description: "Apply targeted JSON edits to a managed attachment or output. Saves a separate version with before/after preview and verification; never overwrites the original.",
-    parameters: type({ id: "string", edits: "string" }),
-    async execute(_callId, args: { id: string; edits: string }, signal) {
-      try { const edits = JSON.parse(args.edits); if (!Array.isArray(edits)) throw new Error("edits must be an array"); return result(await editOffice(await workspace(), ctx.dataRoot, args.id, edits, signal)); }
-      catch (error) { return failure(error); }
-    },
-  });
-  pi.registerTool({
-    name: "alpha_office_export", label: "Export Office PDF", loadMode: "discoverable",
-    description: "Render an attached Office document to a separate PDF with source hash and preview.",
-    parameters: type({ id: "string" }),
-    async execute(_callId, args: { id: string }, signal) { try { return result(await exportOfficePdf(await workspace(), ctx.dataRoot, args.id, signal)); } catch (error) { return failure(error); } },
   });
 }

@@ -1,13 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, realpath, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { ComfyClient, type VideoOutput } from "./comfy-client";
-import { ensureGeneratedAsset } from "./media-integrity";
+import { ensureGeneratedAsset, ensureMediaPreview, isLegacyMediaAsset, mediaToolResult, publishMedia, recordMediaEntry, type MediaArtifact } from "./media-integrity";
 import { warnUnknownStoreVersion } from "./store-tag";
 
-const parameters = type({ referenceAsset: "string", prompt: "string" });
+const parameters = type({ referenceAsset: "string", prompt: "string", "outputPath?": "string" });
 type Graph = Record<string, { class_type: string; inputs: Record<string, unknown> }>;
 type Job = {
   promptId: string;
@@ -21,49 +21,61 @@ type Job = {
   state: "prepared" | "accepted" | "unknown" | "completed" | "failed";
   output?: VideoOutput;
   candidateAsset?: string;
+  preview?: string;
   videoSha256?: string;
   visualReview?: "pending";
   error?: string;
 };
 const sha = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 
-export async function generateVideoCandidate(projectRoot: string, dataRoot: string, presetPath: string, referenceAsset: string, prompt: string, client = new ComfyClient(), signal?: AbortSignal): Promise<Job> {
-  if (!prompt.trim() || prompt.length > 2000) throw new Error("Video prompt must contain 1–2000 characters");
-  if (!/^\/[a-zA-Z0-9_/-]+\.png$/.test(referenceAsset) || referenceAsset.split("/").includes("..")) throw new Error("Video reference must be a project-local PNG URL, such as the exact /alpha-assets/...png returned by alpha_generate_image. Do not write a placeholder or pass a public/ path.");
-  const publicRoot = await realpath(join(projectRoot, "public"));
-  const referencePath = await realpath(join(publicRoot, referenceAsset.slice(1)));
-  const rel = relative(publicRoot, referencePath);
-  if (isAbsolute(rel) || rel.startsWith("..") || !rel) throw new Error("Video reference must stay inside the project public directory");
+export async function generateVideoCandidate(projectRoot: string, dataRoot: string, presetPath: string, referenceAsset: string, prompt: string, client = new ComfyClient(), signal?: AbortSignal, outputPath?: string): Promise<Job> {
+  if (!prompt.trim() || prompt.length > 2000) throw new Error("Video prompt must contain 1-2000 characters");
+  const requestedReference = referenceAsset.trim();
+  if (!requestedReference) throw new Error("Video reference must be a PNG path returned by alpha_generate_image");
+  const referenceRoot = await realpath(projectRoot);
+  const referencePath = await realpath(isAbsolute(requestedReference) ? resolve(requestedReference) : resolve(projectRoot, requestedReference)).catch(() => {
+    throw new Error(`Video reference not found: ${requestedReference}. Pass the exact PNG path returned by alpha_generate_image`);
+  });
+  if (!isAbsolute(requestedReference)) {
+    const rel = relative(referenceRoot, referencePath);
+    if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("Video reference must stay inside the project");
+  }
   const reference = await readFile(referencePath);
-  if (reference.length < 24 || ![137, 80, 78, 71, 13, 10, 26, 10].every((value, i) => reference[i] === value)) throw new Error("Video reference is not a PNG. Use the exact generated /alpha-assets/...png URL, not a placeholder file.");
+  if (reference.length < 24 || ![137, 80, 78, 71, 13, 10, 26, 10].every((value, i) => reference[i] === value)) throw new Error("Video reference is not a PNG. Use the exact generated PNG path, not a placeholder file.");
   const width = reference.readUInt32BE(16);
   const height = reference.readUInt32BE(20);
-  if (width < 512 || height < 288 || Math.abs(width / height - 16 / 9) > 0.04) throw new Error(`Video reference must be 16:9 landscape PNG; got ${width}×${height}`);
+  if (width < 512 || height < 288 || Math.abs(width / height - 16 / 9) > 0.04) throw new Error(`Video reference must be 16:9 landscape PNG; got ${width}x${height}`);
   if (!await client.health()) throw new Error("Local ComfyUI is unavailable; no video job was submitted");
   const presetBytes = await readFile(presetPath);
   const graph = JSON.parse(presetBytes.toString("utf8")) as Graph;
   if (graph["14"]?.class_type !== "LoadImage" || graph["16"]?.class_type !== "MiniMaxH3ReferenceToVideo" || graph["33"]?.class_type !== "VHS_VideoCombine" || graph["32"]?.class_type !== "TEFlashVSRRestore" || graph["13"]?.inputs.steps !== 8 || graph["32"]?.inputs.scale !== 2) throw new Error("Video preset has changed unexpectedly");
   const presetText = presetBytes.toString("utf8");
   if (presetText.includes("api_key") || presetText.includes("api.deepseek.com")) throw new Error("Video preset contains an external prompt service");
-  const key = sha(`${resolve(projectRoot)}\n${sha(presetBytes)}\n${sha(reference)}\n${prompt.trim()}`);
+  const key = sha(`${resolve(projectRoot)}\n${sha(presetBytes)}\n${sha(reference)}\n${prompt.trim()}\n${outputPath?.trim() ?? ""}`);
   const jobsDir = join(dataRoot, "comfy-jobs");
   const recordPath = join(jobsDir, `video-${key}.json`);
   await mkdir(jobsDir, { recursive: true });
+  const fresh = (): Job => ({ promptId: randomUUID(), projectRoot: resolve(projectRoot), referenceAsset: requestedReference, referenceSha256: sha(reference), prompt: prompt.trim(), seed: Math.floor(Math.random() * 2 ** 48), presetSha256: sha(presetBytes), workflow: join(jobsDir, `video-${key}.workflow.json`), state: "prepared" });
   let job: Job;
   try {
     const handle = await open(recordPath, "wx");
-    job = { promptId: randomUUID(), projectRoot: resolve(projectRoot), referenceAsset, referenceSha256: sha(reference), prompt: prompt.trim(), seed: Math.floor(Math.random() * 2 ** 48), presetSha256: sha(presetBytes), workflow: join(jobsDir, `video-${key}.workflow.json`), state: "prepared" };
+    job = fresh();
     // .alpha/comfy-jobs/video-<key>.json (comfy-jobs store): v1 = Job plus its format tag; a version bump must migrate at the record read below.
     try { await handle.writeFile(JSON.stringify({ ...job, format: "comfy-jobs", version: 1 }, null, 2)); } finally { await handle.close(); }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     job = JSON.parse(await readFile(recordPath, "utf8")) as Job;
     warnUnknownStoreVersion("comfy-jobs", job);
+    // Records from the retired public/alpha-assets era keep their key but point at the old layout;
+    // they are migrated to a fresh prepared job so nothing is ever written under public/ again.
+    if (isLegacyMediaAsset(job.candidateAsset)) {
+      job = fresh();
+      await writeFile(recordPath, JSON.stringify({ ...job, format: "comfy-jobs", version: 1 }, null, 2));
+    }
   }
   const save = async () => writeFile(recordPath, JSON.stringify({ ...job, format: "comfy-jobs", version: 1 }, null, 2));
   if (!job.projectRoot) { job.projectRoot = resolve(projectRoot); await save(); }
   if (job.projectRoot !== resolve(projectRoot)) throw new Error("Video job belongs to another project");
-  const assetPath = join(projectRoot, "public", "alpha-assets", `${key}.mp4`);
   const download = async () => {
     const output = job.output ?? (await client.videoOutputs(job.promptId)).find(item => item.nodeId === "33" && item.filename.endsWith(".mp4"));
     if (!output) throw new Error(`ComfyUI job ${job.promptId} has no final MP4 output`);
@@ -72,8 +84,10 @@ export async function generateVideoCandidate(projectRoot: string, dataRoot: stri
     return { output, bytes };
   };
   if (job.state === "completed") {
-    if (job.candidateAsset !== `/alpha-assets/${key}.mp4` || !job.videoSha256) throw new Error("Completed video job has incomplete asset provenance");
-    await ensureGeneratedAsset(assetPath, job.videoSha256, async () => (await download()).bytes);
+    if (!job.candidateAsset || !job.videoSha256) throw new Error("Completed video job has incomplete asset provenance");
+    const target = resolve(projectRoot, job.candidateAsset);
+    await ensureGeneratedAsset(target, job.videoSha256, async () => (await download()).bytes);
+    job.preview = await ensureMediaPreview(projectRoot, target, "mp4");
     return job;
   }
   if (job.state === "failed") throw new Error(job.error ?? "Previous video job failed");
@@ -119,10 +133,11 @@ export async function generateVideoCandidate(projectRoot: string, dataRoot: stri
     }
     if (state === "completed") {
       const { output, bytes } = await download();
-      await ensureGeneratedAsset(assetPath, sha(bytes), async () => bytes);
+      const artifact = await publishMedia({ projectRoot: job.projectRoot, outputPath, name: job.prompt, kind: "mp4", bytes });
       job.output = output;
-      job.candidateAsset = `/alpha-assets/${key}.mp4`;
-      job.videoSha256 = sha(bytes);
+      job.candidateAsset = artifact.path;
+      job.preview = artifact.preview;
+      job.videoSha256 = artifact.sha256;
       job.visualReview = "pending";
       job.state = "completed";
       await save();
@@ -142,13 +157,17 @@ export function createVideoTool(projectRoot: string, dataRoot: string, presetPat
   return {
     name: "alpha_generate_video",
     label: "Generate local video candidate",
-    description: "Generate a local H3/FlashVSR MP4 candidate from a 16:9 PNG. Pass the exact /alpha-assets/...png URL returned by alpha_generate_image; do not create a reference.png placeholder or use a public/ path. This may take several minutes. The returned video needs visual review before adoption.",
+    description: "Generate a local H3/FlashVSR MP4 candidate from a 16:9 PNG. Pass the exact PNG path returned by alpha_generate_image; do not create a placeholder reference. This may take several minutes. The result is saved under outputs/media/ (or at the outputPath you pass) and returned as { summary, artifacts } with its sha256 and a thumbnail; it needs visual review before adoption.",
     parameters,
     loadMode: "essential",
-    async execute(_toolCallId, args, signal, _onUpdate, _ctx) {
+    async execute(_toolCallId, args, signal, _onUpdate, ctx) {
       try {
-        const job = await generateVideoCandidate(projectRoot, dataRoot, presetPath, args.referenceAsset, args.prompt, new ComfyClient(comfyUrl), signal);
-        return { content: [{ type: "text", text: JSON.stringify({ candidateAsset: job.candidateAsset, promptId: job.promptId, sha256: job.videoSha256, referenceSha256: job.referenceSha256, seed: job.seed, visualReview: job.visualReview }) }] };
+        const job = await generateVideoCandidate(projectRoot, dataRoot, presetPath, args.referenceAsset, args.prompt, new ComfyClient(comfyUrl), signal, args.outputPath);
+        if (!job.candidateAsset || !job.videoSha256) throw new Error("Completed video job has incomplete asset provenance");
+        const artifact: MediaArtifact = { path: job.candidateAsset, kind: "mp4", sha256: job.videoSha256, ...(job.preview ? { preview: job.preview } : {}) };
+        const summary = `Generated video candidate at ${artifact.path}; visual review is pending before adoption.`;
+        recordMediaEntry(ctx, { tool: "alpha_generate_video", input: { referenceAsset: args.referenceAsset, prompt: args.prompt }, artifacts: [artifact] });
+        return await mediaToolResult(projectRoot, summary, artifact);
       } catch (error) {
         return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
       }
