@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Copy, Hand, MonitorOff, MonitorPlay, PanelRightClose, PanelRightOpen, RotateCw, Undo2 } from "lucide-react";
 import { taskTitle } from "../state/labels";
 import { useStore } from "../state/store";
@@ -31,7 +31,6 @@ export function PreviewPane({ layoutKey, collapsed, locked, onToggle, showClose 
   const target = usePreviewTarget();
   const [shown, setShown] = useState<Shown>(null);
   const slot = useRef<HTMLDivElement>(null);
-  const bridge = window.alpha;
 
   const task = useStore(store, state => state.task);
   const selectedId = useStore(store, state => state.selectedId);
@@ -49,43 +48,10 @@ export function PreviewPane({ layoutKey, collapsed, locked, onToggle, showClose 
   useEffect(() => {
     if (target === "keep") return;
     if ((target?.url ?? null) === (shown?.url ?? null) && (target?.taskId ?? null) === (shown?.taskId ?? null)) return;
-    if (bridge) {
-      if (target) bridge.loadPreview(target.url);
-      else if (shown) bridge.clearPreview();
-    }
     setShown(target);
   }, [targetKey]); // Keyed by the target's identity rather than its object reference.
 
-  // The native preview view is positioned by the Electron main process over this slot.
-  const visible = !!shown && !!bridge && !collapsed;
-  useLayoutEffect(() => {
-    const element = slot.current;
-    if (!bridge?.setPreviewBounds) return;
-    if (!element) {
-      bridge.setPreviewBounds({ x: 0, y: 0, width: 0, height: 0, visible: false });
-      return;
-    }
-    let frame = 0;
-    const report = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        const rect = element.getBoundingClientRect();
-        // Under CSS zoom, compare the zoomed root with the window to get window pixels whichever way rects are reported.
-        const root = element.closest(".workbench")?.getBoundingClientRect();
-        const factor = root && root.width > 0 ? window.innerWidth / root.width : 1;
-        bridge.setPreviewBounds!({ x: rect.left * factor, y: rect.top * factor, width: rect.width * factor, height: rect.height * factor, visible });
-      });
-    };
-    report();
-    const observer = new ResizeObserver(report);
-    observer.observe(element);
-    window.addEventListener("resize", report);
-    return () => {
-      cancelAnimationFrame(frame);
-      observer.disconnect();
-      window.removeEventListener("resize", report);
-    };
-  }, [bridge, visible, layoutKey]);
+  const visible = !!shown && !collapsed;
 
   const owner = shown && shown.taskId !== selectedId ? titleOf(shown.taskId) : null;
   const userControls = controlHolder === "user";
@@ -147,9 +113,7 @@ export function PreviewPane({ layoutKey, collapsed, locked, onToggle, showClose 
       </span>
     </header>
     <div className="preview-slot" ref={slot} data-testid="preview-slot">
-      {shown && !bridge
-        ? <div className="preview-empty"><MonitorOff size={26} aria-hidden /><strong>内置预览仅在 Alpha 桌面版中显示</strong></div>
-        : !shown && <div className="preview-empty">
+      {!shown && <div className="preview-empty">
           {task?.running && !owner ? <Spinner size={22} /> : task?.preview && !task.preview.live ? <MonitorOff size={26} aria-hidden /> : <MonitorPlay size={26} aria-hidden />}
           <strong>{emptyTitle}</strong>
           {emptyDetail && <p>{emptyDetail}</p>}

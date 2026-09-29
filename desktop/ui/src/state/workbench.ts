@@ -554,14 +554,6 @@ async function resync(): Promise<void> {
 
 export function startWorkbench(): () => void {
   const stopNotificationClick = window.alpha?.onOpenTask?.(id => { void openTask(id); });
-  const stopWebTabRequest = window.alpha?.onWebTabRequested?.(({ taskId, tabId }) => {
-    if (store.get().selectedId === taskId) selectBrowserTab(tabId);
-    else if (!store.get().selectedId) void openTask(taskId).then(() => { if (store.get().selectedId === taskId) selectBrowserTab(tabId); });
-    else notify("网页已在另一任务中打开，切换到该任务查看", "info");
-  });
-  const stopWebTabClosed = window.alpha?.onWebTabClosed?.(tabId => {
-    if (store.get().browserTabId === tabId) store.set({ browserTabId: null });
-  });
   const disconnect = connectEvents({
     onMessage: handleMessage,
     onState: connection => store.set({ connection }),
@@ -593,8 +585,6 @@ export function startWorkbench(): () => void {
   window.addEventListener("beforeunload", onUnload);
   return () => {
     stopNotificationClick?.();
-    stopWebTabRequest?.();
-    stopWebTabClosed?.();
     window.removeEventListener("beforeunload", onUnload);
     disconnect();
     clearInterval(poll);

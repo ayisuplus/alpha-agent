@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Globe, X } from "lucide-react";
 import { api } from "../api/client";
 import type { WebTab } from "../api/types";
@@ -7,37 +7,9 @@ import { closeWorkspace, notify, selectBrowserTab, store } from "../state/workbe
 import { PreviewPane } from "./PreviewPane";
 import "./BrowserPane.css";
 
-const hidden = { x: 0, y: 0, width: 0, height: 0, visible: false };
-
-function WebPage({ tabId, layoutKey }: { tabId: string; layoutKey: string }) {
-  const slot = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
-    const bridge = window.alpha;
-    const element = slot.current;
-    if (!bridge?.setWebBounds || !element) return;
-    let frame = 0;
-    const report = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        const rect = element.getBoundingClientRect();
-        const root = element.closest(".workbench")?.getBoundingClientRect();
-        const factor = root && root.width > 0 ? window.innerWidth / root.width : 1;
-        bridge.setWebBounds!(tabId, { x: rect.left * factor, y: rect.top * factor, width: rect.width * factor, height: rect.height * factor, visible: true });
-      });
-    };
-    report();
-    const observer = new ResizeObserver(report);
-    observer.observe(element);
-    window.addEventListener("resize", report);
-    return () => {
-      cancelAnimationFrame(frame);
-      observer.disconnect();
-      window.removeEventListener("resize", report);
-      bridge.setWebBounds?.(tabId, hidden);
-    };
-  }, [tabId, layoutKey]);
-  return <div className="web-native-slot" ref={slot} data-testid="web-native-slot">
-    {!window.alpha?.setWebBounds && <p>内置网页仅在 Alpha 桌面版中显示。</p>}
+function WebPage({ tabId: _tabId, layoutKey: _layoutKey }: { tabId: string; layoutKey: string }) {
+  return <div className="web-native-slot" data-testid="web-native-slot">
+    <p>内置网页仅在 Alpha 桌面版中显示。</p>
   </div>;
 }
 

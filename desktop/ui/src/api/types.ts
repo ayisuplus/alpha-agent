@@ -402,29 +402,53 @@ export type ServerMessage =
   | { type: "control"; holder: ControlHolder }
   | { type: "error"; taskId?: string; message: string; runId?: string };
 
-export interface PreviewRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  visible: boolean;
+// ── 桌面 preload 契约（desktop/preload.cjs 顶部注释为准）────────────────────────────────────────
+export interface BrowserHostStatus {
+  available: boolean;
+  port: number | null;
+  reason?: string;
+}
+
+export interface BrowserTabInfo {
+  targetId: string;
+  url: string;
+  title: string;
+}
+
+export interface BrowserScreencastFrame {
+  targetId: string;
+  format: "jpeg";
+  /** base64 JPEG；null = 该目标帧流结束（见 error）。 */
+  data: string | null;
+  error?: string;
+  metadata: {
+    offsetTop: number;
+    pageScaleFactor: number;
+    deviceWidth: number;
+    deviceHeight: number;
+    scrollOffsetX: number;
+    scrollOffsetY: number;
+    timestamp: number;
+  };
 }
 
 declare global {
   interface Window {
     alpha?: {
-      loadPreview(url: string): void;
-      clearPreview(): void;
-      setPreviewBounds?(rect: PreviewRect): void;
-      setWebBounds?(tabId: string | null, rect: PreviewRect): void;
-      onWebTabRequested?(callback: (request: { taskId: string; tabId: string }) => void): () => void;
-      onWebTabClosed?(callback: (tabId: string) => void): () => void;
+      serverToken?(): Promise<string>;
       openFolder?(path: string): Promise<string>;
       openExternal?(url: string): Promise<boolean>;
       saveText?(filename: string, content: string): Promise<boolean>;
       notify?(title: string, body: string, taskId: string): void;
       attention?(): void;
       onOpenTask?(callback: (taskId: string) => void): () => void;
+      browserHostStatus?(): Promise<BrowserHostStatus>;
+      browserTabs?(): Promise<{ available: boolean; tabs: BrowserTabInfo[]; error?: string }>;
+      browserScreencast?(request: { action: "start" | "stop"; targetId: string; maxDimension?: number }): Promise<{ ok: boolean; error?: string }>;
+      browserTakeover?(request: { rect: { x: number; y: number; width: number; height: number }; targetId?: string }): Promise<{ ok: boolean; error?: string }>;
+      browserHandback?(): Promise<{ ok: boolean; error?: string }>;
+      onBrowserScreencastFrame?(callback: (frame: BrowserScreencastFrame) => void): () => void;
+      onBrowserHostStatusChanged?(callback: (status: BrowserHostStatus) => void): () => void;
     };
   }
 }

@@ -125,7 +125,6 @@ export function App() {
   // Settings and automations are not about the selected task, so its review panel steps aside for them
   // (it stays only while the browser is operating the preview) and returns unchanged when they close.
   const expanded = workspaceView !== "closed" && (!panelOpen || locked);
-  const showingPreview = expanded && workspaceView === "preview";
 
   const setRatio = (ratio: number) => void updateSettings({ ui: { previewRatio: Math.min(0.8, Math.max(0.2, ratio)) } }, { debounce: true });
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -149,10 +148,6 @@ export function App() {
   const columns = expanded
     ? `${sidebarWidth}px minmax(0, 1fr) ${SPLITTER}px ${previewWidth}px`
     : `${sidebarWidth}px minmax(0, 1fr) ${WORKSPACE_RAIL}px`;
-
-  useEffect(() => {
-    if (!showingPreview) window.alpha?.setPreviewBounds?.({ x: 0, y: 0, width: 0, height: 0, visible: false });
-  }, [showingPreview]);
 
   if (!settings && !loaded) return <div className="workbench-loading" />;
 

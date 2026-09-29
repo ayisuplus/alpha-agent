@@ -1,0 +1,361 @@
+/**
+ * 会话生命周期与消息流（方案 8.2 的 useSession）：
+ * 选中会话 → `POST /open` 拉起 OMP 进程 → 订阅 events SSE → 读取 state/messages/models/files。
+ * 进程被回收（`host_exit`）时提示并允许重新 /open。
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  NativeApiError,
+  openSession,
+  request,
+  sessionEventsUrl,
+  sessionRequest,
+  type LegacyTask,
+  type NativeMessage,
+  type NativeState,
+  type SessionItem,
+  type UiRequest,
+} from "./native-api";
+
+export interface LogEntry { at: string; text: string }
+export interface PendingCall { toolCallId: string; toolName: string; args: unknown; startedAt: number }
+export interface WidgetBlock { key: string; lines: string[] }
+export interface AttachedImage { data: string; mimeType: string; name: string }
+
+export interface SessionController {
+  sessions: SessionItem[];
+  legacy: LegacyTask[];
+  selected: string | null;
+  current: SessionItem | null;
+  opened: boolean;
+  /** 进程停止或打不开时的提示（host_exit / 409），非空即显示“重新打开会话”。 */
+  hostNotice: string | null;
+  reopen(): void;
+  select(id: string | null): void;
+  create(cwd?: string): Promise<boolean>;
+  continueLegacy(task: LegacyTask): Promise<boolean>;
+  startFromHome(input: { text: string; cwd: string; model: string; thinking: string }): Promise<boolean>;
+  state: NativeState | null;
+  messages: NativeMessage[];
+  /** 旧版任务“继续”带回来的续写草稿；Composer 拾取后调用 consumeDraft 清除。 */
+  queuedDraft: string;
+  consumeDraft(): void;
+  models: Array<{ provider: string; id: string; name?: string }>;
+  files: Array<{ name: string; type: string; size?: number }>;
+  pendingCalls: PendingCall[];
+  /** toolCallId → 耗时（毫秒），来自 tool_execution_start/end 事件。 */
+  toolTiming: Record<string, number>;
+  /** 自动压缩/自动重试的进行中一行说明（消息流落库后由持久记录接管）。 */
+  liveNotes: Array<{ id: string; text: string }>;
+  widgets: WidgetBlock[];
+  tianshuStatus: string | null;
+  logs: LogEntry[];
+  uiRequest: UiRequest | null;
+  uiValue: string;
+  setUiValue(value: string): void;
+  respond(confirmed?: boolean): Promise<void>;
+  externalUrl: string;
+  setExternalUrl(value: string): void;
+  terminalActive: boolean;
+  terminalOutput: string;
+  terminal(action: "start" | "stop"): Promise<void>;
+  command(value: Record<string, unknown>): Promise<boolean>;
+  send(text: string, image?: AttachedImage): Promise<boolean>;
+  refresh(): void;
+  reloadList(): Promise<void>;
+  busy: boolean;
+  error: string;
+  setError(value: string): void;
+}
+
+const REFRESH_EVENTS = ["message_end", "prompt_result", "session_settled", "agent_end", "model_changed", "session_tree"];
+const LOG_EVENTS = ["subagent_lifecycle", "subagent_progress", "host_error", "auto_retry_end", "auto_compaction_end"];
+
+export function useSession(): SessionController {
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [legacy, setLegacy] = useState<LegacyTask[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [opened, setOpened] = useState(false);
+  const [hostNotice, setHostNotice] = useState<string | null>(null);
+  const [state, setState] = useState<NativeState | null>(null);
+  const [messages, setMessages] = useState<NativeMessage[]>([]);
+  const [models, setModels] = useState<Array<{ provider: string; id: string; name?: string }>>([]);
+  const [files, setFiles] = useState<Array<{ name: string; type: string; size?: number }>>([]);
+  const [pendingCalls, setPendingCalls] = useState<PendingCall[]>([]);
+  const [toolTiming, setToolTiming] = useState<Record<string, number>>({});
+  const [liveNotes, setLiveNotes] = useState<Array<{ id: string; text: string }>>([]);
+  const [widgets, setWidgets] = useState<WidgetBlock[]>([]);
+  const [tianshuStatus, setTianshuStatus] = useState<string | null>(null);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [uiRequest, setUiRequest] = useState<UiRequest | null>(null);
+  const [uiValue, setUiValue] = useState("");
+  const [externalUrl, setExternalUrl] = useState("");
+  const [terminalActive, setTerminalActive] = useState(false);
+  const [terminalOutput, setTerminalOutput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [queuedDraft, setQueuedDraft] = useState("");
+  const [openNonce, setOpenNonce] = useState(0);
+
+  const selectedRef = useRef<string | null>(null);
+  const toolStarts = useRef<Map<string, number>>(new Map());
+  selectedRef.current = selected;
+
+  const reloadList = useCallback(async () => {
+    const [live, old] = await Promise.all([
+      request<{ sessions: SessionItem[] }>("/api/native/sessions"),
+      request<{ tasks: LegacyTask[] }>("/api/native/legacy"),
+    ]);
+    setSessions(live.sessions);
+    setLegacy(old.tasks);
+  }, []);
+
+  const loadSelected = useCallback(async (id: string) => {
+    const terminal = await sessionRequest<{ active: boolean; output: string }>(id, "terminal");
+    if (selectedRef.current !== id) return;
+    setTerminalActive(terminal.active);
+    setTerminalOutput(terminal.output);
+    if (terminal.active) return;
+    // 契约：state/messages/models 要求进程已打开（POST /open 之后才读）。
+    const [nextState, history, available, directory] = await Promise.all([
+      sessionRequest<NativeState>(id, "state"),
+      sessionRequest<{ messages: NativeMessage[] }>(id, "messages"),
+      sessionRequest<{ models: Array<{ provider: string; id: string; name?: string }> }>(id, "models"),
+      sessionRequest<{ files: Array<{ name: string; type: string; size?: number }> }>(id, "files"),
+    ]);
+    if (selectedRef.current !== id) return;
+    setState(nextState);
+    setMessages(history.messages ?? []);
+    setModels(available.models ?? []);
+    setFiles(directory.files ?? []);
+    setPendingCalls(current => {
+      const settled = new Set((history.messages ?? []).map(message => message.toolCallId).filter(Boolean));
+      return current.filter(call => !settled.has(call.toolCallId));
+    });
+  }, []);
+
+  useEffect(() => {
+    void reloadList().catch(cause => setError(String(cause)));
+  }, [reloadList]);
+
+  useEffect(() => {
+    if (!selected) {
+      setState(null); setMessages([]); setModels([]); setFiles([]); setLogs([]); setWidgets([]);
+      setPendingCalls([]); setToolTiming({}); setLiveNotes([]); setTianshuStatus(null);
+      setTerminalActive(false); setTerminalOutput(""); setOpened(false); setHostNotice(null);
+      return;
+    }
+    let cancelled = false;
+    let feed: EventSource | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    setState(null); setMessages([]); setLogs([]); setWidgets([]); setPendingCalls([]); setToolTiming({});
+    setLiveNotes([]); setTianshuStatus(null); setOpened(false); setHostNotice(null); setError("");
+    const refresh = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => void loadSelected(selected).catch(cause => { if (!cancelled) setError(String(cause)); }), 180);
+    };
+    void (async () => {
+      try {
+        await openSession(selected);
+        if (cancelled) return;
+        setOpened(true);
+        void reloadList().catch(() => undefined);
+        feed = new EventSource(await sessionEventsUrl(selected));
+        feed.onmessage = event => {
+          const frame = JSON.parse(event.data) as Record<string, unknown>;
+          const type = String(frame.type ?? "");
+          const at = new Date().toLocaleTimeString();
+          if (type === "terminal_start") setTerminalActive(true);
+          if (type === "terminal_chunk") setTerminalOutput(current => (current + String(frame.chunk ?? "")).slice(-100_000));
+          if (type === "terminal_exit") { setTerminalActive(false); refresh(); }
+          if (type === "terminal_error") setError(String(frame.error ?? "Alpha 终端启动失败"));
+          if (type === "extension_ui_request") handleUiFrame(frame, {
+            onDialog(request) { setUiValue(request.prefill ?? ""); setUiRequest(request); },
+            onUrl(value) { setExternalUrl(value); },
+            onNotify(message) { setLogs(items => [...items.slice(-149), { at, text: message }]); },
+            onStatus(key, text) { if (key === "tianshu") setTianshuStatus(text ?? null); },
+            onWidget(key, lines) {
+              setWidgets(current => {
+                const rest = current.filter(block => block.key !== key);
+                return lines === undefined ? rest : [...rest, { key, lines }];
+              });
+            },
+            onTitle(title) {
+              setSessions(current => current.map(item => item.id === selectedRef.current ? { ...item, title } : item));
+            },
+          });
+          if (type === "tool_execution_start") {
+            const call: PendingCall = { toolCallId: String(frame.toolCallId ?? ""), toolName: String(frame.toolName ?? "工具"), args: frame.args ?? frame.arguments, startedAt: Date.now() };
+            toolStarts.current.set(call.toolCallId, call.startedAt);
+            if (call.toolCallId) setPendingCalls(current => [...current.filter(item => item.toolCallId !== call.toolCallId), call]);
+          }
+          if (type === "tool_execution_end") {
+            const id = String(frame.toolCallId ?? "");
+            const started = toolStarts.current.get(id);
+            toolStarts.current.delete(id);
+            if (started !== undefined) setToolTiming(current => ({ ...current, [id]: Date.now() - started }));
+            setPendingCalls(current => current.filter(call => call.toolCallId !== id));
+            setLogs(items => [...items.slice(-149), { at, text: `${frame.toolName ?? "工具"} ${frame.isError ? "失败" : "完成"}` }]);
+          }
+          if (type === "auto_compaction_start") setLiveNotes(current => [...current.filter(note => note.id !== "compact"), { id: "compact", text: "自动压缩上下文（进行中）…" }]);
+          if (type === "auto_compaction_end") setLiveNotes(current => current.filter(note => note.id !== "compact"));
+          if (type === "auto_retry_start") setLiveNotes(current => [...current.filter(note => note.id !== "retry"), { id: "retry", text: `自动重试（第 ${Number(frame.attempt ?? 1)} 次）…` }]);
+          if (type === "auto_retry_end") setLiveNotes(current => current.filter(note => note.id !== "retry"));
+          if (type === "host_exit") {
+            setOpened(false);
+            setHostNotice(String(frame.error ?? "Alpha 已停止这个会话的进程。"));
+            refresh();
+          }
+          if (type === "host_error") setLogs(items => [...items.slice(-149), { at, text: `host_error: ${String(frame.error ?? "")}` }]);
+          if (REFRESH_EVENTS.includes(type)) refresh();
+          if (LOG_EVENTS.includes(type)) setLogs(items => [...items.slice(-149), { at, text: `${type}: ${String(frame.toolName ?? frame.payload ?? "")}` }]);
+        };
+        feed.onerror = () => setError("与 Alpha 本机服务的事件连接已断开，正在重连。");
+        await loadSelected(selected);
+      } catch (cause) {
+        if (cancelled) return;
+        const message = cause instanceof NativeApiError && cause.status === 409 ? "会话进程未打开" : String(cause);
+        setHostNotice(message);
+        setOpened(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      feed?.close();
+    };
+  }, [selected, openNonce, loadSelected, reloadList]);
+
+  useEffect(() => { void reloadList().catch(() => undefined); }, [messages.length, reloadList]);
+
+  const select = useCallback((id: string | null) => {
+    setSelected(id);
+    setUiRequest(null);
+  }, []);
+
+  const reopen = useCallback(() => setOpenNonce(current => current + 1), []);
+
+  const create = useCallback(async (cwd?: string) => {
+    setBusy(true); setError("");
+    try {
+      const result = await request<{ session: SessionItem }>("/api/native/sessions", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: cwd || undefined }),
+      });
+      await reloadList();
+      select(result.session.id);
+      return true;
+    } catch (cause) { setError(String(cause)); return false; }
+    finally { setBusy(false); }
+  }, [reloadList, select]);
+
+  const continueLegacy = useCallback(async (task: LegacyTask) => {
+    setBusy(true); setError("");
+    try {
+      const result = await request<{ session: SessionItem; draft: string }>(`/api/native/legacy/${encodeURIComponent(task.id)}/continue`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+      });
+      await reloadList();
+      setQueuedDraft(result.draft ?? "");
+      select(result.session.id);
+      return true;
+    } catch (cause) { setError(String(cause)); return false; }
+    finally { setBusy(false); }
+  }, [reloadList, select]);
+
+  const startFromHome = useCallback(async (input: { text: string; cwd: string; model: string; thinking: string }) => {
+    const text = input.text.trim();
+    if (!text || !input.model || busy) return false;
+    setBusy(true); setError("");
+    try {
+      const result = await request<{ session: SessionItem }>("/api/native/sessions", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: input.cwd.trim() || undefined, title: text.slice(0, 70) }),
+      });
+      const [provider, ...modelId] = input.model.split("/");
+      await openSession(result.session.id);
+      await sessionRequest(result.session.id, "command", { type: "set_model", provider, modelId: modelId.join("/") });
+      if (input.thinking !== "auto") await sessionRequest(result.session.id, "command", { type: "set_thinking_level", level: input.thinking });
+      await reloadList();
+      select(result.session.id);
+      await sessionRequest(result.session.id, "command", { type: "prompt", message: text });
+      return true;
+    } catch (cause) { setError(String(cause)); return false; }
+    finally { setBusy(false); }
+  }, [busy, reloadList, select]);
+
+  const command = useCallback(async (value: Record<string, unknown>) => {
+    const id = selectedRef.current;
+    if (!id) return false;
+    setError("");
+    try {
+      await sessionRequest(id, "command", value);
+      void loadSelected(id).catch(() => undefined);
+      return true;
+    } catch (cause) { setError(String(cause)); return false; }
+  }, [loadSelected]);
+
+  const send = useCallback(async (text: string, image?: AttachedImage) => {
+    const message = text.trim();
+    if (!message || !selectedRef.current) return false;
+    const images = image ? [{ type: "image", data: image.data, mimeType: image.mimeType }] : undefined;
+    return command({ type: state?.isStreaming ? "steer" : "prompt", message, ...(images ? { images } : {}) });
+  }, [command, state?.isStreaming]);
+
+  const terminal = useCallback(async (action: "start" | "stop") => {
+    const id = selectedRef.current;
+    if (!id) return;
+    try {
+      await sessionRequest(id, `terminal/${action}`, action === "start" ? { cols: 100, rows: 30 } : {});
+      if (action === "start") { setTerminalOutput(""); setTerminalActive(true); }
+    } catch (cause) { setError(String(cause)); }
+  }, []);
+
+  const respond = useCallback(async (confirmed?: boolean) => {
+    const id = selectedRef.current;
+    if (!id || !uiRequest) return;
+    const response = confirmed === false ? { type: "extension_ui_response", id: uiRequest.id, cancelled: true }
+      : uiRequest.method === "confirm" ? { type: "extension_ui_response", id: uiRequest.id, confirmed: true }
+      : { type: "extension_ui_response", id: uiRequest.id, value: uiValue };
+    try {
+      await sessionRequest(id, "ui-response", response);
+      setUiRequest(null);
+    } catch (cause) { setError(String(cause)); }
+  }, [uiRequest, uiValue]);
+
+  const refresh = useCallback(() => {
+    const id = selectedRef.current;
+    if (id) void loadSelected(id).catch(cause => setError(String(cause)));
+  }, [loadSelected]);
+
+  return {
+    sessions, legacy, selected, current: sessions.find(item => item.id === selected) ?? null,
+    opened, hostNotice, reopen, select, create, continueLegacy, startFromHome,
+    state, messages, queuedDraft, consumeDraft: () => setQueuedDraft(""),
+    models, files, pendingCalls, toolTiming, liveNotes, widgets, tianshuStatus, logs,
+    uiRequest, uiValue, setUiValue, respond, externalUrl, setExternalUrl,
+    terminalActive, terminalOutput, terminal, command, send, refresh, reloadList,
+    busy, error, setError,
+  };
+}
+
+/** extension_ui_request 帧分流：对话框 / 打开链接 / 通知 / 状态段 / 部件字符串行 / 标题。 */
+function handleUiFrame(frame: Record<string, unknown>, sinks: {
+  onDialog(request: UiRequest): void;
+  onUrl(value: string): void;
+  onNotify(message: string): void;
+  onStatus(key: string, text: string | undefined): void;
+  onWidget(key: string, lines: string[] | undefined): void;
+  onTitle(title: string): void;
+}): void {
+  const method = String(frame.method ?? "");
+  if (["select", "confirm", "input", "editor"].includes(method)) {
+    sinks.onDialog(frame as unknown as UiRequest);
+    return;
+  }
+  if (method === "open_url") sinks.onUrl(String(frame.launchUrl ?? frame.url ?? ""));
+  else if (method === "notify") sinks.onNotify(String(frame.message ?? "Alpha 通知"));
+  else if (method === "setStatus") sinks.onStatus(String(frame.statusKey ?? ""), typeof frame.statusText === "string" ? frame.statusText : undefined);
+  else if (method === "setWidget") sinks.onWidget(String(frame.widgetKey ?? ""), Array.isArray(frame.widgetLines) ? frame.widgetLines.map(String) : undefined);
+  else if (method === "setTitle" && typeof frame.title === "string" && frame.title.trim()) sinks.onTitle(frame.title.trim().slice(0, 120));
+}
