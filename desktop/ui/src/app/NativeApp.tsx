@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowUp, BrainCircuit, CircleStop, FileText, FolderOpen, Globe2, Plus, RotateCcw, Terminal } from "lucide-react";
+import { ArrowUp, BrainCircuit, CircleStop, FileText, FolderOpen, Globe2, Plus, RotateCcw, Settings, Terminal } from "lucide-react";
 import { NativeTerminal } from "./NativeTerminal";
+import { Greeting } from "../components/Greeting";
+import { Halftone } from "../components/Halftone";
+import "../components/NewTask.css";
+import { NativeSettings } from "./NativeSettings";
+import { NativeModelPicker } from "./NativeModelPicker";
+import { modelPreference, nativeApi, type NativeCatalog, type NativeConfig } from "./native-api";
 import "./NativeApp.css";
 
 type Session = { id: string; cwd: string; title: string; createdAt: string; updatedAt: string; legacyTaskId?: string };
@@ -57,6 +63,14 @@ export function NativeApp() {
   const [uiValue, setUiValue] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [config, setConfig] = useState<NativeConfig | null>(null);
+  const [catalog, setCatalog] = useState<NativeCatalog | null>(null);
+  const [homeModel, setHomeModel] = useState("");
+  const [thinking, setThinking] = useState("");
+  const [homeDraft, setHomeDraft] = useState(() => localStorage.getItem("alpha-new-task-draft") ?? "");
+  const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem("alpha-native-font-size")) || 14);
+  const [workspaceVisible, setWorkspaceVisible] = useState(() => localStorage.getItem("alpha-native-workspace") !== "false");
   const [image, setImage] = useState<{ data: string; mimeType: string; name: string } | null>(null);
   const [terminalActive, setTerminalActive] = useState(false);
   const [terminalOutput, setTerminalOutput] = useState("");
@@ -64,6 +78,22 @@ export function NativeApp() {
   const selectedRef = useRef<string | null>(null);
   const alertedVersion = useRef<string | null>(null);
   selectedRef.current = selected;
+  const reloadConfiguration = useCallback(async () => {
+    const [nextConfig, nextCatalog] = await Promise.all([nativeApi<NativeConfig>("configuration"), nativeApi<NativeCatalog>("models")]);
+    setConfig(nextConfig); setCatalog(nextCatalog);
+  }, []);
+  useEffect(() => { void reloadConfiguration().catch(cause => setError(String(cause))); }, [reloadConfiguration]);
+  useEffect(() => { localStorage.setItem("alpha-new-task-draft", homeDraft); }, [homeDraft]);
+  useEffect(() => { localStorage.setItem("alpha-native-font-size", String(fontSize)); }, [fontSize]);
+  useEffect(() => { localStorage.setItem("alpha-native-workspace", String(workspaceVisible)); }, [workspaceVisible]);
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === ",") { event.preventDefault(); setSettingsOpen(true); }
+      if (event.key === "Escape") setSettingsOpen(false);
+    };
+    window.addEventListener("keydown", shortcut);
+    return () => window.removeEventListener("keydown", shortcut);
+  }, []);
 
   useEffect(() => {
     void api<UpdateStatus>("/api/native/updates").then(setUpdate, cause => setError(String(cause)));
@@ -142,21 +172,39 @@ export function NativeApp() {
   }, []);
   useEffect(() => {
     const slot = browserSlot.current;
-    const visible = activeTab === "browser" && browserTabs.some(item => item.taskId === selected && item.tabId === browserTab);
+    const visible = !settingsOpen && workspaceVisible && activeTab === "browser" && browserTabs.some(item => item.taskId === selected && item.tabId === browserTab);
     if (!slot || !visible || !browserTab) { window.alpha?.setWebBounds?.(null, { x: 0, y: 0, width: 0, height: 0, visible: false }); return; }
     const update = () => { const rect = slot.getBoundingClientRect(); window.alpha?.setWebBounds?.(browserTab, { x: rect.x, y: rect.y, width: rect.width, height: rect.height, visible: true }); };
     const observer = new ResizeObserver(update);
     observer.observe(slot);
     update();
     return () => { observer.disconnect(); window.alpha?.setWebBounds?.(browserTab, { x: 0, y: 0, width: 0, height: 0, visible: false }); };
-  }, [activeTab, browserTab, browserTabs, selected]);
+  }, [activeTab, browserTab, browserTabs, selected, settingsOpen, workspaceVisible]);
 
   const current = useMemo(() => sessions.find(item => item.id === selected), [sessions, selected]);
+  const defaultPreference = modelPreference(catalog?.models ?? [], config?.modelRoles.default ?? "");
+  const chosenModel = homeModel || defaultPreference.selector || catalog?.models.find(model => model.available)?.selector || "";
+  const chosenThinking = thinking || (!homeModel && defaultPreference.thinking) || String(config?.settings.find(item => item.id === "defaultThinkingLevel")?.value ?? "auto");
+  async function startFromHome(): Promise<void> {
+    if (!homeDraft.trim() || !chosenModel || busy) return;
+    setBusy(true); setError("");
+    try {
+      const { session } = await api<{ session: Session }>("/api/native/sessions", { cwd: projectPath.trim() || undefined, title: homeDraft.trim().slice(0, 70) });
+      const [provider, ...modelId] = chosenModel.split("/");
+      await api(pathFor(session.id, "command"), { type: "set_model", provider, modelId: modelId.join("/") });
+      if (chosenThinking !== "auto") await api(pathFor(session.id, "command"), { type: "set_thinking_level", level: chosenThinking });
+      await loadList(); setSelected(session.id); setDraft(homeDraft.trim());
+      await api(pathFor(session.id, "command"), { type: "prompt", message: homeDraft.trim() });
+      setHomeDraft(""); setDraft("");
+      await loadSelected(session.id);
+    } catch (cause) { setError(String(cause)); }
+    finally { setBusy(false); }
+  }
   async function create(cwd?: string): Promise<void> {
     setBusy(true); setError("");
     try {
       const result = await api<{ session: Session }>("/api/native/sessions", { cwd: cwd || current?.cwd });
-      await loadList(); setSelected(result.session.id); setDraft(""); setProjectDialog(false);
+      await loadList(); setSelected(result.session.id); setDraft(""); setProjectDialog(false); setSettingsOpen(false);
     } catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   }
@@ -202,20 +250,21 @@ export function NativeApp() {
     catch (cause) { setError(String(cause)); }
   }
 
-  return <div className="native-workbench">
+  return <div className={`native-workbench ${!current || settingsOpen || !workspaceVisible ? "native-wide" : ""}`} style={{ "--native-message-size": `${fontSize}px` } as React.CSSProperties}>
     <aside className="native-sidebar">
       <div className="native-brand"><span className="native-mark">α</span><span><strong>Alpha</strong><small>OMP · 天枢认知</small></span></div>
-      <button className="native-new" onClick={() => void create()} disabled={busy}><Plus size={16} /> 新会话</button>
+      <button className="native-new" onClick={() => { setSelected(null); setSettingsOpen(false); }} disabled={busy}><Plus size={16} /> 新会话</button>
       <button className="native-project-choice" onClick={() => { setProjectPath(""); setProjectDialog(true); }}>在其他目录开始</button>
       <div className="native-list-title">原生会话</div>
-      <div className="native-session-list">{sessions.map(item => <button key={item.id} className={`native-session ${selected === item.id ? "active" : ""}`} onClick={() => setSelected(item.id)} title={item.cwd}><span>{item.title}</span><small>{item.cwd}</small></button>)}</div>
+      <div className="native-session-list">{sessions.map(item => <button key={item.id} className={`native-session ${selected === item.id ? "active" : ""}`} onClick={() => { setSelected(item.id); setSettingsOpen(false); }} title={item.cwd}><span>{item.title}</span><small>{item.cwd}</small></button>)}</div>
       <div className="native-list-title">旧任务 · 只读</div>
       <div className="native-session-list native-legacy">{legacy.map(item => <div className="native-old" key={item.id}><span title={item.objective}>{item.title}</span><button onClick={() => void continueLegacy(item)} disabled={busy}>用 OMP 继续</button></div>)}</div>
+      <button className="native-settings-entry" onClick={() => setSettingsOpen(true)}><Settings size={17} /> 设置 <kbd>Ctrl ,</kbd></button>
       <div className="native-version">OMP {update?.current ?? "18.4.3"} <span>·</span> Tianshu v3.27.0 {update?.error && <button title={update.error} onClick={() => void api<UpdateStatus>("/api/native/updates/check", {}).then(setUpdate, cause => setError(String(cause)))}>检测失败 · 重试</button>}</div>
     </aside>
     <main className="native-main">
       {update?.available && update.latest && <div className="native-update-banner" role="status"><strong>OMP {update.latest} 已发布</strong><span>当前 {update.current}。请告诉我“更新 Alpha 的 OMP”，我会先核对变更；不会自动替你升级。</span><button onClick={() => { const url = "https://github.com/can1357/oh-my-pi/releases"; if (window.alpha?.openExternal) void window.alpha.openExternal(url); else window.open(url, "_blank"); }}>发布说明</button></div>}
-      {current ? <>
+      {settingsOpen ? <NativeSettings config={config} catalog={catalog} onConfig={setConfig} reload={reloadConfiguration} onClose={() => setSettingsOpen(false)} fontSize={fontSize} setFontSize={setFontSize} workspaceVisible={workspaceVisible} setWorkspaceVisible={setWorkspaceVisible} /> : current ? <>
         <header className="native-header"><div><strong>{current.title}</strong><small>{current.cwd}</small></div><div className="native-header-actions">
           <span className={`native-status ${state?.isStreaming ? "running" : ""}`}>{state?.isStreaming ? "运行中" : state?.hasPendingAsyncWork ? "后台任务" : state?.isSettled ? "本轮结束" : "就绪"}</span>
           <button title="刷新" onClick={() => void loadSelected(current.id)}><RotateCcw size={16} /></button>
@@ -226,9 +275,16 @@ export function NativeApp() {
         <div className="native-thread">{messages.length ? messages.filter(message => message.role !== "custom").map((message, index) => <article key={`${index}-${message.timestamp ?? 0}`} className={`native-message ${message.role}`}><div className="native-role">{messageLabel(message)}</div>{message.role === "toolResult" ? <details><summary>{message.isError ? "执行失败" : "查看结果"}</summary><pre>{plain(message)}</pre></details> : <div className="native-markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}>{plain(message)}</ReactMarkdown>{Array.isArray(message.content) && message.content.filter(part => part.type === "toolCall").map((part, i) => <div className="native-tool-call" key={i}>调用 {part.name}</div>)}</div>}</article>) : <div className="native-welcome"><div className="native-glyph">α</div><h1>从这里开始</h1><p>告诉 OMP 你想完成什么。天枢会根据实际证据提供认知建议。</p></div>}<div ref={end} /></div>
         <div className="native-compose"><div className="native-compose-tools"><label title="添加图片"><FileText size={16} /><input type="file" accept="image/*" onChange={event => void attachImage(event.target.files?.[0])} /></label>{image && <span>{image.name} <button onClick={() => setImage(null)}>×</button></span>}
           <select title="模型" value={state?.model ? `${state.model.provider}/${state.model.id}` : ""} onChange={event => { const [provider, ...rest] = event.target.value.split("/"); void command({ type: "set_model", provider, modelId: rest.join("/") }); }}><option value="">选择模型</option>{models.map(model => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name ?? model.id} · {model.provider}</option>)}</select>
+          <select aria-label="当前会话思考强度" value={state?.thinkingLevel ?? "off"} onChange={event => void command({ type: "set_thinking_level", level: event.target.value })}>{["off", "minimal", "low", "medium", "high", "xhigh", "max"].map(level => <option key={level}>{level}</option>)}</select>
+          <button onClick={() => setSettingsOpen(true)}>模型设置</button>
           <button onClick={() => void command({ type: "compact" })} title="原生上下文压缩">压缩上下文</button>
         </div><textarea value={draft} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder={state?.isStreaming ? "补充要求，将作为 steer 送入 OMP…" : "向 OMP 说明你的任务…"} /><div className="native-compose-bottom"><span>{state?.model ? `${state.model.provider}/${state.model.id}` : "OMP 原生模型配置"}</span><button disabled={!draft.trim()} onClick={() => void send()} aria-label="发送"><ArrowUp size={17} /></button></div></div></>}
-      </> : <div className="native-empty"><div className="native-glyph">α</div><h1>Alpha</h1><p>原生 OMP，天枢认知增强。</p><button className="native-new" onClick={() => void create()}><Plus size={16} /> 新会话</button></div>}
+      </> : <div className="new-task native-home" data-testid="new-task"><div className="new-task-hero"><Halftone className="new-task-halftone" /><Greeting lines={["你好，我是 Alpha", "想让我替你完成什么？"]} /></div>
+        <label className="native-home-directory"><FolderOpen size={15} /><input aria-label="工作目录" value={projectPath} onChange={event => setProjectPath(event.target.value)} placeholder="工作目录 · 留空使用 Alpha 工作区" /></label>
+        <div className="native-home-composer"><textarea data-testid="brief" aria-label="描述任务目标" value={homeDraft} onChange={event => setHomeDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.nativeEvent.isComposing) { event.preventDefault(); void startFromHome(); } }} placeholder="描述你要解决的问题、使用的材料和期望结果…" rows={5} />
+          <div className="native-home-toolbar"><NativeModelPicker models={catalog?.models ?? []} value={chosenModel} onChange={setHomeModel} /><select aria-label="任务思考强度" value={chosenThinking} onChange={event => setThinking(event.target.value)}>{["off", "minimal", "low", "medium", "high", "xhigh", "max"].map(level => <option key={level}>{level}</option>)}<option value="auto">auto · 跟随 OMP</option></select><span>Ctrl + Enter</span><button className="native-primary" disabled={busy || !homeDraft.trim() || !catalog?.models.some(model => model.selector === chosenModel && model.available)} onClick={() => void startFromHome()}>{busy ? "正在启动…" : "开始任务"}<ArrowUp size={15} /></button></div></div>
+        <button className="native-home-settings" onClick={() => setSettingsOpen(true)}><Settings size={14} /> 配置模型、API Key 和运行偏好</button>
+      </div>}
     </main>
     <aside className={`native-workspace ${activeTab === "browser" ? "browser-open" : ""}`}><div className="native-tabs"><button className={activeTab === "cognition" ? "active" : ""} onClick={() => setActiveTab("cognition")}><BrainCircuit size={15} /> 认知</button><button className={activeTab === "files" ? "active" : ""} onClick={() => setActiveTab("files")}><FolderOpen size={15} /> 文件</button><button className={activeTab === "browser" ? "active" : ""} onClick={() => setActiveTab("browser")}><Globe2 size={15} /> 浏览器</button><button className={activeTab === "logs" ? "active" : ""} onClick={() => setActiveTab("logs")}><Terminal size={15} /> 日志</button></div>
       {activeTab === "cognition" && <div className="native-panel"><h3>当前认知</h3>{cognition ? <><p className="native-muted">模式 {cognition.mode} · 第 {cognition.frame.turn} 轮</p>{cognition.frame.signals.length ? cognition.frame.signals.map(signal => <div className="native-signal" key={signal.key}><strong>{signal.summary}</strong><small>证据 {signal.evidenceKey}</small></div>) : <p className="native-muted">暂无需要反馈的信号</p>}<h4>证据质量</h4>{Object.entries(cognition.frame.quality).map(([name, quality]) => <div className="native-fact" key={name}><span>{name}</span><em>{quality}</em></div>)}</> : <p className="native-muted">选择并启动会话后显示认知快照。</p>}</div>}

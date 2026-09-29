@@ -6,6 +6,7 @@ import { PtySession } from "@oh-my-pi/pi-natives";
 import type { RpcCommand } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import { RpcProcess } from "./rpc-process";
 import { OmpUpdateMonitor } from "./omp-update-monitor";
+import { NativeConfiguration } from "./configuration";
 
 interface SessionRecord {
   id: string;
@@ -29,6 +30,7 @@ const streams = new Map<string, Set<ReadableStreamDefaultController<Uint8Array>>
 const encoder = new TextEncoder();
 const installedVersion = (JSON.parse(await readFile(join(appRoot, "package.json"), "utf8")) as { dependencies: Record<string, string> }).dependencies["@oh-my-pi/pi-coding-agent"];
 const updates = new OmpUpdateMonitor(installedVersion, dataRoot);
+const configuration = new NativeConfiguration();
 await updates.start();
 let saveQueue = Promise.resolve();
 
@@ -141,6 +143,13 @@ const server = Bun.serve({
     if (url.pathname === "/health") return json({ ok: true, engine: "omp-native" });
     if (url.pathname.startsWith("/ui")) return uiFile(url.pathname);
     try {
+      if (url.pathname === "/api/native/configuration" && request.method === "GET") return json(await configuration.read());
+      if (url.pathname === "/api/native/models" && request.method === "GET") return json(await configuration.catalog());
+      if (url.pathname === "/api/native/settings" && request.method === "POST") return json(await configuration.update(await body(request)));
+      if (url.pathname === "/api/native/credentials" && request.method === "POST") {
+        await configuration.credential(await body(request));
+        return json({ saved: true });
+      }
       if (url.pathname === "/api/native/updates" && request.method === "GET") return json(updates.status());
       if (url.pathname === "/api/native/updates/check" && request.method === "POST") return json(await updates.check());
       if (url.pathname === "/api/native/updates/notified" && request.method === "POST") {

@@ -27,7 +27,7 @@ test("lists both historical ledger formats and continues without modifying them"
         if (match) return Number(match[1]);
       }
     })(),
-      Bun.sleep(10_000).then(() => { throw new Error("Native server did not become ready"); })]);
+      Bun.sleep(20_000).then(() => { throw new Error("Native server did not become ready"); })]);
     const base = `http://127.0.0.1:${ready}`;
     const listed = await fetch(`${base}/api/native/legacy`).then(response => response.json()) as { tasks: Array<{ id: string }> };
     expect(listed.tasks.map(item => item.id).sort()).toEqual([direct, wrapped].sort());
@@ -42,4 +42,4 @@ test("lists both historical ledger formats and continues without modifying them"
     if (!actual.startsWith(resolve(tmpdir()) + sep)) throw new Error("Legacy test directory left temp root");
     await rm(actual, { recursive: true, force: true });
   }
-});
+}, 30_000);

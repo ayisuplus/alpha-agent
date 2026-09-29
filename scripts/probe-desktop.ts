@@ -14,14 +14,9 @@ try {
   const text = await shell.page.$eval("body", node => node.innerText);
   const regions = await shell.page.evaluate(() => !!document.querySelector(".native-workbench .native-sidebar") && !!document.querySelector(".native-workspace"));
   if (!text.includes("新会话") || !regions) throw new Error(`Native workbench content missing: ${text.slice(0, 300)}`);
-  const browserTab = await shell.page.evaluate(() => {
-    const button = [...document.querySelectorAll<HTMLButtonElement>(".native-tabs button")].find(item => item.textContent?.includes("浏览器"));
-    button?.click();
-    return !!button;
-  });
-  if (!browserTab) throw new Error("Desktop browser tab is missing");
-  await shell.page.waitForSelector(".native-browser-slot");
-  console.log(JSON.stringify({ shell: shell.url, preview: preview.url, nativeWorkbench: true, browserPanel: true, ready: true }));
+  const home = await shell.page.evaluate(() => !!document.querySelector(".native-home .halftone") && !!document.querySelector(".native-settings-entry") && !!document.querySelector(".native-home .native-model-picker"));
+  if (!home) throw new Error("Desktop welcome page, model picker or settings entry is missing");
+  console.log(JSON.stringify({ shell: shell.url, preview: preview.url, nativeWorkbench: true, welcome: true, settingsEntry: true, ready: true }));
 } finally {
   await browser.disconnect();
 }
