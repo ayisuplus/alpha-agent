@@ -185,9 +185,14 @@ test("计划图没跑完时，driver 继续推进并在两轮无进展后停下"
     expect(cycle({ ...unchanged, noProgressRuns: 1 })).toMatchObject({ continue: false, stalled: true, noProgressRuns: 2 });
     // One silent run is tolerated; the second one stops the loop.
     expect(cycle(unchanged)).toMatchObject({ continue: true, noProgressRuns: 1 });
+    // A reopened node is pending work too: without it the loop would stop on a graph that still owes a redo.
+    await ledger.enterNode({ nodeId: "inspect-2", host: "coordinator", runId: "run-1" });
+    await ledger.exitNode({ nodeId: "inspect-2", runId: "run-1", artifacts: [], findings: [{ claim: "checked the value", source: "app.ts" }], note: "checked", unresolved: [] });
+    await ledger.reopenNode({ nodeId: "inspect-2", reason: "上游前提有误" });
+    expect(planActionableNode(ledger)).toBe("inspect-2");
     // Goal mode drives its own continuation.
     await ledger.setGoal(true, { maxToolCalls: 10, wallTimeMs: 1_000, maxTotalToolCalls: 20, totalWallTimeMs: 2_000 });
-    expect(cycle()).toMatchObject({ continue: false });
+    expect(cycle({ noProgressRuns: 0 })).toMatchObject({ continue: false });
   } finally {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }

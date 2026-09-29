@@ -283,7 +283,9 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
       const nodes = ledger.state.cognition?.nodes ?? [];
       runNode = nodes.find(node => node.status === "active" && node.host === "coordinator");
       if (!runNode) {
-        const next = nodes.find(node => node.status === "ready" && node.host === "coordinator");
+        // §3.4: `reopened` means the cursor may move back onto the node after a back-edge traversal, so the runtime
+        // enters it like a ready node instead of waiting for a re-plan.
+        const next = nodes.find(node => (node.status === "ready" || node.status === "reopened") && node.host === "coordinator");
         if (next) {
           let expert = next.expertDecision.expertId ? experts.find(item => item.id === next.expertDecision.expertId) : undefined;
           if (next.expertDecision.expertId && !expert) throw new Error(`节点 ${next.id} 指定的专家未启用：${next.expertDecision.expertId}`);
