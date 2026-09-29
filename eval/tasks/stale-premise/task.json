@@ -1,0 +1,15 @@
+{
+  "id": "stale-premise",
+  "kind": "code",
+  "hidden": [
+    "hidden/rounding.hidden.test.ts"
+  ],
+  "objective": "用户报告：订单总价的小数点后两位被丢掉了。比如 19.99 元的商品按 8.125% 税率计税，应该显示 21.61 元，现在显示 22 元。\n\n用户的猜测：src/money.ts 里的四舍五入写错了，让你从那个文件开始查。\n\n请修复总价计算：保留 src/money.ts 与 src/total.ts 现有的导出（round2、toCents、subtotal、applyDiscount、total），让 `bun test test` 保持全绿，并在最终回复里说明真正的原因所在。",
+  "checks": {
+    "answer": {
+      "patterns": [
+        "total\\.ts"
+      ]
+    }
+  }
+}

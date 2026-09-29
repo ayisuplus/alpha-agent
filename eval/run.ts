@@ -23,12 +23,28 @@ interface TaskSpec {
   checks?: {
     answer?: { patterns?: string[]; forbidden?: string[]; hanChars?: [number, number] };
     file?: { path: string; rows: string[][] };
+    /** Content check for a delivered text file (scripts, briefs): patterns must appear, forbidden must not. */
+    text?: { path: string; patterns?: string[]; forbidden?: string[]; hanChars?: [number, number] };
   };
   /**
    * Keep a paused task moving without a person: when it reaches `needs-input`, wait `afterSeconds` and resume with
    * `brief`, at most `times` times. This is what makes a multi-round pause/resume task testable unattended.
    */
   autoResume?: { times?: number; brief?: string; afterSeconds?: number };
+}
+
+/** What the plan graph did during the run, read from the task event log (not model-reported). */
+export interface PlanMetricRecord {
+  /** alpha_plan submissions (plan/submitted). */
+  plans: number;
+  /** alpha_plan revisions of an existing graph (plan/revised). */
+  revisions: number;
+  reworkReopens: number;
+  premiseReopens: number;
+  /** Reopens without an edge: redoing stale or expired work. */
+  redoReopens: number;
+  /** Review gate verdicts of changes-requested. */
+  changesRequested: number;
 }
 
 interface RunRecord { model: string; stage?: string; toolCalls: number; elapsedMs: number; firstResponseMs?: number; usage?: { totalTokens: number }; prompt?: { systemTokens: number; toolTokens: number; tools: number; contextShare: number | null }; outcome: string; failureReason?: string }
@@ -57,6 +73,7 @@ export interface TaskResult {
   models: string[];
   lastFailure: string | null;
   timedOut: boolean;
+  plan: PlanMetricRecord;
 }
 
 function option(name: string): string | undefined {
@@ -129,6 +146,15 @@ async function selfcheck(tasks: TaskSpec[]): Promise<boolean> {
       const good = JSON.stringify(expected) === JSON.stringify(task.checks.file.rows);
       ok &&= good;
       console.log(`${good ? "ok  " : "FAIL"} ${task.id}: expected rows ${good ? "match the data" : `differ: ${JSON.stringify(expected)}`}`);
+    } else if (task.checks?.text) {
+      // The scenario must carry the trap: every forbidden token has to appear in the attached material, otherwise the
+      // check cannot be grading the model's compliance work.
+      const material = (await Promise.all((task.files ?? []).map(file => readFile(join(tasksRoot, task.id, file), "utf8").catch(() => "")))).join("\n");
+      const missing = (task.checks.text.forbidden ?? []).filter(word => !material.includes(word));
+      const absent = (task.checks.text.patterns ?? []).filter(pattern => !new RegExp(pattern).test(material));
+      const good = missing.length === 0;
+      ok &&= good;
+      console.log(`${good ? "ok  " : "FAIL"} ${task.id}: text check on ${task.checks.text.path}${missing.length ? `, forbidden words absent from the material: ${missing.join(", ")}` : ""}${absent.length ? ` (patterns the model must produce itself: ${absent.join(", ")})` : ""}`);
     } else console.log(`ok   ${task.id}: answer checks (${Object.keys(task.checks?.answer ?? {}).join(", ")})`);
   }
   return ok;
@@ -234,6 +260,38 @@ async function waitForTask(base: string, taskId: string, timeoutMs: number, auto
   }
 }
 
+async function gradeText(check: NonNullable<NonNullable<TaskSpec["checks"]>["text"]>, projectRoot: string): Promise<string[]> {
+  const text = await readFile(join(projectRoot, check.path), "utf8").catch(() => null);
+  if (text === null) return [`${check.path} is missing`];
+  const problems: string[] = [];
+  for (const pattern of check.patterns ?? []) if (!new RegExp(pattern).test(text)) problems.push(`${check.path} missing ${pattern}`);
+  for (const word of check.forbidden ?? []) if (text.includes(word)) problems.push(`${check.path} uses ${word}`);
+  if (check.hanChars) {
+    const count = (text.match(/\p{Script=Han}/gu) ?? []).length;
+    if (count < check.hanChars[0] || count > check.hanChars[1]) problems.push(`${count} Chinese characters in ${check.path}, expected ${check.hanChars[0]}–${check.hanChars[1]}`);
+  }
+  return problems;
+}
+
+/** Reads the plan graph's behaviour from the task event log: plans, revisions, back-edge traversals, gate verdicts. */
+async function planMetrics(workspace: string, taskId: string): Promise<PlanMetricRecord> {
+  const metrics: PlanMetricRecord = { plans: 0, revisions: 0, reworkReopens: 0, premiseReopens: 0, redoReopens: 0, changesRequested: 0 };
+  const text = await readFile(join(workspace, ".alpha", "tasks", taskId, "events.v1.jsonl"), "utf8").catch(() => "");
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let event: { type?: string; payload?: Record<string, unknown> };
+    try { event = JSON.parse(line) as typeof event; } catch { continue; }
+    if (event.type === "plan/submitted") metrics.plans++;
+    else if (event.type === "plan/revised") metrics.revisions++;
+    else if (event.type === "node/reopened") {
+      if (event.payload?.edge === "rework") metrics.reworkReopens++;
+      else if (event.payload?.edge === "premise") metrics.premiseReopens++;
+      else metrics.redoReopens++;
+    } else if (event.type === "node/exited" && event.payload?.verdict === "changes-requested") metrics.changesRequested++;
+  }
+  return metrics;
+}
+
 async function runTask(base: string, workspace: string, task: TaskSpec, timeoutMs: number): Promise<TaskResult> {
   const started = Date.now();
   const taskId = await createTask(base, workspace, task);
@@ -246,15 +304,17 @@ async function runTask(base: string, workspace: string, task: TaskSpec, timeoutM
   if (task.kind === "code") {
     const hidden = await hiddenTests(task, ledger.projectRoot);
     if (!hidden.passed) problems.push(`hidden tests failed:\n${hidden.output.split("\n").filter(line => /✗|\(fail\)|error:|Expected|Received/.test(line)).slice(0, 12).join("\n")}`);
-  } else {
-    if (task.checks?.answer) {
-      const { body } = await api<{ entries?: Array<{ kind: string; value: string }> }>(base, `/api/tasks/${taskId}/activity`);
-      problems.push(...gradeAnswer(task.checks.answer, (body.entries ?? []).filter(entry => entry.kind === "text").map(entry => entry.value).join("")));
-    }
-    if (task.checks?.file) problems.push(...await gradeFile(task.checks.file, ledger.projectRoot));
+  } else if (task.checks?.file) {
+    problems.push(...await gradeFile(task.checks.file, ledger.projectRoot));
   }
+  if (task.checks?.answer) {
+    const { body } = await api<{ entries?: Array<{ kind: string; value: string }> }>(base, `/api/tasks/${taskId}/activity`);
+    problems.push(...gradeAnswer(task.checks.answer, (body.entries ?? []).filter(entry => entry.kind === "text").map(entry => entry.value).join("")));
+  }
+  if (task.checks?.text) problems.push(...await gradeText(task.checks.text, ledger.projectRoot));
   const passed = problems.length === 0 && !timedOut;
   const coordinator = runs.find(item => item.prompt && (!item.stage || item.stage === "coordinator")) ?? runs.find(item => item.prompt);
+  const plan = await planMetrics(workspace, taskId);
   const result: TaskResult = {
     id: task.id, kind: task.kind, alphaStatus: ledger.status, passed, falseAcceptance: ledger.status === "complete" && !passed,
     detail: timedOut ? "timed out" : problems.join("; ") || "all checks passed",
@@ -266,9 +326,9 @@ async function runTask(base: string, workspace: string, task: TaskSpec, timeoutM
     contextBytes: stepContexts.length ? Math.max(...stepContexts.map(item => item.taskContextBytes)) : 0,
     pauses,
     models: [...new Set(runs.map(item => item.model))],
-    lastFailure: ledger.lastFailure ?? null, timedOut,
+    lastFailure: ledger.lastFailure ?? null, timedOut, plan,
   };
-  console.log(`${passed ? "PASS" : "FAIL"} ${task.id}: alpha ${ledger.status}, ${result.detail.split("\n")[0]} (${Math.round(result.wallMs / 1000)}s, ${result.toolCalls} tool calls, ${result.tokens} tokens)`);
+  console.log(`${passed ? "PASS" : "FAIL"} ${task.id}: alpha ${ledger.status}, ${result.detail.split("\n")[0]} (${Math.round(result.wallMs / 1000)}s, ${result.toolCalls} tool calls, ${result.tokens} tokens; plans ${plan.plans}/rev ${plan.revisions}/rework ${plan.reworkReopens}/premise ${plan.premiseReopens}/redo ${plan.redoReopens}/cr ${plan.changesRequested})`);
   return result;
 }
 
@@ -287,14 +347,19 @@ function summary(results: TaskResult[]) {
 
 function report(label: string, app: string, results: TaskResult[]): string {
   const total = summary(results);
-  const rows = results.map(item => `| ${item.id} | ${item.passed ? "✅" : "❌"} | ${item.alphaStatus}${item.falseAcceptance ? " ⚠️" : ""} | ${Math.round(item.wallMs / 1000)}s | ${item.runs} | ${item.toolCalls} | ${item.tokens.toLocaleString()} | ${item.prompt ? `${item.prompt.systemTokens} + ${item.prompt.toolTokens}` : "—"} | ${item.contextBytes ? `${Math.round(item.contextBytes / 102.4) / 10}k` : "—"} | ${item.firstResponseMs === null ? "—" : `${Math.round(item.firstResponseMs / 100) / 10}s`} | ${item.pauses ? `${item.pauses} 次` : "—"} | ${item.detail.split("\n")[0].replace(/\|/g, "\\|").slice(0, 120)} |`);
+  const planCell = (item: TaskResult) => {
+    const plan = item.plan;
+    if (!plan.plans && !plan.revisions && !plan.reworkReopens && !plan.premiseReopens && !plan.redoReopens && !plan.changesRequested) return "—";
+    return `计划 ${plan.plans}/修订 ${plan.revisions} · 回边 rework ${plan.reworkReopens} premise ${plan.premiseReopens} redo ${plan.redoReopens} · 退审 ${plan.changesRequested}`;
+  };
+  const rows = results.map(item => `| ${item.id} | ${item.passed ? "✅" : "❌"} | ${item.alphaStatus}${item.falseAcceptance ? " ⚠️" : ""} | ${Math.round(item.wallMs / 1000)}s | ${item.runs} | ${item.toolCalls} | ${item.tokens.toLocaleString()} | ${item.prompt ? `${item.prompt.systemTokens} + ${item.prompt.toolTokens}` : "—"} | ${item.contextBytes ? `${Math.round(item.contextBytes / 102.4) / 10}k` : "—"} | ${item.firstResponseMs === null ? "—" : `${Math.round(item.firstResponseMs / 100) / 10}s`} | ${item.pauses ? `${item.pauses} 次` : "—"} | ${planCell(item)} | ${item.detail.split("\n")[0].replace(/\|/g, "\\|").slice(0, 120)} |`);
   return [
     `# Alpha 评测：${label}`, "",
     `- 被测代码：\`${app}\``, `- 时间：${new Date().toISOString()}`,
     `- 通过：${total.passed}/${total.tasks}；Alpha 自评已验收 ${total.alphaAccepted}；自评通过但独立检查失败 ${total.falseAcceptances}；独立检查通过但自评未验收 ${total.missedAcceptances}`,
     `- 合计：${total.toolCalls} 次工具调用，${total.tokens.toLocaleString()} tokens，${total.wallMinutes} 分钟（各任务耗时之和）`, "",
-    "| 任务 | 独立检查 | Alpha 状态 | 耗时 | 轮次 | 工具调用 | tokens | 固定提示词（系统 + 工具） | 每步上下文 | 首响应 | 恢复 | 说明 |",
-    "|---|---|---|---|---|---|---|---|---|---|---|---|",
+    "| 任务 | 独立检查 | Alpha 状态 | 耗时 | 轮次 | 工具调用 | tokens | 固定提示词（系统 + 工具） | 每步上下文 | 首响应 | 恢复 | 计划图 | 说明 |",
+    "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ...rows, "",
   ].join("\n");
 }
@@ -342,7 +407,7 @@ try {
       catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         console.log(`ERROR ${task.id}: ${detail}`);
-        results.push({ id: task.id, kind: task.kind, alphaStatus: "error", passed: false, falseAcceptance: false, detail, wallMs: 0, runs: 0, toolCalls: 0, tokens: 0, prompt: null, firstResponseMs: null, contextBytes: 0, pauses: 0, models: [], lastFailure: null, timedOut: false });
+        results.push({ id: task.id, kind: task.kind, alphaStatus: "error", passed: false, falseAcceptance: false, detail, wallMs: 0, runs: 0, toolCalls: 0, tokens: 0, prompt: null, firstResponseMs: null, contextBytes: 0, pauses: 0, models: [], lastFailure: null, timedOut: false, plan: { plans: 0, revisions: 0, reworkReopens: 0, premiseReopens: 0, redoReopens: 0, changesRequested: 0 } });
       }
       await writeFile(join(out, "results.json"), JSON.stringify({ label, app, workspace, results }, null, 2));
     }
