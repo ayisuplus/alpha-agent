@@ -1,10 +1,10 @@
 import { resolve } from "node:path";
 import { type } from "@oh-my-pi/omptype";
-import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
-import { ComfyClient } from "../runtime/comfy-client";
-import { createImageTool } from "../runtime/image-tool";
-import { createVoiceTool } from "../runtime/voice-tool";
-import { createVideoTool } from "../runtime/video-tool";
+import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import { ComfyClient } from "./comfy-client";
+import { createImageTool } from "./image-tool";
+import { createVoiceTool } from "./voice-tool";
+import { createVideoTool } from "./video-tool";
 
 export interface ComfyPluginOptions {
   projectRoot: string;
@@ -14,19 +14,14 @@ export interface ComfyPluginOptions {
   generation?: { image: boolean; voice: boolean; video: boolean };
 }
 
-export const comfyPlugin = {
-  id: "comfyui",
-  name: "ComfyUI",
-  description: "通过本机 ComfyUI 生成图片、配音和视频",
-  source: "builtin" as const,
-};
+const statusParameters = type({});
 
-export function createComfyStatusTool(client = new ComfyClient()): CustomTool<ReturnType<typeof type>> {
+export function createComfyStatusTool(client = new ComfyClient()): ToolDefinition<typeof statusParameters> {
   return {
     name: "alpha_comfy_status",
     label: "Check local ComfyUI",
     description: "Check whether the user's local ComfyUI is available before attempting media generation. Never start or replace the service.",
-    parameters: type({}),
+    parameters: statusParameters,
     loadMode: "essential",
     async execute() {
       const online = await client.health();
@@ -35,12 +30,12 @@ export function createComfyStatusTool(client = new ComfyClient()): CustomTool<Re
   };
 }
 
-export function createComfyPlugin(options: ComfyPluginOptions): { tools: CustomTool[]; instructions: string[] } {
+export function createComfyPlugin(options: ComfyPluginOptions): { tools: ToolDefinition[]; instructions: string[] } {
   if (options.enabled === false) return { tools: [], instructions: [] };
   const image = options.generation?.image ?? true;
   const voice = options.generation?.voice ?? true;
   const video = (options.generation?.video ?? true) && image;
-  const presets = resolve(import.meta.dir, "..", "..", "presets");
+  const presets = resolve(import.meta.dir, "..", "..", "..", "..", "presets");
   return {
     tools: [
       createComfyStatusTool(new ComfyClient(options.url)),

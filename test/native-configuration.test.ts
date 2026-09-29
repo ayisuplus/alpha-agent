@@ -49,6 +49,7 @@ test("desktop settings persist through OMP and a new RPC session uses the select
     expect(persisted).toContain(model.selector);
     expect(persisted).toContain("deepseek/deepseek-reasoner");
     const created = (await request("sessions", { cwd: root, title: "Settings regression" })).value;
+    expect((await request(`sessions/${created.session.id}/open`, {})).status).toBe(200);
     const state = await request(`sessions/${created.session.id}/state`);
     expect(state.status).toBe(200);
     expect(`${state.value.model.provider}/${state.value.model.id}`).toBe(model.selector);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { advanceTurn, assembleCognitiveFrame, classifyVerificationCommand, emptyCognitiveState, observeTool, renderCognitiveMirror } from "../src/native/tianshu-cognition";
+import { advanceTurn, assembleCognitiveFrame, classifyVerificationCommand, emptyCognitiveState, observeTool, renderCognitiveMirror } from "../src/native/tianshu/state";
 
 describe("OMP cognitive mirror", () => {
   test("reports repeated observed failure without turning it into a gate", () => {

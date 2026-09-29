@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Document, Packer, Paragraph, TextRun } from "docx";
 import ExcelJS from "exceljs";
-import { editOffice, readOffice, type OfficeWorkspace } from "../src/runtime/office-runtime";
+import { editOffice, readOffice, type OfficeWorkspace } from "../src/native/capabilities/office/office-runtime";
 
 const root = await mkdtemp(join(tmpdir(), "alpha-office-probe-"));
 try {

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { extname, join, relative, resolve, sep } from "node:path";
-import { warnUnknownStoreVersion } from "./store-tag";
+import { warnUnknownStoreVersion } from "../native/capabilities/comfyui/store-tag";
 
 const TEXT_EXTENSIONS = new Set([".css", ".html", ".js", ".json", ".md", ".ts", ".tsx"]);
 const SOURCE_EXCLUDED_DIRS = new Set([".alpha", ".git", "dist", "node_modules", ".next", ".cache", ".venv", "venv", "__pycache__"]);

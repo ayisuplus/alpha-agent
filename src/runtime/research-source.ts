@@ -9,7 +9,7 @@ import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
 import type { BrowserKernel } from "./browser-kernel";
 import type { WebRetrieval } from "./web-retrieval";
 import { WebApprovalRequired } from "./web-permissions";
-import { warnUnknownStoreVersion } from "./store-tag";
+import { warnUnknownStoreVersion } from "../native/capabilities/comfyui/store-tag";
 
 export interface ResearchSource { id: string; taskId: string; url: string; visitedAt: string; title: string; sha256: string; rawSha256: string; text: string; kind?: "direct_http" | "provider_extraction" | "rendered_page"; provider?: string; requestId?: string; rawPath?: string }
 const parameters = type({ url: "string", "mode?": "'http' | 'extract' | 'rendered'", "tabId?": "string" });

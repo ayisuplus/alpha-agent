@@ -7,6 +7,7 @@ import type { RpcCommand } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import { RpcProcess } from "./rpc-process";
 import { OmpUpdateMonitor } from "./omp-update-monitor";
 import { NativeConfiguration } from "./configuration";
+import { buildLaunch, defaultWorkspaceRoot } from "./launch";
 
 interface SessionRecord {
   id: string;
@@ -15,11 +16,14 @@ interface SessionRecord {
   createdAt: string;
   updatedAt: string;
   legacyTaskId?: string;
+  /** The OMP session id captured from get_state; sessions resume explicitly via --resume. */
+  ompSessionId?: string;
 }
 
 const appRoot = resolve(import.meta.dir, "../..");
 const workspaceRoot = resolve(process.env.ALPHA_WORKSPACE_ROOT ?? appRoot);
 const dataRoot = join(workspaceRoot, ".alpha");
+const sessionCwd = defaultWorkspaceRoot(workspaceRoot);
 const nativeRoot = join(dataRoot, "native");
 const indexPath = join(nativeRoot, "sessions.json");
 const uiRoot = join(appRoot, "desktop", "dist");
@@ -31,10 +35,53 @@ const encoder = new TextEncoder();
 const installedVersion = (JSON.parse(await readFile(join(appRoot, "package.json"), "utf8")) as { dependencies: Record<string, string> }).dependencies["@oh-my-pi/pi-coding-agent"];
 const updates = new OmpUpdateMonitor(installedVersion, dataRoot);
 const configuration = new NativeConfiguration();
-await updates.start();
 let saveQueue = Promise.resolve();
 
+/** OMP process lifecycle: at most MAX_PROCESSES alive, idle ones reclaimed after IDLE_STOP_MS. */
+const MAX_PROCESSES = 4;
+const IDLE_STOP_MS = 10 * 60_000;
+const lastUsed = new Map<string, number>();
+function touch(id: string): void { lastUsed.set(id, Date.now()); }
+
+async function stopProcess(id: string, reason: string): Promise<void> {
+  const pending = processes.get(id);
+  if (!pending) return;
+  processes.delete(id);
+  lastUsed.delete(id);
+  const child = await pending.catch(() => null);
+  await child?.stop();
+  emit(id, { type: "host_exit", error: reason });
+}
+
+async function enforceProcessCap(): Promise<void> {
+  while (processes.size >= MAX_PROCESSES) {
+    const ordered = [...processes.keys()].sort((a, b) => (lastUsed.get(a) ?? 0) - (lastUsed.get(b) ?? 0));
+    const victim = ordered.find(id => (streams.get(id)?.size ?? 0) === 0) ?? ordered[0];
+    if (!victim) return;
+    await stopProcess(victim, "Alpha 已按最近使用回收 OMP 进程");
+  }
+}
+
+async function reapIdleProcesses(): Promise<void> {
+  const now = Date.now();
+  for (const id of [...processes.keys()]) {
+    if ((streams.get(id)?.size ?? 0) > 0) continue;
+    if (now - (lastUsed.get(id) ?? 0) < IDLE_STOP_MS) continue;
+    const pending = processes.get(id);
+    if (!pending) continue;
+    const child = await pending.catch(() => null);
+    if (!child) { processes.delete(id); lastUsed.delete(id); continue; }
+    const state = await child.command({ type: "get_state" }).catch(() => null);
+    const data = state && "data" in state ? state.data : null;
+    const settled = data && typeof data === "object" && "isSettled" in data && data.isSettled === true;
+    if (settled && !terminals.has(id)) await stopProcess(id, "Alpha 已停止空闲的 OMP 进程");
+  }
+}
+const reaper = setInterval(() => void reapIdleProcesses(), 60_000);
+reaper.unref();
+
 await mkdir(nativeRoot, { recursive: true });
+await mkdir(sessionCwd, { recursive: true });
 const saved = await readFile(indexPath, "utf8").then(text => JSON.parse(text), () => ({ sessions: [] })).catch(() => ({ sessions: [] }));
 for (const item of Array.isArray(saved.sessions) ? saved.sessions : []) if (typeof item?.id === "string" && /^[0-9a-f-]{36}$/.test(item.id)) records.set(item.id, item);
 
@@ -72,30 +119,68 @@ function emit(id: string, frame: unknown): void {
   }
 }
 async function host(id: string): Promise<RpcProcess> {
-  if (terminals.has(id)) throw new Error("Native terminal owns this session; close it before using RPC");
+  if (terminals.has(id)) throw new Error("Alpha 终端正在使用这个会话，请先关闭终端");
   const existing = processes.get(id);
-  if (existing) return existing;
+  if (existing) { touch(id); return existing; }
   const item = record(id);
+  await enforceProcessCap();
+  touch(id);
   const pending = (async () => {
     if (!(await stat(item.cwd)).isDirectory()) throw new Error(`Project directory unavailable: ${item.cwd}`);
     const dir = join(nativeRoot, "sessions", id);
-    const resume = (await readdir(dir).catch(() => [] as string[])).some(name => name.endsWith(".jsonl"));
     await mkdir(dir, { recursive: true });
-    const child = new RpcProcess({ appRoot, cwd: item.cwd, sessionDir: dir, sessionId: id, dataRoot,
-      cognitionFile: join(nativeRoot, "cognition", `${id}.json`), resume });
+    const plan = await buildLaunch({ appRoot, cwd: item.cwd, sessionDir: dir, sessionId: id, dataRoot, mode: "rpc", ...(item.ompSessionId ? { ompSessionId: item.ompSessionId } : {}) });
+    const child = new RpcProcess({ cwd: item.cwd, argv: plan.argv, env: plan.env });
     child.on("frame", frame => emit(id, frame));
     child.on("exit", error => { processes.delete(id); if (!terminals.has(id)) emit(id, { type: "host_exit", error: error.message }); });
     child.on("protocol_error", error => emit(id, { type: "host_error", error: String(error) }));
     await child.ready;
     await child.command({ type: "negotiate_protocol", protocolVersion: 2 });
+    if (!item.ompSessionId) {
+      const state = await child.command({ type: "get_state" });
+      const data = "data" in state ? state.data : null;
+      const ompSessionId = data && typeof data === "object" && "sessionId" in data ? data.sessionId : undefined;
+      const sessionName = data && typeof data === "object" && "sessionName" in data ? data.sessionName : undefined;
+      if (typeof ompSessionId === "string" && ompSessionId) {
+        item.ompSessionId = ompSessionId;
+        if (typeof sessionName === "string" && sessionName.trim()) item.title = sessionName.trim().slice(0, 120);
+        item.updatedAt = new Date().toISOString();
+        void saveRecords();
+      }
+    }
     return child;
   })();
   processes.set(id, pending);
   try { return await pending; }
   catch (error) { processes.delete(id); throw error; }
 }
+/** Terminal sessions own their OMP process; recover the OMP session id from the session file header. */
+async function captureTerminalSession(id: string, sessionDir: string): Promise<void> {
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const { promise: tick, resolve: wake } = Promise.withResolvers<void>();
+    setTimeout(wake, 1_000);
+    await tick;
+    const item = records.get(id);
+    if (!item || item.ompSessionId) return;
+    const files = await readdir(sessionDir).catch(() => [] as string[]);
+    for (const name of files) {
+      if (!name.endsWith(".jsonl")) continue;
+      const head = await readFile(join(sessionDir, name), "utf8").then(text => text.slice(0, 4_000).split(/\r?\n/)[0], () => "");
+      let header: { type?: string; id?: string; title?: string };
+      try { header = JSON.parse(head); } catch { continue; }
+      if (header.type === "session" && typeof header.id === "string" && header.id) {
+        item.ompSessionId = header.id;
+        if (typeof header.title === "string" && header.title.trim()) item.title = header.title.trim().slice(0, 120);
+        item.updatedAt = new Date().toISOString();
+        void saveRecords();
+        return;
+      }
+    }
+  }
+}
+
 async function createSession(input: { cwd?: unknown; title?: unknown; legacyTaskId?: string }): Promise<SessionRecord> {
-  const cwd = resolve(typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : workspaceRoot);
+  const cwd = resolve(typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : sessionCwd);
   if (!(await stat(cwd)).isDirectory()) throw new Error("Project directory does not exist");
   const now = new Date().toISOString();
   const item: SessionRecord = { id: randomUUID(), cwd, title: typeof input.title === "string" && input.title.trim() ? input.title.trim().slice(0, 120) : basename(cwd),
@@ -169,26 +254,28 @@ const server = Bun.serve({
         const item = record(id);
         if (!action && request.method === "GET") return json({ active: terminals.has(id), output: terminals.get(id)?.output ?? "" });
         if (action === "start" && request.method === "POST") {
-          if (terminals.has(id)) throw new Error("Native terminal is already open");
-          const rpc = await host(id);
-          const state = await rpc.command({ type: "get_state" });
-          const data = "data" in state ? state.data as { isSettled?: boolean; hasPendingAsyncWork?: boolean } : null;
-          if (!data?.isSettled || data.hasPendingAsyncWork) throw new Error("Wait for OMP to finish before opening its native terminal");
+          if (terminals.has(id)) throw new Error("Alpha 终端已经打开");
+          const running = processes.get(id);
+          if (running) {
+            const rpc = await running;
+            const state = await rpc.command({ type: "get_state" });
+            const data = "data" in state ? state.data : null;
+            const settled = data && typeof data === "object" ? data : {};
+            if (!("isSettled" in settled) || !settled.isSettled || ("hasPendingAsyncWork" in settled && settled.hasPendingAsyncWork)) throw new Error("Wait for OMP to finish before opening its native terminal");
+            await rpc.stop();
+            processes.delete(id);
+            lastUsed.delete(id);
+          }
           const input = await body(request);
           const cols = Math.max(40, Math.min(240, Number(input.cols) || 100));
           const rows = Math.max(12, Math.min(100, Number(input.rows) || 30));
           const pty = new PtySession();
           const terminal = { pty, output: "" };
           terminals.set(id, terminal);
-          await rpc.stop();
-          processes.delete(id);
           const sessionDir = join(nativeRoot, "sessions", id);
-          const env = Object.fromEntries(Object.entries({ ...process.env, PI_CODING_AGENT_SESSION_DIR: sessionDir,
-            ALPHA_COGNITION_FILE: join(nativeRoot, "cognition", `${id}.json`), ALPHA_NATIVE_SESSION_ID: id,
-            ALPHA_DATA_ROOT: dataRoot }).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
-          const cli = join(appRoot, "node_modules", "@oh-my-pi", "pi-coding-agent", "dist", "cli.js");
-          const args = [cli, "--extension", join(appRoot, "src", "native", "tianshu-extension.ts"), "--extension", join(appRoot, "src", "native", "capabilities-extension.ts"), "--continue"];
-          void pty.startArgv({ application: process.execPath, args, cwd: item.cwd, env, cols, rows }, (error, chunk) => {
+          const plan = await buildLaunch({ appRoot, cwd: item.cwd, sessionDir, sessionId: id, dataRoot, mode: "terminal", ...(item.ompSessionId ? { ompSessionId: item.ompSessionId } : {}) });
+          void captureTerminalSession(id, sessionDir);
+          void pty.startArgv({ application: process.execPath, args: plan.argv, cwd: item.cwd, env: plan.env, cols, rows }, (error, chunk) => {
             if (error) emit(id, { type: "terminal_error", error: error.message });
             if (chunk) { terminal.output = (terminal.output + chunk).slice(-100_000); emit(id, { type: "terminal_chunk", chunk }); }
           }).then(result => emit(id, { type: "terminal_exit", exitCode: result.exitCode })).catch(error => emit(id, { type: "terminal_error", error: String(error) })).finally(() => {
@@ -222,10 +309,14 @@ const server = Bun.serve({
         const session = await createSession({ cwd, title: String(state.title ?? state.objective).slice(0, 120), legacyTaskId: oldTask[1] });
         return json({ session, draft: continuationDraft(state) }, 201);
       }
-      const match = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/(state|messages|models|cognition|files|events|command|ui-response)$/.exec(url.pathname);
+      const match = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/(state|messages|models|cognition|files|events|command|ui-response|open)$/.exec(url.pathname);
       if (match) {
         const [, id, action] = match;
         record(id);
+        if (action === "open" && request.method === "POST") {
+          await host(id);
+          return json({ open: true });
+        }
         if (action === "cognition" && request.method === "GET") {
           const file = join(nativeRoot, "cognition", `${id}.json`);
           return json(await readFile(file, "utf8").then(text => JSON.parse(text), () => null));
@@ -247,13 +338,15 @@ const server = Bun.serve({
               clients.add(controller);
               streams.set(id, clients);
               controller.enqueue(encoder.encode(": connected\n\n"));
-              if (!terminals.has(id)) void host(id).catch(error => emit(id, { type: "host_error", error: String(error) }));
             },
             cancel() { if (currentController) streams.get(id)?.delete(currentController); },
           });
           return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" } });
         }
-        const process = await host(id);
+        const running = processes.get(id);
+        if (!running) return json({ error: "Session process is not open" }, 409);
+        const process = await running;
+        touch(id);
         if (action === "state" && request.method === "GET") { const result = await process.command({ type: "get_state" }); return json("data" in result ? result.data : null); }
         if (action === "messages" && request.method === "GET") { const result = await process.command({ type: "get_messages" }); return json("data" in result ? result.data : null); }
         if (action === "models" && request.method === "GET") { const result = await process.command({ type: "get_available_models" }); return json("data" in result ? result.data : null); }
@@ -279,6 +372,7 @@ const server = Bun.serve({
 });
 
 console.log(`ALPHA_SERVER_READY ${server.port}`);
+void updates.start();
 process.on("SIGINT", () => {
   for (const terminal of terminals.values()) terminal.pty.kill();
   for (const pending of processes.values()) void pending.then(child => child.stop(), () => undefined);

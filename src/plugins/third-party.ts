@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadSkillsFromDir, type PreparedExtension, type Skill } from "@oh-my-pi/pi-coding-agent";
 import { connectPluginMCP, readPluginMCP } from "./mcp";
-import { warnUnknownStoreVersion } from "../runtime/store-tag";
+import { warnUnknownStoreVersion } from "../native/capabilities/comfyui/store-tag";
 import { frontmatterField } from "../runtime/skill-manifest";
 
 export interface SkillPlugin {

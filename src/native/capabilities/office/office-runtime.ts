@@ -1,3 +1,4 @@
+// Moved from src/runtime/office-runtime.ts: behavior preserved as-is; M2 extends it with the alpha_office create/pdf surface.
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { copyFile, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
@@ -21,7 +22,7 @@ const inside = (root: string, path: string) => {
 };
 
 export async function officeRuntimeStatus(): Promise<{ available: boolean; version?: string; location?: "bundled" | "system"; reason?: string }> {
-  const appRoot = resolve(import.meta.dir, "..", "..");
+  const appRoot = resolve(import.meta.dir, "..", "..", "..", "..");
   const bundled = join(appRoot, "runtime", "libreoffice");
   const system = join(process.env.ProgramFiles ?? "C:\\Program Files", "LibreOffice");
   const packaged = await stat(join(appRoot, "release.json")).then(item => item.isFile()).catch(() => false);
@@ -37,7 +38,7 @@ export async function officeRuntimeStatus(): Promise<{ available: boolean; versi
 }
 
 async function officePython(): Promise<string> {
-  const appRoot = resolve(import.meta.dir, "..", "..");
+  const appRoot = resolve(import.meta.dir, "..", "..", "..", "..");
   const bundled = join(appRoot, "runtime", "libreoffice", "program", "python.exe");
   if (await stat(bundled).then(item => item.isFile()).catch(() => false)) return bundled;
   if (await stat(join(appRoot, "release.json")).then(item => item.isFile()).catch(() => false)) throw new Error("Bundled LibreOffice runtime is missing");
@@ -55,7 +56,7 @@ async function runOfficeJob(job: OfficeJob, signal?: AbortSignal): Promise<{ bef
   const server = Bun.spawn([office, `-env:UserInstallation=${pathToFileURL(job.profile).href}`, "--headless", "--nologo", "--nodefault", "--norestore", `--accept=pipe,name=${connection};urp;StarOffice.ServiceManager`], { stdin: "ignore", stdout: "ignore", stderr: "pipe", windowsHide: true });
   await Bun.sleep(1000);
   if (server.exitCode !== null) throw new Error(`LibreOffice startup exited ${server.exitCode}: ${(await new Response(server.stderr).text()).trim()}`);
-  const script = resolve(import.meta.dir, "..", "..", "scripts", "office-worker.py");
+  const script = join(import.meta.dir, "office-worker.py");
   const proc = Bun.spawn([python, "-B", "-u", script], { stdin: "pipe", stdout: "pipe", stderr: "pipe", windowsHide: true });
   proc.stdin.write(JSON.stringify({ ...job, connection }));
   proc.stdin.end();

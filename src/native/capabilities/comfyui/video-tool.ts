@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, realpath, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type } from "@oh-my-pi/omptype";
-import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
+import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { ComfyClient, type VideoOutput } from "./comfy-client";
 import { ensureGeneratedAsset } from "./media-integrity";
 import { warnUnknownStoreVersion } from "./store-tag";
@@ -138,14 +138,14 @@ export async function generateVideoCandidate(projectRoot: string, dataRoot: stri
   throw new Error(`Video job ${job.promptId} is still running; Alpha can resume tracking it`);
 }
 
-export function createVideoTool(projectRoot: string, dataRoot: string, presetPath: string, comfyUrl?: string): CustomTool<typeof parameters> {
+export function createVideoTool(projectRoot: string, dataRoot: string, presetPath: string, comfyUrl?: string): ToolDefinition<typeof parameters> {
   return {
     name: "alpha_generate_video",
     label: "Generate local video candidate",
     description: "Generate a local H3/FlashVSR MP4 candidate from a 16:9 PNG. Pass the exact /alpha-assets/...png URL returned by alpha_generate_image; do not create a reference.png placeholder or use a public/ path. This may take several minutes. The returned video needs visual review before adoption.",
     parameters,
     loadMode: "essential",
-    async execute(_toolCallId, args, _onUpdate, _ctx, signal) {
+    async execute(_toolCallId, args, signal, _onUpdate, _ctx) {
       try {
         const job = await generateVideoCandidate(projectRoot, dataRoot, presetPath, args.referenceAsset, args.prompt, new ComfyClient(comfyUrl), signal);
         return { content: [{ type: "text", text: JSON.stringify({ candidateAsset: job.candidateAsset, promptId: job.promptId, sha256: job.videoSha256, referenceSha256: job.referenceSha256, seed: job.seed, visualReview: job.visualReview }) }] };

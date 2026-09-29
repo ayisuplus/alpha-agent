@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { archiveExtractedSource, assertPublicWebUrl, type ResearchSource } from "./research-source";
-import { warnUnknownStoreVersion } from "./store-tag";
+import { warnUnknownStoreVersion } from "../native/capabilities/comfyui/store-tag";
 
 export type WebProvider = "tavily" | "firecrawl";
 export interface WebSearchHit { title: string; url: string; snippet: string; score: number | null; publishedAt: string | null; provider: WebProvider; requestId: string | null }

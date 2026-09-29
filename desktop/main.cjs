@@ -1,4 +1,4 @@
-const { app, BaseWindow, dialog, ipcMain, Menu, Notification, safeStorage, screen, shell: electronShell, WebContentsView } = require("electron");
+const { app, BaseWindow, dialog, ipcMain, Menu, Notification, screen, shell: electronShell, WebContentsView } = require("electron");
 const { spawn } = require("node:child_process");
 const { mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } = require("node:fs");
 const { randomBytes, randomUUID } = require("node:crypto");
@@ -30,17 +30,6 @@ const bridgeToken = randomBytes(32).toString("hex");
 const webTabs = new Map();
 const webAllowed = new Map();
 let visibleWebTab = null;
-const webSecretsFile = path.join(workspaceRoot, ".alpha", "web-secrets.json");
-
-function webSecrets() {
-  try { return JSON.parse(readFileSync(webSecretsFile, "utf8")); } catch { return {}; }
-}
-
-function saveWebSecrets(secrets) {
-  const temp = `${webSecretsFile}.${randomUUID()}.tmp`;
-  writeFileSync(temp, JSON.stringify(secrets), { flag: "wx" });
-  renameSync(temp, webSecretsFile);
-}
 
 async function targetId(webContents) {
   const debuggerApi = webContents.debugger;
@@ -192,27 +181,6 @@ async function startBrowserBridge() {
         return bridgeResponse(response, 200, { allowed: true });
       }
       if (url.pathname === "/preview-target" && request.method === "GET" && preview) return bridgeResponse(response, 200, { targetId: await targetId(preview.webContents), url: preview.webContents.getURL() });
-      const secret = /^\/secrets\/(tavily|firecrawl)$/.exec(url.pathname);
-      if (secret) {
-        if (request.method === "GET") {
-          const ciphertext = webSecrets()[secret[1]];
-          return bridgeResponse(response, 200, { key: ciphertext && safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(Buffer.from(ciphertext, "base64")) : null });
-        }
-        if (request.method === "PUT") {
-          if (!safeStorage.isEncryptionAvailable()) throw new Error("System credential encryption is unavailable");
-          if (typeof body.key !== "string" || body.key.trim().length < 8 || body.key.length > 1000) throw new Error("Invalid provider key");
-          const secrets = webSecrets();
-          secrets[secret[1]] = safeStorage.encryptString(body.key.trim()).toString("base64");
-          saveWebSecrets(secrets);
-          return bridgeResponse(response, 200, { saved: true });
-        }
-        if (request.method === "DELETE") {
-          const secrets = webSecrets();
-          delete secrets[secret[1]];
-          saveWebSecrets(secrets);
-          return bridgeResponse(response, 200, { removed: true });
-        }
-      }
       return bridgeResponse(response, 404, { error: "Not found" });
     } catch (error) {
       return bridgeResponse(response, 400, { error: error instanceof Error ? error.message : String(error) });

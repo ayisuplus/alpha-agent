@@ -1,11 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createInterface } from "node:readline";
-import { join } from "node:path";
 import type { RpcCommand, RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 
 type Frame = Record<string, unknown> & { type: string; id?: string };
-type Pending = { resolve(value: RpcResponse): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> };
+type Pending = { resolve(value: RpcResponse): void; reject(error: Error): void; timer: NodeJS.Timeout };
 type Chunk = { pieces: string[]; count: number };
 
 /** One native OMP process owns one session. Alpha only transports its RPC frames. */
@@ -18,15 +17,11 @@ export class RpcProcess extends EventEmitter {
   #closed = false;
   #stderr = "";
 
-  constructor(options: { appRoot: string; cwd: string; sessionDir: string; cognitionFile: string; sessionId: string; dataRoot: string; resume: boolean }) {
+  constructor(options: { cwd: string; argv: string[]; env: Record<string, string> }) {
     super();
-    const cli = join(options.appRoot, "node_modules", "@oh-my-pi", "pi-coding-agent", "dist", "cli.js");
-    const cognition = join(options.appRoot, "src", "native", "tianshu-extension.ts");
-    const capabilities = join(options.appRoot, "src", "native", "capabilities-extension.ts");
-    this.child = spawn(process.execPath, [cli, "--mode", "rpc-ui", "--extension", cognition, "--extension", capabilities, ...(options.resume ? ["--continue"] : [])], {
+    this.child = spawn(process.execPath, options.argv, {
       cwd: options.cwd,
-      env: { ...process.env, PI_CODING_AGENT_SESSION_DIR: options.sessionDir, ALPHA_COGNITION_FILE: options.cognitionFile,
-        ALPHA_NATIVE_SESSION_ID: options.sessionId, ALPHA_DATA_ROOT: options.dataRoot },
+      env: options.env,
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     });

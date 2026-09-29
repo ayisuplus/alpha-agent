@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
-import { ComfyClient } from "../src/runtime/comfy-client";
-import { generateImageAsset } from "../src/runtime/image-tool";
-import { generateVoiceAsset } from "../src/runtime/voice-tool";
-import { generateVideoCandidate } from "../src/runtime/video-tool";
-import { assertGeneratedAssetsIntact } from "../src/runtime/media-integrity";
+import { ComfyClient } from "../src/native/capabilities/comfyui/comfy-client";
+import { generateImageAsset } from "../src/native/capabilities/comfyui/image-tool";
+import { generateVoiceAsset } from "../src/native/capabilities/comfyui/voice-tool";
+import { generateVideoCandidate } from "../src/native/capabilities/comfyui/video-tool";
+import { assertGeneratedAssetsIntact } from "../src/native/capabilities/comfyui/media-integrity";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";

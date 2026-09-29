@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { advanceTurn, assembleCognitiveFrame, classifyVerificationCommand, emptyCognitiveState, evidenceDigest, observeTool, renderCognitiveMirror, type CognitiveState } from "./tianshu-cognition";
+import { advanceTurn, assembleCognitiveFrame, classifyVerificationCommand, emptyCognitiveState, evidenceDigest, observeTool, renderCognitiveMirror, type CognitiveState } from "./state";
 
 /** Advisory-only native extension: no tool interception, second loop, or automatic turn. */
 export default function tianshuCognition(pi: ExtensionAPI): void {

@@ -6,7 +6,7 @@ import { Document, Packer, Paragraph, TextRun } from "docx";
 import ExcelJS from "exceljs";
 import { PDFDocument } from "pdf-lib";
 import { createGeneralWorkspace, verifyGeneralDeliverable } from "../src/runtime/general-work";
-import { editOffice, officeRuntimeStatus, readOffice } from "../src/runtime/office-runtime";
+import { editOffice, officeRuntimeStatus, readOffice } from "../src/native/capabilities/office/office-runtime";
 import { createOfficePlugin } from "../src/plugins/office";
 import { recordApprovedPlan } from "./support/approved-plan";
 

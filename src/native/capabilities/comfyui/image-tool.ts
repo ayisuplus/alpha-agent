@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { type } from "@oh-my-pi/omptype";
-import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
+import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { ComfyClient } from "./comfy-client";
 import { ensureGeneratedAsset } from "./media-integrity";
 import { warnUnknownStoreVersion } from "./store-tag";
@@ -109,14 +109,14 @@ export async function generateImageAsset(projectRoot: string, dataRoot: string, 
   throw new Error(`Image job ${job.promptId} is still running; Alpha can resume tracking it`);
 }
 
-export function createImageTool(projectRoot: string, dataRoot: string, presetPath: string, comfyUrl?: string): CustomTool<typeof parameters> {
+export function createImageTool(projectRoot: string, dataRoot: string, presetPath: string, comfyUrl?: string): ToolDefinition<typeof parameters> {
   return {
     name: "alpha_generate_image",
     label: "Generate local product image",
     description: "Generate an original PNG with the user's local ComfyUI using Alpha's validated Flux2 preset. Use aspect=landscape for a 16:9 video reference or wide product visual; the default is square. Returns a project-local /alpha-assets URL. Do not retry an uncertain job with a changed prompt merely to force submission.",
     parameters,
     loadMode: "essential",
-    async execute(_toolCallId, args, _onUpdate, _ctx, signal) {
+    async execute(_toolCallId, args, signal, _onUpdate, _ctx) {
       try {
         const job = await generateImageAsset(projectRoot, dataRoot, presetPath, args.prompt, new ComfyClient(comfyUrl), signal, args.aspect ?? "square");
         return { content: [{ type: "text", text: JSON.stringify({ asset: job.asset, promptId: job.promptId, sha256: job.imageSha256, seed: job.seed }) }] };

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { type } from "@oh-my-pi/omptype";
-import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
+import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent";
 import { ComfyClient } from "./comfy-client";
 import { ensureGeneratedAsset } from "./media-integrity";
 import { warnUnknownStoreVersion } from "./store-tag";
@@ -105,14 +105,14 @@ export async function generateVoiceAsset(projectRoot: string, dataRoot: string, 
   throw new Error(`Voice job ${job.promptId} is still running; Alpha can resume tracking it`);
 }
 
-export function createVoiceTool(projectRoot: string, dataRoot: string, presetPath: string, comfyUrl?: string): CustomTool<typeof parameters> {
+export function createVoiceTool(projectRoot: string, dataRoot: string, presetPath: string, comfyUrl?: string): ToolDefinition<typeof parameters> {
   return {
     name: "alpha_generate_voice",
     label: "Generate local voice audio",
     description: "Generate a short spoken FLAC with the user's local VoxCPM2 workflow. Use when spoken audio is part of the product, unless the user forbids generation. Returns a project-local asset URL; do not copy or rewrite the binary with the write tool.",
     parameters,
     loadMode: "essential",
-    async execute(_toolCallId, args, _onUpdate, _ctx, signal) {
+    async execute(_toolCallId, args, signal, _onUpdate, _ctx) {
       try {
         const job = await generateVoiceAsset(projectRoot, dataRoot, presetPath, args.text, args.voiceDesign, new ComfyClient(comfyUrl), signal);
         return { content: [{ type: "text", text: JSON.stringify({ asset: job.asset, promptId: job.promptId, sha256: job.audioSha256, seed: job.seed, listeningReview: "pending" }) }] };

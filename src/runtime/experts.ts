@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { Skill } from "@oh-my-pi/pi-coding-agent";
 import { createExpertPackage, loadExpertPackageSkills, packageRevisionHash, personaText, validateHandoff, type ExpertHandoff, type ExpertMounts, type ExpertPackage } from "./expert-package";
-import { warnUnknownStoreVersion } from "./store-tag";
+import { warnUnknownStoreVersion } from "../native/capabilities/comfyui/store-tag";
 
 const builtinRoot = resolve(import.meta.dir, "..", "..", "presets", "agents");
 const sourceUrl = "https://github.com/msitarzewski/agency-agents";

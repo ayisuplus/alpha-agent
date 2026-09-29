@@ -35,7 +35,7 @@ async function collectSource(file: string): Promise<void> {
     await collectSource(target);
   }
 }
-for (const entry of ["server.ts", "tianshu-extension.ts", "capabilities-extension.ts"]) await collectSource(join(root, "src", "native", entry));
+for (const entry of ["server.ts", "tianshu/extension.ts", "capabilities/extension.ts"]) await collectSource(join(root, "src", "native", entry));
 for (const file of activeSource) {
   const target = join(output, file.slice(root.length + 1));
   await mkdir(resolve(target, ".."), { recursive: true });
@@ -48,7 +48,7 @@ for (const source of ["desktop/dist", "licenses"]) {
 }
 await mkdir(join(output, "presets"), { recursive: true });
 for (const name of ["flux2-image.api.json", "voxcpm2-voice.api.json", "h3-video.api.json"]) await cp(join(root, "presets", name), join(output, "presets", name));
-for (const source of ["desktop/main.cjs", "desktop/preload.cjs", "scripts/start-desktop.ts", "scripts/probe-portable.ts", "scripts/portable-ui.ts", "scripts/office-worker.py", "scripts/probe-office-runtime.ts", "package.json", "package-lock.json"]) {
+for (const source of ["desktop/main.cjs", "desktop/preload.cjs", "scripts/start-desktop.ts", "scripts/probe-portable.ts", "scripts/portable-ui.ts", "src/native/capabilities/office/office-worker.py", "scripts/probe-office-runtime.ts", "package.json", "package-lock.json"]) {
   const target = join(output, source);
   await mkdir(resolve(target, ".."), { recursive: true });
   await cp(join(root, source), target);
