@@ -156,6 +156,8 @@ export interface TaskView extends TaskSummary {
       activation?: { host: "coordinator" | "worker"; runId: string; access: "read-only" | "write"; expert?: { id: string; name: string; hash: string }; expertSnapshot?: { id: string; name: string }; temporaryExpert?: { name: string } };
       handoff?: { nodeId: string; runId: string; expert?: { id: string; hash: string }; artifacts: Array<{ path: string; hash: string; kind: string }>; findings?: Array<{ claim: string; source: string }>; verdict?: "pass" | "changes-requested" | "inconclusive"; note: string; unresolved: string[]; contractVersion: number };
     }>;
+    /** Plan edges (§3.5): `depends` also appears in a node's dependsOn; rework/premise are the back-edges. */
+    edges?: Array<{ from: string; to: string; kind: "depends" | "rework" | "premise"; maxTraversals?: number }>;
     gaps: Array<{ kind: string; description: string; resolvedAt?: string; resolution?: string; blockingReason?: string }>;
     amendments: Array<{ revision: number; reason: string; affectedNodes?: string[]; affectedSteps?: string[]; recordedAt: string }>;
     agents?: Array<{ id: string; expert?: { id: string; name: string; hash: string }; skillIds: string[]; kind: string; orderId: string; lastAttemptId: string; status: string; cognition?: { revision: number; understanding: string; findings: Array<{ text: string; evidence: string[] }>; openQuestions: string[]; nextActions: string[]; sourceRevision: string | null } }>;

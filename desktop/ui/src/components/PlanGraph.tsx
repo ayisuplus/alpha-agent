@@ -23,9 +23,14 @@ function expertName(node: PlanNodeView): string {
     ?? (node.expertDecision.expertId ? node.expertDecision.expertId : "主代理自己做");
 }
 
-function NodeCard({ node, nodes }: { node: PlanNodeView; nodes: PlanNodeView[] }) {
+type PlanEdgeView = NonNullable<TaskView["cognition"]>["edges"];
+const EDGE_LABELS: Record<string, string> = { rework: "退回重做", premise: "前提回退" };
+
+function NodeCard({ node, nodes, edges }: { node: PlanNodeView; nodes: PlanNodeView[]; edges: PlanEdgeView }) {
   const waiting = node.status === "waiting";
   const cursor = node.status === "active";
+  // §3.5: the back-edges that can reopen this node; depends edges already show up as 依赖.
+  const backEdges = (edges ?? []).filter(edge => edge.to === node.id && edge.kind !== "depends");
   return <article className={`plan-node plan-node-${node.status}${cursor ? " plan-node-cursor" : ""}`} aria-label={`${node.id} ${STATUS_LABELS[node.status]}`}>
     <header>
       <strong>{node.id}</strong>
@@ -38,6 +43,7 @@ function NodeCard({ node, nodes }: { node: PlanNodeView; nodes: PlanNodeView[] }
       <dt>专家</dt><dd>{expertName(node)}</dd>
       <dt>执行位置</dt><dd>{node.host === "worker" ? "子代理" : "主会话"} · {node.activation?.access ?? (node.kind === "execute" ? "write" : "read-only")}</dd>
       {node.dependsOn.length > 0 && <><dt>依赖</dt><dd>{node.dependsOn.map(id => nodes.find(item => item.id === id) ? `${id}（${STATUS_LABELS[nodes.find(item => item.id === id)!.status]}）` : id).join("、")}</dd></>}
+      {backEdges.length > 0 && <><dt>回边</dt><dd className="plan-node-backedge">{backEdges.map(edge => `${edge.from} → ${EDGE_LABELS[edge.kind] ?? edge.kind}`).join("、")}</dd></>}
       {node.produces && node.produces.length > 0 && <><dt>产出</dt><dd>{node.produces.join("、")}</dd></>}
     </dl>
     {waiting && <p className="plan-node-waiting">⏸ 停在此节点：{node.statusReason ?? "等待中"}</p>}
@@ -53,13 +59,13 @@ function NodeCard({ node, nodes }: { node: PlanNodeView; nodes: PlanNodeView[] }
 }
 
 /** The plan as its graph (§1): three stages, nodes with their expert and handoff, and the cursor on what runs now. */
-export function PlanGraph({ nodes }: { nodes: PlanNodeView[] }) {
+export function PlanGraph({ nodes, edges }: { nodes: PlanNodeView[]; edges?: PlanEdgeView }) {
   return <div className="plan-graph" aria-label="计划图">
     {STAGES.map(stage => {
       const staged = nodes.filter(node => node.phase === stage.id);
       return <section key={stage.id} className="plan-graph-stage" aria-label={`${stage.label}阶段`}>
         <h4>{stage.label} · {staged.filter(node => node.status === "done").length}/{staged.length}</h4>
-        {staged.map(node => <NodeCard key={node.id} node={node} nodes={nodes} />)}
+        {staged.map(node => <NodeCard key={node.id} node={node} nodes={nodes} edges={edges} />)}
         {!staged.length && <p className="plan-graph-empty">此阶段尚无节点</p>}
       </section>;
     })}

@@ -186,7 +186,7 @@ export function ThreadHeader({ task, busy, phase, detailsOnly = false, onBack }:
       {!!task.cognition.constraints?.length && <p>约束：{task.cognition.constraints.join("；")}</p>}
       {!!task.cognition.openQuestions?.length && <p>待澄清：{task.cognition.openQuestions.join("；")}</p>}
       {!!task.cognition.candidates.length && <p>候选专家：{task.cognition.candidates.join("、")}（按需派发）</p>}
-      <PlanGraph nodes={nodes} />
+      <PlanGraph nodes={nodes} edges={task.cognition.edges} />
       {!!task.cognition.amendments.length && <details><summary>分工调整记录</summary><ul>{task.cognition.amendments.map(item => <li key={item.revision}>v{item.revision} · {item.reason}</li>)}</ul></details>}
       {!!task.cognition.agents?.length && <div><strong>子代理 · {task.cognition.agents.length} 个稳定身份</strong><ul>{task.cognition.agents.map(agent => <li key={agent.id}>
         <strong>{agent.expert?.name ?? "通用执行"}</strong> · {agent.kind} · {agent.status} · ID {agent.id.slice(0, 8)} · {agent.skillIds.join("、")}
