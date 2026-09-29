@@ -1,5 +1,7 @@
 # Alpha 本机首版
 
+当前 Windows 安装入口：[Alpha-Setup-0.1.0-x64.exe](Alpha-Setup-0.1.0-x64.exe)。本次 OMP 发行归档与校验值见 [2026-09-29 发行归档](docs/2026-09-29-release-archive.md)。
+
 网页搜索与操控现由 Alpha 内核统一管理：Tavily 搜索、Firecrawl 提取和采集、带来源哈希的归档，以及 Electron 可见标签页共享任务授权和人工接管状态。密钥在「设置 → 网页服务」配置；完整边界与验证见 [网页内核说明](docs/web-kernel-2026-09-25.md)。
 
 在 Windows 上运行 [Alpha.cmd](release/alpha-portable-2026-09-24T16-40-57-095Z/Alpha.cmd)（源码版用 `bun run desktop` 启动，新便携包用 `bun run package:portable` 生成）。工作台为三栏：左侧搜索和切换任务；中间是任务对话——头部显示目标版本、验收项与最近问题，时间线按轮展示 Alpha 的说明、工具调用、构建与浏览器验收结果，可下钻到逐步验收证据和源码 diff，底部唯一的输入框随任务状态切换为开始构建、运行中补充要求、继续修复或修订目标；右侧是实际运行的产品预览，可拖动分隔条调整宽度、接管或交回 Alpha。提交软件产品需求后，Alpha 会在本项目的 `release/products/` 中构建产品，并在 `release/.alpha/` 中保存任务、构建、预览和浏览器证据。预览只监听本机 `127.0.0.1`；关闭 Alpha 后预览服务停止，再次启动可从工作台重新发布并复验。
