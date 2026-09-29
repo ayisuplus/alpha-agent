@@ -56,12 +56,15 @@
 - 审查工作流的产物路径已含：任务目标、验收标准、变更路径与受限 diff、只读源码。
 - 尚未把上游节点的交接记录（`handoffSection`）注入 `development-workflow.ts` 的审查工单 objective；`roleContract` 的 reviewer 会话分支也还没有 `handoffSection`。
 
-### 2b. 评测暴露、尚未修的行为（观察项）
+### 2b. 评测暴露的行为问题与处置（2026-09-29 收尾）
 
-- **命令审批暂停最多**：两轮各有约 2 个任务停在"非配置检查"的命令审批（模型为哈希/版本/git 状态去调 `certutil`/`git status`/`bun --version`）。`alpha_step` 已能自行算产物哈希，后续可在提示里明确"不要为交接或验证跑命令"。
-- **合规 gate 未跑到**：`content-pipeline` 两轮都在 `draft` 节点暂停，`compliance` 审查节点未执行，因此方案 §10 要求的"含一次 changes-requested 返工"在端到端评测中**尚未出现**（`cr 0`）；gate 机制本身由 `sales-question` 的 `code-review` 通过结论与单测覆盖。
-- **premise 回边未出现**：`stale-premise` 靠多次 `alpha_plan` 修订推进（修订 1–8 次），`redo` 重开各出现 1 次，但没有走 premise 回边。
-- **成本噪声**：`stale-premise` 两轮都 ~682s、16–17 轮、总 token 千万级；模型倾向用新节点重写计划而不是就地修订，是最大开销来源。
+| 观察 | 处置 |
+|---|---|
+| 命令审批暂停最多：两轮各约 2 个任务停在非配置检查的命令审批（模型为哈希/版本/git 状态去调 `certutil`/`git status`/`bun --version`） | 协调者提示新增硬性指引："退出节点用 alpha_step，它自己对产物算哈希；不要为哈希、校验或查看文件运行任何命令；配置检查只走 alpha_check，其余 alpha_command 都会暂停任务等用户批准" |
+| 合规 gate 未跑到：`content-pipeline` 两轮都在 `draft` 暂停，`compliance` 审查节点未执行，`changes-requested` 返工未出现 | 同上的命令指引；评测侧给该任务加 `autoResume`（无人值守时按 brief 续跑，并提示不要用需审批的命令）；复测见下 |
+| 成本噪声：`stale-premise` 16–17 轮、千万级 token，模型用新节点重写计划而非就地修订 | 提示新增："就地修订计划——保留节点 id、改写未进入的节点，只有工作真的变大才加节点；反复用平行新节点重规划是成本失控的主因" |
+| `premise` 回边未走通（只有 redo 重开） | 归因于场景设计：`stale-premise` 的虚构前提在调查阶段就能被发现，模型靠重新规划推进。要稳定触发需让矛盾在执行后才暴露，属场景改进（待做），机制本身由 `test/plan-graph.test.ts` 的 premise 回边测试覆盖 |
+| 评测标签覆盖基线目录 | `eval/run.ts`：目标目录已有 `results.json` 时拒绝覆盖（需 `--force`），并在 `results.json` 写入被测 `revision` 与 `model` |
 
 ### 3. 审查者会话路径是死代码（§12 收尾）
 - `executionMode: "review"` 全仓库无生产者：`omp-runner.ts` 的 `reviewing` 分支、`session-profile.ts` 的 reviewer 提示词与工具表、`createDevelopmentReviewTool`(`alpha_review_result`) 实际都到不了。真实路径是 kind=`review` 的 work order（worker 角色，`alpha_worker_result`）。
