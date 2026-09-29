@@ -395,6 +395,15 @@ const today = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toI
 const out = resolve(option("out") ?? join(repo, "artifacts", `eval-${today}-${label}`));
 await mkdir(out, { recursive: true });
 const workspace = await prepareWorkspace(label);
+// --model <provider>/<id> runs the round on another provider (default: the workspace settings' own default).
+const modelOption = option("model");
+if (modelOption) {
+  const settingsPath = join(workspace, ".alpha", "settings.json");
+  const settings = JSON.parse(await readFile(settingsPath, "utf8")) as { model?: { default?: string | null; providers?: string[] } };
+  settings.model = { ...settings.model, default: modelOption, providers: [...new Set([...(settings.model?.providers ?? []), modelOption.split("/")[0]])] };
+  await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+  console.log(`model override: ${modelOption}`);
+}
 const server = await startServer(app, workspace);
 console.log(`Alpha (${label}) at ${server.base}, workspace ${workspace}`);
 const results: TaskResult[] = [];

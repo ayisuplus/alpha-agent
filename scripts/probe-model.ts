@@ -12,8 +12,11 @@ const {
 const authStorage = await discoverAuthStorage();
 const modelRegistry = new ModelRegistry(authStorage);
 const available = modelRegistry.getAvailable();
-const model = available.find(item => item.provider === "xiaomi-token-plan-cn" && item.id === "mimo-v2.6-flash");
-if (!model) throw new Error("MiMo V2.6 Flash is unavailable");
+// PROBE_MODEL=<provider>/<id> probes another provider, e.g. when the default one is throttled.
+const [provider, id] = (process.env.PROBE_MODEL ?? "xiaomi-token-plan-cn/mimo-v2.6-flash").split("/");
+const model = available.find(item => item.provider === provider && item.id === id);
+if (!model) throw new Error(`${provider}/${id} is unavailable`);
+const started = Date.now();
 
 const workspace = await mkdtemp(join(tmpdir(), "alpha-model-probe-"));
 try {
@@ -42,7 +45,7 @@ try {
     const responses = session.state.messages.filter(message => message.role === "assistant");
     const text = responses.flatMap(message => message.content.filter(part => part.type === "text").map(part => part.text)).join("\n").trim();
     if (!text.includes("ALPHA_OK")) throw new Error(`Unexpected model response: ${text.slice(0, 200)}`);
-    console.log(JSON.stringify({ model: `${model.provider}/${model.id}`, response: "ALPHA_OK", sdk: "ok" }));
+    console.log(JSON.stringify({ model: `${model.provider}/${model.id}`, response: "ALPHA_OK", sdk: "ok", elapsedMs: Date.now() - started }));
   } finally {
     await session.dispose();
   }
