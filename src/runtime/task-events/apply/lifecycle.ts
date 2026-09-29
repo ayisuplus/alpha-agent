@@ -15,7 +15,8 @@ export const lifecycleReducers: FamilyReducers = {
     switch (payload.status) {
       case "complete": {
         assertActive(state);
-        if (state.phase !== "execute" && state.phase !== undefined) throw new InvariantError("apply/plan-not-approved", "Task plan is not approved for execution");
+        // A light run (C3) has no plan graph, so plan approval is vacuous for it; full runs still need the approval.
+        if (!state.light && state.phase !== "execute" && state.phase !== undefined) throw new InvariantError("apply/plan-not-approved", "Task plan is not approved for execution");
         const gaps = computeCompletionGaps(state);
         if (gaps.length > 0) throw new InvariantError("apply/completion-gaps", `Task cannot complete: ${gaps.join(", ")}`);
         state.status = "complete";

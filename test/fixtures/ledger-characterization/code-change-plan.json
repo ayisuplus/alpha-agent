@@ -421,6 +421,11 @@
           "after": "planned"
         },
         {
+          "path": "cognition.planStallRevisions",
+          "before": "<absent>",
+          "after": 1
+        },
+        {
           "path": "cognition.revision",
           "before": 1,
           "after": 2
@@ -630,6 +635,11 @@
           "path": "cognition.nodes[2].status",
           "before": "planned",
           "after": "ready"
+        },
+        {
+          "path": "cognition.planStallRevisions",
+          "before": 1,
+          "after": 0
         },
         {
           "path": "updatedAt",
@@ -3735,6 +3745,7 @@
         "execute",
         "review"
       ],
+      "planStallRevisions": 0,
       "basedOnRevision": "<rev:1>",
       "scope": [
         "src/cart.ts"

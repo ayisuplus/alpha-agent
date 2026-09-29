@@ -241,7 +241,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
   await options.onLedger?.(ledger);
 
   let mcp: Awaited<ReturnType<SkillPluginStore["loadMCP"]>> | null = null;
-  try { if (!options.workOrder && !direct && !planning && !answering && profile.thirdParty) mcp = await pluginStore.loadMCP(projectRoot, ledger.state.capabilities?.plugins.map(item => item.id)); }
+  try { if (!options.workOrder && !direct && !planning && !answering && profile.thirdParty && !ledger.state.light) mcp = await pluginStore.loadMCP(projectRoot, ledger.state.capabilities?.plugins.map(item => item.id)); }
   catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     await ledger.needInput(`已指定的 MCP 工具无法加载：${reason}。请修复服务或说明如何继续。`, "approval");
@@ -325,7 +325,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     }
     skills = options.workOrder ? await loadWorkerSkillSnapshots(dataRoot, options.workOrder) : (directScope?.skills ?? loadedSkills);
     if (options.workOrder && skills.length !== (options.workOrder.skillIds?.length ?? 0)) throw new Error("Worker Skill snapshot is missing");
-    hooks = options.workOrder || direct || planning || answering || !profile.thirdParty ? [] : await pluginStore.loadHooks(ledger.state.capabilities?.plugins.map(item => item.id));
+    hooks = options.workOrder || direct || planning || answering || ledger.state.light || !profile.thirdParty ? [] : await pluginStore.loadHooks(ledger.state.capabilities?.plugins.map(item => item.id));
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     if (answering) throw new Error(`专家或 Skill 无法加载：${reason}`);
@@ -362,7 +362,7 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     : [];
 
   const nodeAccess: AccessLevel = runNode ? accessOf(runNode.kind) : "write";
-  const allPlugins = (options.workOrder && !options.workOrder.fullAccess) || planning || answering || nodeAccess === "read-only"
+  const allPlugins = (options.workOrder && !options.workOrder.fullAccess) || planning || answering || nodeAccess === "read-only" || ledger.state.light
     ? { tools: [], instructions: [] }
     : direct ? { tools: [], instructions: [] }
     : loadBuiltinPlugins({ projectRoot, dataRoot: authorizationRoot, url: options.comfyUrl, enabled: options.plugins, generation: options.generation, ledger });
@@ -479,7 +479,12 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     customTools: sessionCustomTools(),
     autoApprove: true,
     disableExtensionDiscovery: true,
-    preloadedPreparedExtensions: [fileToolGuard(projectRoot, options.workOrder, profile.uploads ? ["inputs"] : [], direct && !options.workOrder, planning || workerReadOnly, () => ledger.state.phase, !answering && !options.workOrder ? () => !hasRecordedPlan(ledger.state) : undefined, options.getWorkerSupervisor?.(), options.onWorkerRead), ...hooks],
+    preloadedPreparedExtensions: [fileToolGuard(projectRoot, options.workOrder, profile.uploads ? ["inputs"] : [], direct && !options.workOrder, planning || workerReadOnly, () => ledger.state.phase, !answering && !options.workOrder && !ledger.state.light ? () => !hasRecordedPlan(ledger.state) : undefined, !answering && !options.workOrder ? () => {
+      // §7: while the cursor sits on a read-only node (investigate/review), its writes are rejected at runtime; with no
+      // active node the plan-first guard above already covers the gap before the first plan records.
+      const node = ledger.state.cognition?.nodes.find(item => item.status === "active" && item.host === "coordinator");
+      return !!node && accessOf(node.kind) === "read-only";
+    } : undefined, options.getWorkerSupervisor?.(), options.onWorkerRead), ...hooks],
     enableMCP: false,
     enableLsp: toolNames.includes("lsp"),
     lspReadOnly: true,
@@ -497,6 +502,9 @@ export async function runTask(options: RunOptions): Promise<TaskLedger> {
     }
     throw error;
   }
+  // A3: pin a stable cache key across runs — Codex-style backends key prompt caching on it, and auto prefix caching
+  // benefits too; the harness would otherwise fall back to sessionId, whose cross-run stability is unverified.
+  created.session.agent.promptCacheKey = `alpha:${ledger.state.id}:${options.workOrder?.instanceId ?? facts.role}`;
   try {
     assertFileToolGuardLoaded(created.extensionsResult.extensions);
     const fileTools = created.session.agent.state.tools.filter(tool => ["read", "grep", "edit", "write"].includes(tool.name));

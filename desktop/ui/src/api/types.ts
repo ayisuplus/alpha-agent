@@ -17,7 +17,7 @@ export type StopReasonCode = "user" | "model" | "sandbox" | "budget" | "error" |
 
 export interface ProjectRecord { id: string; name: string; version: number; mounts: Array<{ id: string; path: string }>; permissionMode?: PermissionMode; createdAt: string; updatedAt: string }
 export type AutomationSchedule = { kind: "once"; at: string } | { kind: "rrule"; rule: string; timeZone: string; startAt: string };
-export interface Automation { id: string; name: string; prompt: string; kind: "cron" | "heartbeat"; status: "ACTIVE" | "PAUSED"; schedule: AutomationSchedule; nextRunAt: string | null; modelSelector: string | null; executor?: "scoped-git-backup"; notificationPolicy: "all" | "failures"; projectId?: string; mountId?: string; targetTaskId?: string; createdAt: string; updatedAt: string }
+export interface Automation { id: string; name: string; prompt: string; kind: "cron" | "heartbeat"; status: "ACTIVE" | "PAUSED"; schedule: AutomationSchedule; nextRunAt: string | null; modelSelector: string | null; executor?: "scoped-git-backup"; runMode?: "notice" | "light" | "full"; notificationPolicy: "all" | "failures"; projectId?: string; mountId?: string; targetTaskId?: string; createdAt: string; updatedAt: string }
 export interface AutomationRun { id: string; automationId: string; dueAt: string; status: "pending" | "running" | "complete" | "failed" | "needs-input" | "skipped"; missedCount: number; taskId?: string; result?: string; startedAt?: string; finishedAt?: string; readAt?: string }
 export type GuidanceStatus = "recorded" | "delivered" | "processed";
 export interface TaskMeta { title?: string; autoTitle?: string; pinned?: boolean; archived?: boolean }

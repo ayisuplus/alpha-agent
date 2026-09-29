@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CognitionState, PlanNode, TaskState } from "../src/runtime/task-ledger";
+import { graphReducers } from "../src/runtime/task-events/apply/graph";
 import { planReducers } from "../src/runtime/task-events/apply/plan";
 import { InvariantError } from "../src/runtime/task-events/errors";
 import type { TaskEventOf, TaskEventType } from "../src/runtime/task-events/types";
@@ -25,6 +26,12 @@ function baseState(overrides: Partial<TaskState> = {}): TaskState {
 function apply<Type extends TaskEventType>(state: TaskState, type: Type, payload: TaskEventOf<Type>["payload"]): void {
   const reducer = planReducers[type] as ((state: TaskState, event: TaskEventOf<Type>) => void) | undefined;
   if (!reducer) throw new Error(`planReducers has no reducer for ${type}`);
+  reducer(state, { seq: 1, at: AT, actor: "runtime", type, payload });
+}
+
+function applyGraph<Type extends TaskEventType>(state: TaskState, type: Type, payload: TaskEventOf<Type>["payload"]): void {
+  const reducer = graphReducers[type] as ((state: TaskState, event: TaskEventOf<Type>) => void) | undefined;
+  if (!reducer) throw new Error(`graphReducers has no reducer for ${type}`);
   reducer(state, { seq: 1, at: AT, actor: "runtime", type, payload });
 }
 
@@ -811,5 +818,30 @@ describe("skill-proposal/decided", () => {
     expect(state.cognition!.taskSkillIds).toEqual(["skill-kubectl"]);
     expect(state.cognition!.gaps[0].resolvedAt).toBeUndefined();
     expect(state.cognition!.gaps[0].blockingReason).toBeUndefined();
+  });
+});
+
+describe("plan/revised stall guard (B3)", () => {
+  const STALL_MESSAGE = "计划修订过于频繁：三轮修订没有任何节点完成。先完成已就绪的节点并用 alpha_step 退出，或用 alpha_reopen 退回前提有误的节点；要大幅改计划就停下来等用户决定。";
+
+  test("the fourth revision with no finished node is refused, and a finished node resets the counter", () => {
+    const state = baseState({ phase: "execute", cognition: cognition({ nodes: [node("build-api")] }) });
+    const revise = () => apply(state, "plan/revised", { input: reviseInput(), recordedAt: AT });
+    revise();
+    revise();
+    revise();
+    expect(state.cognition?.planStallRevisions).toBe(3);
+    expectInvariant(revise, "apply/plan-stall-revision", STALL_MESSAGE);
+    // The refused revision recorded nothing.
+    expect(state.cognition?.revision).toBe(4);
+    // A finished node is progress: the counter resets and planning works again, keeping the finished node's status.
+    const build = state.cognition!.nodes.find(item => item.id === "build-api")!;
+    build.status = "active";
+    applyGraph(state, "node/exited", { nodeId: "build-api", runId: "run-1", artifacts: [], note: "Delivered", unresolved: [], contractVersion: 1, exitedAt: AT });
+    expect(state.cognition?.planStallRevisions).toBe(0);
+    revise();
+    expect(state.cognition?.planStallRevisions).toBe(1);
+    expect(state.cognition?.nodes.find(item => item.id === "build-api")!.status).toBe("done");
+    expect(state.cognition?.revision).toBe(5);
   });
 });

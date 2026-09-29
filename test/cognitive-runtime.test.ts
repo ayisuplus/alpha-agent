@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { TaskLedger, type PlanNode, type PlanNodeKind } from "../src/runtime/task-ledger";
 import { taskLogDir } from "../src/runtime/task-events";
 import { cognitionSnapshot, workerSystemPrompt } from "../src/runtime/omp-runner";
+import { alphaContract, taskPrompt, type SessionFacts } from "../src/runtime/session-profile";
 import { applyPlanConstraints, assertDesignatedExpertAllocated } from "../src/runtime/worker-binding";
 import type { WorkOrder } from "../src/runtime/work-orders";
 import { createBrowserTool } from "../src/runtime/browser-tool";
@@ -277,5 +278,37 @@ test("legacy ledgers use execute and single-run defaults", async () => {
     const restored = await TaskLedger.load(ledger.file);
     expect(cognitionSnapshot(restored.state)).toContain("Phase: execute");
     expect(nextGoalCycle(restored, null, false, false).continue).toBe(false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("the coordinator contract keeps the cognition snapshot out; taskPrompt carries its single copy", async () => {
+  const { root, ledger } = await fixture();
+  try {
+    await ledger.reviseCognition({ summary: "Planned task work", reason: "task start", candidates: [], nodes: [
+      { id: "scan", objective: "Scan the app", kind: "investigate", phase: "investigate", dependsOn: [], expertDecision: { reason: "the coordinator scans itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "build", objective: "Change the app", kind: "execute", phase: "execute", dependsOn: ["scan"], expertDecision: { reason: "the coordinator changes it itself" }, host: "coordinator", skillIds: [], status: "planned" },
+      { id: "check", objective: "Review the change", kind: "review", phase: "review", dependsOn: ["build"], expertDecision: { reason: "the coordinator reviews itself" }, host: "coordinator", skillIds: [], status: "planned" },
+    ] });
+    expect(ledger.state.cognition?.nodes.length).toBe(3);
+    const facts: SessionFacts = {
+      role: "coordinator", ledger, direct: false, experts: [], skills: [], pluginToolNames: [], pluginInstructions: [],
+      mcpToolNames: [], hooksLoaded: false, officeReadToolNames: [], canDispatch: false, browserConnected: false,
+    };
+    expect(alphaContract(facts)).not.toContain("Plan nodes:");
+    const prompt = taskPrompt(ledger.state, "Continue the task");
+    expect(prompt.split("Plan nodes:").length - 1).toBe(1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("taskPrompt keeps only the latest objectives and guidance and names the omitted counts", async () => {
+  const { root, ledger } = await fixture();
+  try {
+    ledger.state.contractHistory = [1, 2, 3, 4, 5].map(version => ({ version, objective: `Objective ${version}`, revisedAt: "2026-09-28T00:00:00.000Z" }));
+    ledger.state.guidanceHistory = [1, 2, 3, 4, 5].map(index => ({ instruction: `Guidance ${index}`, recordedAt: "2026-09-28T00:00:00.000Z" }));
+    const prompt = taskPrompt(ledger.state, "Continue the task");
+    for (const kept of ["v3: Objective 3", "v4: Objective 4", "v5: Objective 5", "Guidance 3", "Guidance 5"]) expect(prompt).toContain(kept);
+    for (const dropped of ["Objective 1", "Objective 2", "Guidance 1", "Guidance 2"]) expect(prompt).not.toContain(dropped);
+    expect(prompt).toContain("…and 2 earlier objectives omitted (recorded in project memory).");
+    expect(prompt).toContain("…and 2 earlier guidance entries omitted (recorded in project memory).");
   } finally { await rm(root, { recursive: true, force: true }); }
 });

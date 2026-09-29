@@ -14,7 +14,7 @@ const inside = (root: string, path: string) => {
 };
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
-export async function createGeneralWorkspace(input: { taskType: "research" | "file-work" | "general"; objective: string; productsRoot: string; dataRoot: string; files?: UploadedInput[]; modelSelector?: string; startMode?: "plan" | "execute"; continueUntilAccepted?: boolean }): Promise<TaskLedger> {
+export async function createGeneralWorkspace(input: { taskType: "research" | "file-work" | "general"; objective: string; productsRoot: string; dataRoot: string; files?: UploadedInput[]; modelSelector?: string; startMode?: "plan" | "execute"; continueUntilAccepted?: boolean; light?: boolean }): Promise<TaskLedger> {
   if (!input.objective.trim()) throw new Error("Task objective is required");
   const files = input.files ?? [];
   if (files.length > 20 || files.reduce((size, file) => size + file.bytes.length, 0) > 50_000_000) throw new Error("Too many or too large input files");
@@ -31,6 +31,7 @@ export async function createGeneralWorkspace(input: { taskType: "research" | "fi
     inputs.push({ id, name, path, mimeType: file.mimeType, size: file.bytes.length, sha256: sha256(file.bytes), uploadedAt: new Date().toISOString() });
   }
   return TaskLedger.create(input.dataRoot, { objective: input.objective, projectRoot, taskType: input.taskType, inputs, modelSelector: input.modelSelector, startMode: input.startMode, continueUntilAccepted: input.continueUntilAccepted,
+    ...(input.light ? { light: true } : {}),
     criteria: input.taskType === "general" ? [] : [{ id: "deliverable", description: "Reviewable deliverable", kind: "artifact" }],
   });
 }

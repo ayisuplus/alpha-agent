@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PreparedExtension } from "@oh-my-pi/pi-coding-agent";
 import { createCognitionTools } from "../src/runtime/cognition-tool";
 import { fileToolGuard } from "../src/runtime/file-tool-guard";
 import { hasRecordedPlan } from "../src/runtime/planning-policy";
@@ -10,18 +9,7 @@ import { nextPlanCycle, planActionableNode, planGraphSignature, progressSignatur
 import { settleBoundary } from "../src/runtime/omp-runner";
 import { TaskLedger } from "../src/runtime/task-ledger";
 import { recordApprovedPlan } from "./support/approved-plan";
-
-type ToolCallEvent = { toolName: string; input: unknown };
-type ToolCallResult = { block?: boolean; reason?: string } | void;
-
-function toolCallHandler(guard: PreparedExtension): (event: ToolCallEvent) => Promise<ToolCallResult> {
-  let captured: ((event: ToolCallEvent) => Promise<ToolCallResult>) | undefined;
-  const factory = guard.factory;
-  if (!factory) throw new Error("file tool guard factory did not load");
-  factory({ on: (name: string, handler: typeof captured) => { if (name === "tool_call") captured = handler; } } as never);
-  if (!captured) throw new Error("tool_call hook did not load");
-  return captured;
-}
+import { toolCallHandler, type ToolCallEvent, type ToolCallResult } from "./support/tool-call";
 
 async function fixture(startMode: "plan" | "execute") {
   const root = await mkdtemp(join(tmpdir(), "alpha-plan-first-"));

@@ -12,3 +12,6 @@ export const REVIEW_PAUSE_TOOL_NAMES = ["read", "grep"] as const;
 export function hasRecordedPlan(state: Pick<TaskState, "cognition">): boolean {
   return (state.cognition?.nodes.length ?? 0) > 0;
 }
+
+/** Source/file-writing tools a read-only node (investigate/review) may not call (§7); alpha_check stays allowed. */
+export const WRITE_TOOL_NAMES = ["edit", "write", "alpha_command", "alpha_build", "alpha_document"] as const;

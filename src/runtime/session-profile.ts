@@ -81,8 +81,11 @@ export function sessionToolNames(facts: SessionFacts): string[] {
     case "answer":
       return ["read", "grep", ...intelligence, ...attachments, ...(facts.skills.length ? ["alpha_skill_read"] : []), ...facts.officeReadToolNames];
     case "coordinator": {
-      // §7: the node's access tier decides the tools; read-only nodes keep reads, checks and the web kernel only.
-      const writable = facts.nodeAccess !== "read-only";
+      // C3: a light run is a single straight answer — no plan graph, node lifecycle, expert tools or commands.
+      if (ledger.state.light) return ["read", "grep", "edit", "write", "alpha_check", "alpha_search", "alpha_source", "alpha_crawl", "alpha_site", "alpha_input", ...(facts.skills.length ? ["alpha_skill_read"] : [])];
+      // §7: the tool list no longer narrows per node access — a merged round may cross access tiers — so read-only
+      // nodes (investigate/review) get their writes rejected at the tool guard instead (file-tool-guard).
+      const writable = true;
       return [
         "read", "grep", ...intelligence, ...(writable ? ["edit", "write"] : []),
         ...attachments, ...(writable ? profile.deliveryTools(direct) : profile.deliveryTools(direct).filter(name => name === "alpha_check")),
@@ -146,13 +149,20 @@ export function cognitionSnapshot(state: TaskState): string {
   ].filter(Boolean).join("\n");
 }
 
+const HISTORY_LIMIT = 3;
 export function taskPrompt(state: TaskState, correction: string): string {
-  const history = (state.contractHistory ?? []).map(item => `v${item.version}: ${item.objective}`).join("\n");
-  const guidance = (state.guidanceHistory ?? []).map(item => item.instruction).join("\n");
+  const contract = state.contractHistory ?? [];
+  const history = contract.slice(-HISTORY_LIMIT).map(item => `v${item.version}: ${item.objective}`).join("\n");
+  const historyOmitted = Math.max(0, contract.length - HISTORY_LIMIT);
+  const guidanceAll = state.guidanceHistory ?? [];
+  const guidance = guidanceAll.slice(-HISTORY_LIMIT).map(item => item.instruction).join("\n");
+  const guidanceOmitted = Math.max(0, guidanceAll.length - HISTORY_LIMIT);
   return [
     "Preserve earlier task requirements unless the user explicitly superseded them.",
-    history ? `Earlier objectives:\n${history}` : "",
-    guidance ? `Saved user guidance:\n${guidance}` : "",
+    history ? `Latest earlier objectives:\n${history}` : "",
+    historyOmitted ? `…and ${historyOmitted} earlier objectives omitted (recorded in project memory).` : "",
+    guidance ? `Latest saved user guidance:\n${guidance}` : "",
+    guidanceOmitted ? `…and ${guidanceOmitted} earlier guidance entries omitted (recorded in project memory).` : "",
     `Current objective v${state.contractVersion ?? 1}: ${state.objective}`,
     `Current incomplete criteria: ${computeCompletionGaps(state).join(", ")}`,
     cognitionSnapshot(state),
@@ -233,10 +243,20 @@ function coordinatorContract(facts: SessionFacts): string[] {
   const { ledger, direct } = facts;
   const profile = taskProfile(ledger.state.taskType);
   const mount = facts.expertScope;
+  // C3: the light contract replaces everything below — one run, straight answer, no plan graph or node lifecycle.
+  if (ledger.state.light) return [
+    ...roleThinkingInstructions("coordinator"),
+    "You are Alpha's coordinator for a lightweight run. Work in the assigned project directory and finish in this single run: there is no plan graph and no node lifecycle here.",
+    `Current task objective v${ledger.state.contractVersion ?? 1}: ${ledger.state.objective}`,
+    `Required acceptance criteria: ${ledger.state.criteria.map(item => `${item.id}: ${item.description}`).join(" | ") || "none"}`,
+    `Edit existing files with edit and create new files with write. Keep changes within the assigned project directory. ${direct ? DIRECT_FILE_NOTE : MANAGED_FILE_NOTE}`,
+    ...deliveryGuidance(facts),
+    "Answer the task directly in your final message, or write outputs/ and alpha-deliverable.json as the delivery rule above requires. Completion is decided by Alpha's runtime from recorded evidence; never claim success without doing the work.",
+    ...(facts.mcpToolNames.length ? ["Third-party MCP tools are available only under their listed mcp__ names."] : []),
+  ];
   return [
     ...roleThinkingInstructions("coordinator"),
     "You are Alpha's coordinator for this task. Complete it in the assigned project directory.",
-    cognitionSnapshot(ledger.state),
     `Current task objective v${ledger.state.contractVersion ?? 1}: ${ledger.state.objective}`,
     // §6.1: the node's upstream is its only history — handoff records and artifacts, never conversations.
     ...handoffSection(ledger.state, facts.currentNode),
@@ -275,7 +295,6 @@ function roleContract(facts: SessionFacts): string[] {
       return [
         ...roleThinkingInstructions("coordinator"),
         "You are planning the current Alpha task. Inspect the assigned project and available read-only web sources, ask for missing context when needed, and record a concrete plan with alpha_plan. Every node fills one of the three stages (investigate, execute, review), states its expert decision with a reason, and says where it runs (host). Do not implement, run commands, alter project files, install capabilities, or interact with web page controls. Once alpha_plan succeeds, stop: the user has not approved the plan yet.",
-        cognitionSnapshot(ledger.state),
         `${facts.direct ? DIRECT_FILE_NOTE : MANAGED_FILE_NOTE}`,
         ...codeIntelligenceLine(facts),
         ...skillLines(facts, facts.direct),
@@ -283,7 +302,6 @@ function roleContract(facts: SessionFacts): string[] {
     case "answer":
       return [
         "You are answering the user's follow-up question about this task. The question does not change the task: do not modify files, run commands, dispatch work or change the objective. Inspect the project, the recorded task state and earlier conversation as needed, then answer directly and concisely in the user's language. Say which parts you verified in files and which come from the earlier conversation. If the user actually wants a change, say so and suggest revising the task instead.",
-        cognitionSnapshot(ledger.state),
         `Acceptance criteria: ${ledger.state.criteria.map(item => `${item.id}: ${item.description}`).join(" | ") || "none"}`,
         `${facts.direct ? DIRECT_FILE_NOTE : MANAGED_FILE_NOTE}`,
         ...codeIntelligenceLine(facts),

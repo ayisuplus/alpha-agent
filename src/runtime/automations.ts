@@ -18,6 +18,8 @@ export interface Automation {
   nextRunAt: string | null;
   modelSelector: string | null;
   executor?: "scoped-git-backup";
+  /** Execution tier (C1): `notice` skips the model entirely, `light` is a single-run light contract, `full` is the full state machine. */
+  runMode?: "notice" | "light" | "full";
   projectId?: string;
   mountId?: string;
   targetTaskId?: string;
@@ -40,7 +42,7 @@ export interface AutomationRun {
   readAt?: string;
 }
 export type AutomationState = { automations: Automation[]; runs: AutomationRun[] };
-export type AutomationInput = Pick<Automation, "name" | "prompt" | "kind" | "schedule" | "modelSelector" | "notificationPolicy"> & Partial<Pick<Automation, "projectId" | "mountId" | "targetTaskId" | "executor">>;
+export type AutomationInput = Pick<Automation, "name" | "prompt" | "kind" | "schedule" | "modelSelector" | "notificationPolicy"> & Partial<Pick<Automation, "projectId" | "mountId" | "targetTaskId" | "executor" | "runMode">>;
 type Frequency = "MINUTELY" | "HOURLY" | "DAILY" | "WEEKLY";
 type Rule = { frequency: Frequency; interval: number; hour?: number; minute?: number; days?: number[] };
 const dayNames = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
@@ -122,11 +124,14 @@ function checked(input: AutomationInput): AutomationInput {
   for (const id of [input.projectId, input.mountId, input.targetTaskId]) if (id !== undefined && typeof id !== "string") throw new Error("Invalid automation identifier");
   if (input.modelSelector !== null && !isAllowedModelSelector(input.modelSelector)) throw new Error("Unsupported automation model");
   if (input.executor && (input.executor !== "scoped-git-backup" || input.kind !== "cron" || !input.projectId || !input.mountId || input.modelSelector !== null)) throw new Error("Invalid scoped backup automation");
+  if (input.runMode !== undefined && input.runMode !== "notice" && input.runMode !== "light" && input.runMode !== "full") throw new Error("执行档位只能是 notice、light 或 full");
+  if (input.runMode !== undefined && input.kind !== "cron") throw new Error("执行档位只支持 cron 类型的自动化");
+  if (input.runMode === "notice" && (input.projectId || input.mountId)) throw new Error("提醒档不读写项目目录");
   if (input.notificationPolicy !== "all" && input.notificationPolicy !== "failures") throw new Error("Invalid notification policy");
   if (input.schedule.kind !== "once" && input.schedule.kind !== "rrule") throw new Error("Invalid automation schedule");
   nextAutomationTime(input.schedule, new Date(0));
   return { name, prompt, kind: input.kind, schedule: input.schedule, modelSelector: input.modelSelector, notificationPolicy: input.notificationPolicy,
-    ...(input.projectId ? { projectId: input.projectId } : {}), ...(input.mountId ? { mountId: input.mountId } : {}), ...(input.targetTaskId ? { targetTaskId: input.targetTaskId } : {}), ...(input.executor ? { executor: input.executor } : {}) };
+    ...(input.projectId ? { projectId: input.projectId } : {}), ...(input.mountId ? { mountId: input.mountId } : {}), ...(input.targetTaskId ? { targetTaskId: input.targetTaskId } : {}), ...(input.executor ? { executor: input.executor } : {}), ...(input.runMode ? { runMode: input.runMode } : {}) };
 }
 
 export class AutomationStore {
@@ -175,17 +180,19 @@ export class AutomationStore {
       const current = view.state.automations.find(value => value.id === id && !value.deletedAt);
       if (!current) throw new Error("Automation not found");
       if (patch.status && patch.status !== "ACTIVE" && patch.status !== "PAUSED") throw new Error("Invalid automation status");
-      const fields = ["name", "prompt", "kind", "schedule", "modelSelector", "notificationPolicy", "projectId", "mountId", "targetTaskId", "executor"] as const;
+      const fields = ["name", "prompt", "kind", "schedule", "modelSelector", "notificationPolicy", "projectId", "mountId", "targetTaskId", "executor", "runMode"] as const;
       const supplied = Object.fromEntries(fields.filter(key => Object.prototype.hasOwnProperty.call(patch, key)).map(key => [key, patch[key]]));
       const candidate = { ...current, ...supplied };
       if (candidate.kind === "cron") delete candidate.targetTaskId;
       else { delete candidate.projectId; delete candidate.mountId; }
+      if (candidate.runMode === "notice") { delete candidate.projectId; delete candidate.mountId; }
       const next = checked(candidate);
       const wasPaused = current.status === "PAUSED";
       const item: Automation = { ...current };
       Object.assign(item, next, { status: patch.status ?? current.status, updatedAt: new Date().toISOString() });
       if (item.kind === "cron") delete item.targetTaskId;
       else { delete item.projectId; delete item.mountId; }
+      if (item.runMode === "notice") { delete item.projectId; delete item.mountId; }
       if (patch.schedule || patch.status === "ACTIVE" && wasPaused) item.nextRunAt = nextAutomationTime(item.schedule, new Date(Date.now() - 1));
       if (item.status === "ACTIVE" && !item.nextRunAt) item.nextRunAt = nextAutomationTime(item.schedule, new Date(Date.now() - 1));
       // `updated` records the rewritten record; `status-changed` marks the transition itself. A patch that touches

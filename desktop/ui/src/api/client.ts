@@ -156,7 +156,7 @@ export const api = {
   },
   taskQueue: () => request<{ items: QueueItem[]; schedules: LocalSchedule[] }>("/api/queue"),
   automations: () => request<{ automations: Automation[]; runs: AutomationRun[] }>("/api/automations"),
-  createAutomation: (input: Pick<Automation, "name" | "prompt" | "kind" | "schedule" | "modelSelector" | "notificationPolicy"> & Partial<Pick<Automation, "projectId" | "mountId" | "targetTaskId">>) => post<{ automation: Automation }>("/api/automations", input),
+  createAutomation: (input: Pick<Automation, "name" | "prompt" | "kind" | "schedule" | "modelSelector" | "notificationPolicy" | "runMode"> & Partial<Pick<Automation, "projectId" | "mountId" | "targetTaskId">>) => post<{ automation: Automation }>("/api/automations", input),
   updateAutomation: (id: string, patch: Partial<Automation>) => send<{ automation: Automation }>("PATCH", `/api/automations/${encodeURIComponent(id)}`, patch),
   deleteAutomation: (id: string) => send<{ deleted: boolean }>("DELETE", `/api/automations/${encodeURIComponent(id)}`),
   runAutomation: (id: string) => post<{ run: AutomationRun }>(`/api/automations/${encodeURIComponent(id)}/run`),

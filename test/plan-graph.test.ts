@@ -5,9 +5,10 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   TaskLedger,
+  accessOf,
   type CognitionState,
   type PlanEdge,
   type PlanNode,
@@ -15,6 +16,10 @@ import {
   type TaskState,
 } from "../src/runtime/task-ledger";
 import { foldTask, type TaskEvent, type TaskEventPayloads } from "../src/runtime/task-events";
+import { createCognitionTools } from "../src/runtime/cognition-tool";
+import { ExpertStore } from "../src/runtime/experts";
+import { fileToolGuard } from "../src/runtime/file-tool-guard";
+import { toolCallHandler } from "./support/tool-call";
 
 function node(id: string, kind: PlanNodeKind, phase: PlanNodeKind, dependsOn: string[], extra: Partial<PlanNode> = {}): PlanNode {
   return {
@@ -405,4 +410,134 @@ test("a user-designated expert is the same graph constraint for dispatch and non
       await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   }
+});
+
+// token-cost-reduction (B1/B2/B3): read-only nodes cannot write (the guard refuses per call), a plan revision or an
+// adjacent node with the same expert merges the round instead of ending it, and stalled re-planning pauses for the user.
+
+const dataRootOf = (ledger: TaskLedger) => dirname(dirname(ledger.file));
+type PlanToolNode = {
+  id: string; objective: string; kind: "investigate" | "execute" | "review"; phase: "investigate" | "execute" | "review";
+  dependsOn: string[]; host: "coordinator" | "worker"; skillIds: string[];
+  expertDecision: { expertId?: string; reason: string };
+};
+const planCallArgs = (nodes: PlanToolNode[]) => ({
+  summary: "Rework the plan around new evidence", reason: "The evidence changed the plan", candidates: [], nodes,
+});
+const plainNode = (id: string, kind: PlanToolNode["kind"], dependsOn: string[], expertId?: string): PlanToolNode => ({
+  id, objective: `Work on ${id}`, kind, phase: kind, dependsOn, host: "coordinator",
+  expertDecision: expertId ? { expertId, reason: "the reviewer covers this node" } : { reason: "the coordinator works this node itself" },
+  skillIds: [],
+});
+
+test("a read-only node cannot write or run commands: the tool guard refuses each call (B1)", async () => {
+  await withPlan([
+    node("inspect", "investigate", "investigate", []),
+    node("build", "execute", "execute", ["inspect"]),
+    node("final-check", "review", "review", ["build"]),
+  ], async ledger => {
+    await ledger.enterNode({ nodeId: "inspect", host: "coordinator", runId: "run-inspect" });
+    const writeBlocked = () => {
+      const current = ledger.state.cognition?.nodes.find(item => item.status === "active" && item.host === "coordinator");
+      return !!current && accessOf(current.kind) === "read-only";
+    };
+    const call = toolCallHandler(fileToolGuard(ledger.state.projectRoot, undefined, [], false, false, undefined, undefined, writeBlocked));
+    const reason = "当前节点为只读节点（调查/审查）：不能写文件或运行命令；先用 alpha_step 退出该节点";
+    for (const toolName of ["edit", "write", "alpha_command", "alpha_build", "alpha_document"]) {
+      expect(await call({ toolName, input: {} })).toEqual({ block: true, reason });
+    }
+    // Checks and node lifecycle are not writes.
+    expect(await call({ toolName: "alpha_check", input: {} })).toBeUndefined();
+    expect(await call({ toolName: "alpha_step", input: {} })).toBeUndefined();
+  });
+});
+
+test("a plan revision merges the round when the next node keeps the expert (B2)", async () => {
+  await withPlan([
+    node("scan", "investigate", "investigate", []),
+    node("build", "execute", "execute", ["scan"]),
+    node("final-check", "review", "review", ["build"]),
+  ], async ledger => {
+    const dataRoot = dataRootOf(ledger);
+    const moves: Array<{ nodeId: string; sameConfig: boolean }> = [];
+    const [plan] = createCognitionTools(ledger, dataRoot, { onCursorMoved: input => { if (input.next) moves.push(input.next); } });
+    await ledger.enterNode({ nodeId: "scan", host: "coordinator", runId: "run-scan" });
+    const result = await plan.execute("plan", planCallArgs([
+      plainNode("scan", "investigate", []),
+      plainNode("extra", "investigate", []),
+      plainNode("build", "execute", ["scan"]),
+      plainNode("final-check", "review", ["build"]),
+    ]), undefined, undefined as never);
+    expect(result.isError).toBeUndefined();
+    expect(JSON.stringify(result.content)).toContain("游标移至 extra，继续执行");
+    expect(moves.at(-1)).toEqual({ nodeId: "extra", sameConfig: true });
+    expect(statusOf(ledger, "extra")).toBe("active");
+  });
+});
+
+test("a plan revision ends the round when the next node needs a different expert (B2)", async () => {
+  await withPlan([
+    node("scan", "investigate", "investigate", []),
+    node("build", "execute", "execute", ["scan"]),
+    node("final-check", "review", "review", ["build"]),
+  ], async ledger => {
+    const dataRoot = dataRootOf(ledger);
+    const expert = await new ExpertStore(dataRoot).create({ name: "Reviewer", description: "Checks work", instructions: "Check the work.", skillIds: [] });
+    const moves: Array<{ nodeId: string; sameConfig: boolean }> = [];
+    const [plan] = createCognitionTools(ledger, dataRoot, { onCursorMoved: input => { if (input.next) moves.push(input.next); } });
+    await ledger.enterNode({ nodeId: "scan", host: "coordinator", runId: "run-scan" });
+    const result = await plan.execute("plan", planCallArgs([
+      plainNode("scan", "investigate", []),
+      plainNode("extra", "investigate", [], expert.id),
+      plainNode("build", "execute", ["scan"]),
+      plainNode("final-check", "review", ["build"]),
+    ]), undefined, undefined as never);
+    expect(result.isError).toBeUndefined();
+    expect(JSON.stringify(result.content)).toContain("本轮到此结束，下一轮从节点 extra 开始执行");
+    expect(moves.at(-1)).toEqual({ nodeId: "extra", sameConfig: false });
+    expect(statusOf(ledger, "extra")).toBe("ready");
+  });
+});
+
+test("alpha_step merges rounds across access tiers when the expert is unchanged (B2)", async () => {
+  await withPlan([
+    node("inspect", "investigate", "investigate", []),
+    node("build", "execute", "execute", ["inspect"]),
+    node("final-check", "review", "review", ["build"]),
+  ], async ledger => {
+    const dataRoot = dataRootOf(ledger);
+    const moves: Array<{ nodeId: string; sameConfig: boolean }> = [];
+    const [, , , step] = createCognitionTools(ledger, dataRoot, { onCursorMoved: input => { if (input.next) moves.push(input.next); } });
+    expect(accessOf("investigate")).toBe("read-only");
+    expect(accessOf("execute")).toBe("write");
+    await ledger.enterNode({ nodeId: "inspect", host: "coordinator", runId: "run-inspect" });
+    const result = await step.execute("step", { nodeId: "inspect", artifacts: [], findings: [finding], note: "Investigation recorded", unresolved: [] }, undefined, undefined as never);
+    expect(result.isError).toBeUndefined();
+    expect(JSON.stringify(result.content)).toContain("游标移至 build，继续执行");
+    expect(moves.at(-1)).toEqual({ nodeId: "build", sameConfig: true });
+    expect(statusOf(ledger, "build")).toBe("active");
+  });
+});
+
+test("three progress-less revisions pause for the user instead of re-planning forever (B3)", async () => {
+  await withPlan([
+    node("scan", "investigate", "investigate", []),
+    node("build", "execute", "execute", ["scan"]),
+    node("final-check", "review", "review", ["build"]),
+  ], async ledger => {
+    const [plan] = createCognitionTools(ledger, dataRootOf(ledger));
+    const args = () => planCallArgs([
+      plainNode("scan", "investigate", []),
+      plainNode("build", "execute", ["scan"]),
+      plainNode("final-check", "review", ["build"]),
+    ]);
+    // withPlan recorded the first revision; two more pass, the fourth is the stall guard's refusal.
+    expect((await plan.execute("plan", args(), undefined, undefined as never)).isError).toBeUndefined();
+    expect((await plan.execute("plan", args(), undefined, undefined as never)).isError).toBeUndefined();
+    const refused = await plan.execute("plan", args(), undefined, undefined as never);
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused.content)).toContain("计划修订过于频繁");
+    expect(ledger.state.status).toBe("needs-input");
+    expect(ledger.state.pauseReason).toBe("question");
+  });
 });

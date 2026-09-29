@@ -265,6 +265,8 @@ export interface CognitionState {
   stages?: PlanNodeKind[];
   /** Declared back-edges (§3.5); `depends` edges live in each node's `dependsOn`. */
   edges?: PlanEdge[];
+  /** Consecutive `plan/revised` folds since the last finished node (B3 护栏): 3 without progress pauses for the user. */
+  planStallRevisions?: number;
   nodes: PlanNode[];
   gaps: Array<{ kind: "method" | "tool" | "permission" | "context"; description: string; recordedAt: string; resolvedAt?: string; resolution?: string; blockingReason?: string }>;
   amendments: Array<{ revision: number; reason: string; affectedNodes: string[]; recordedAt: string }>;
@@ -286,6 +288,8 @@ export interface TaskState {
   projectVersion?: number;
   permissionMode?: PermissionMode;
   taskType?: TaskType;
+  /** Lightweight run (C3): single run, no plan graph, no node lifecycle, no MCP/expert/plugin loading. */
+  light?: boolean;
   workspaceOrigin?: WorkspaceOrigin;
   inputs?: Array<{ id: string; name: string; path: string; mimeType: string; size?: number; sha256: string; uploadedAt: string }>;
   capabilities?: { plugins: Array<{ id: string; revision: string }>; skills: Array<{ id: string; hash: string; revision: string }> };
@@ -445,6 +449,7 @@ export class TaskLedger {
     startMode?: "plan" | "execute";
     continueUntilAccepted?: boolean;
     goalBudget?: GoalBudget;
+    light?: boolean;
   }): Promise<TaskLedger> {
     if (!input.objective.trim()) throw new Error("Task objective is required");
     if (input.modelSelector && !isAllowedModelSelector(input.modelSelector)) throw new Error(`Model is not supported: ${input.modelSelector}`);
@@ -460,6 +465,7 @@ export class TaskLedger {
       id,
       ...(input.projectId ? { projectId: input.projectId, projectVersion: input.projectVersion, permissionMode: input.permissionMode ?? "ask" } : {}),
       taskType: input.taskType ?? "web-product",
+      ...(input.light ? { light: true } : {}),
       workspaceOrigin: input.workspaceOrigin ?? { kind: "generated" },
       ...(input.inputs?.length ? { inputs: input.inputs } : {}),
       ...(input.capabilities ? { capabilities: input.capabilities } : {}),
@@ -474,7 +480,8 @@ export class TaskLedger {
       status: "active",
       // Every task starts in the plan lane. "execute" (自动批准) approves the plan the moment it is recorded and the
       // run continues; "plan" (等待审批) stops for the user's review. The plan-first guard holds either way.
-      phase: "plan",
+      // A light run (C3) has no plan graph at all: it starts executing and finishes in this single run.
+      phase: input.light ? "execute" : "plan",
       planApprovalMode: input.startMode === "plan" ? "review" : "auto",
       goal: { enabled: input.continueUntilAccepted ?? false, ...(input.goalBudget ? { budget: input.goalBudget } : {}) },
       revision: await fingerprintSource(projectRoot),
@@ -488,7 +495,8 @@ export class TaskLedger {
     const ledger = new TaskLedger(file, state, 0);
     await ledger.commit(() => ({ type: "task/created", payload: { state } }));
     // The skeleton is runtime-owned (§3.2): every task starts with the three stages; plans fill them, never delete them.
-    await ledger.commit(() => ({ type: "graph/skeleton-created", payload: { stages: ["investigate", "execute", "review"] } }));
+    // A light run (C3) has no plan graph at all, so it skips the skeleton instead of carrying three dead stages.
+    if (!input.light) await ledger.commit(() => ({ type: "graph/skeleton-created", payload: { stages: ["investigate", "execute", "review"] } }));
     return ledger;
   }
 
@@ -899,7 +907,8 @@ export class TaskLedger {
 
   async complete(): Promise<void> {
     this.assertActive();
-    if (this.state.phase !== "execute" && this.state.phase !== undefined) throw new Error("Task plan is not approved for execution");
+    // A light run (C3) has no plan graph, so plan approval is vacuous for it; full runs still need the approval.
+    if (!this.state.light && this.state.phase !== "execute" && this.state.phase !== undefined) throw new Error("Task plan is not approved for execution");
     if (await fingerprintSource(this.state.projectRoot) !== this.state.revision) throw new Error("Task source changed before completion");
     await this.commit(() => ({ type: "status/changed", payload: { status: "complete" } }));
   }

@@ -20,6 +20,12 @@ const project = join(root, "project");
 await Bun.write(join(project, "AGENTS.md"), "Use pnpm for every script in this project.");
 try {
   const ledger = await TaskLedger.create(join(root, "data"), { objective: "Fix the cart total", projectRoot: project, taskType: "code-change", criteria: [{ id: "check", description: "Configured project checks pass", kind: "test" }] });
+  // A recorded plan makes the snapshot's `Plan nodes:` line exist, so the contract check below is not vacuous.
+  await ledger.reviseCognition({ summary: "Fix and verify the cart total", reason: "task start", candidates: [], nodes: [
+    { id: "scan", objective: "Scan the cart code", kind: "investigate", phase: "investigate", dependsOn: [], expertDecision: { reason: "the coordinator scans itself" }, host: "coordinator", skillIds: [], status: "planned" },
+    { id: "fix", objective: "Fix the total rounding", kind: "execute", phase: "execute", dependsOn: ["scan"], expertDecision: { reason: "the coordinator fixes it itself" }, host: "coordinator", skillIds: [], status: "planned" },
+    { id: "verify", objective: "Review the fix", kind: "review", phase: "review", dependsOn: ["fix"], expertDecision: { reason: "the coordinator reviews it itself" }, host: "coordinator", skillIds: [], status: "planned" },
+  ] });
   const { authStorage, modelRegistry } = await ompRegistry();
   const model = modelRegistry.getAvailable().find(item => `${item.provider}/${item.id}` === DEFAULT_MODEL) ?? modelRegistry.getAvailable()[0];
   if (!model) throw new Error("No authenticated model");
@@ -54,6 +60,7 @@ try {
       console.log("tools:", session.agent.state.tools.map(tool => tool.name).join(", "));
       console.log("omp role line at", at("Oh My Pi coding harness"), "· context file at", at("Use pnpm for every script"), "· Alpha contract at", at("ALPHA RUNTIME CONTRACT"));
       console.log("contract ends the prompt:", prompt.trimEnd().endsWith(alphaContract(facts).trimEnd().slice(-80)));
+      console.log("contract mentions Plan nodes:", alphaContract(facts).includes("Plan nodes:"));
     } finally { await session.dispose(); }
   }
   authStorage.close();

@@ -36,6 +36,7 @@ export function AutomationsView() {
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [kind, setKind] = useState<"cron" | "heartbeat">("cron");
+  const [runMode, setRunMode] = useState<"notice" | "light" | "full">("light");
   const [targetTaskId, setTargetTaskId] = useState("");
   const [projectId, setProjectId] = useState("");
   const [mountId, setMountId] = useState("");
@@ -63,6 +64,7 @@ export function AutomationsView() {
 
   function edit(item: Automation) {
     setEditing(item.id); setName(item.name); setPrompt(item.prompt); setKind(item.kind);
+    setRunMode(item.runMode ?? "full");
     setTargetTaskId(item.targetTaskId ?? ""); setProjectId(item.projectId ?? ""); setMountId(item.mountId ?? "");
     setModelSelector(item.modelSelector); setNotificationPolicy(item.notificationPolicy);
     const rule = item.schedule.kind === "rrule" ? item.schedule.rule : "";
@@ -71,7 +73,7 @@ export function AutomationsView() {
     setError("");
     setFormOpen(true);
   }
-  function reset() { setEditing(null); setName(""); setPrompt(""); setKind("cron"); setTargetTaskId(""); setProjectId(""); setMountId(""); setModelSelector(null); setNotificationPolicy("failures"); setCadence("once"); setAt(localDate(new Date(Date.now() + 5 * 60_000))); setError(""); setFormOpen(false); }
+  function reset() { setEditing(null); setName(""); setPrompt(""); setKind("cron"); setRunMode("light"); setTargetTaskId(""); setProjectId(""); setMountId(""); setModelSelector(null); setNotificationPolicy("failures"); setCadence("once"); setAt(localDate(new Date(Date.now() + 5 * 60_000))); setError(""); setFormOpen(false); }
   async function save() {
     setBusy(true); setError("");
     try {
@@ -80,7 +82,9 @@ export function AutomationsView() {
       const hour = date.getHours(), minute = date.getMinutes();
       const rule = cadence === "hourly" ? `FREQ=HOURLY;BYMINUTE=${minute}` : cadence === "daily" ? `FREQ=DAILY;BYHOUR=${hour};BYMINUTE=${minute}` : `FREQ=WEEKLY;BYDAY=${dayNames[date.getDay()]};BYHOUR=${hour};BYMINUTE=${minute}`;
       const schedule = cadence === "once" ? { kind: "once" as const, at: date.toISOString() } : { kind: "rrule" as const, rule, timeZone, startAt: date.toISOString() };
-      const input = { name, prompt, kind, schedule, modelSelector, notificationPolicy, ...(kind === "heartbeat" ? { targetTaskId } : { projectId: projectId || undefined, mountId: mountId || undefined }) };
+      // The notice tier is a plain reminder: forced cron, no project directory and no model (C1/C2).
+      const input = { name, prompt, kind: effectiveKind, schedule, modelSelector: runMode === "notice" ? null : modelSelector, notificationPolicy, runMode,
+        ...(effectiveKind === "heartbeat" ? { targetTaskId } : runMode === "notice" ? {} : { projectId: projectId || undefined, mountId: mountId || undefined }) };
       if (editing) await api.updateAutomation(editing, input);
       else await api.createAutomation(input);
       await refresh(); reset();
@@ -94,7 +98,9 @@ export function AutomationsView() {
     failed: { label: "失败", tone: "danger" }, "needs-input": { label: "需要处理", tone: "warning" }, skipped: { label: "已跳过", tone: "neutral" },
   };
   const shownRuns = [...runs].reverse().slice(0, allRuns ? undefined : 12);
-  const canSave = !busy && !!name.trim() && !!prompt.trim() && !(kind === "heartbeat" && !targetTaskId) && !(kind === "cron" && !!selectedProject?.mounts.length && !mountId);
+  const noticeMode = runMode === "notice";
+  const effectiveKind: "cron" | "heartbeat" = noticeMode ? "cron" : kind;
+  const canSave = !busy && !!name.trim() && !!prompt.trim() && !(effectiveKind === "heartbeat" && !targetTaskId) && !(!noticeMode && effectiveKind === "cron" && !!selectedProject?.mounts.length && !mountId);
   const create = () => { reset(); setFormOpen(true); };
 
   return <div className="automations-view">
@@ -109,14 +115,15 @@ export function AutomationsView() {
         <label>名称<input value={name} onChange={event => setName(event.target.value)} maxLength={100} placeholder="例如：每天检查项目" autoFocus /></label>
         <label>执行指令<textarea value={prompt} onChange={event => setPrompt(event.target.value)} readOnly={editingBackup} rows={4} placeholder="说明每次触发后需要完成什么" /></label>
         {editingBackup && <p className="automations-note">此任务由限定目录的 Git 备份执行器运行；指令保留作迁移记录。</p>}
-        <div className="automations-grid"><label>执行方式<select value={kind} disabled={editingBackup} onChange={event => setKind(event.target.value as "cron" | "heartbeat")}><option value="cron">每次新建任务</option><option value="heartbeat">跟进已有任务</option></select></label>
-          {kind === "heartbeat" ? <label>目标任务<select value={targetTaskId} onChange={event => setTargetTaskId(event.target.value)}><option value="">选择任务</option>{tasks.map(task => <option key={task.id} value={task.id}>{taskTitle(task)}</option>)}</select></label> : <label>项目<select value={projectId} disabled={editingBackup} onChange={event => { setProjectId(event.target.value); setMountId(""); }}><option value="">独立任务</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>}
-          {kind === "cron" && !!selectedProject?.mounts.length && <label>工作目录<select value={mountId} disabled={editingBackup} onChange={event => setMountId(event.target.value)}><option value="">选择目录</option>{selectedProject.mounts.map(mount => <option key={mount.id} value={mount.id}>{mount.path}</option>)}</select></label>}
+        <div className="automations-grid"><label>执行档位<select value={runMode} onChange={event => setRunMode(event.target.value as "notice" | "light" | "full")}><option value="light">轻量运行（单轮直答）</option><option value="notice">提醒通知（不调用模型）</option><option value="full">完整任务</option></select></label>
+          {!noticeMode && <label>执行方式<select value={kind} disabled={editingBackup} onChange={event => setKind(event.target.value as "cron" | "heartbeat")}><option value="cron">每次新建任务</option><option value="heartbeat">跟进已有任务</option></select></label>}
+          {!noticeMode && (kind === "heartbeat" ? <label>目标任务<select value={targetTaskId} onChange={event => setTargetTaskId(event.target.value)}><option value="">选择任务</option>{tasks.map(task => <option key={task.id} value={task.id}>{taskTitle(task)}</option>)}</select></label> : <label>项目<select value={projectId} disabled={editingBackup} onChange={event => { setProjectId(event.target.value); setMountId(""); }}><option value="">独立任务</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>)}
+          {!noticeMode && kind === "cron" && !!selectedProject?.mounts.length && <label>工作目录<select value={mountId} disabled={editingBackup} onChange={event => setMountId(event.target.value)}><option value="">选择目录</option>{selectedProject.mounts.map(mount => <option key={mount.id} value={mount.id}>{mount.path}</option>)}</select></label>}
           <label>计划<select value={cadence} onChange={event => setCadence(event.target.value as Cadence)}><option value="once">执行一次</option><option value="hourly">每小时</option><option value="daily">每天</option><option value="weekly">每周</option></select></label>
           <label>{cadence === "once" ? "执行时间" : "开始时间"}<input type="datetime-local" value={at} onChange={event => setAt(event.target.value)} /></label>
           <label>运行通知<select value={notificationPolicy} onChange={event => setNotificationPolicy(event.target.value as "all" | "failures")}><option value="failures">仅失败与需处理</option><option value="all">每次结果</option></select></label>
         </div>
-        {!editingBackup && <ModelPicker value={modelSelector} onChange={setModelSelector} allowDefault defaultLabel="跟随默认模型" label="执行模型" />}
+        {!editingBackup && !noticeMode && <ModelPicker value={modelSelector} onChange={setModelSelector} allowDefault defaultLabel="跟随默认模型" label="执行模型" />}
         {error && <p className="automations-error" role="alert">{error}</p>}
         <div className="automations-actions">
           <Button size="sm" variant="primary" disabled={!canSave} busy={busy} onClick={() => void save()}>{editing ? "保存修改" : "创建自动化"}</Button>

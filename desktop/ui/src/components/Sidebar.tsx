@@ -58,7 +58,7 @@ export function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle(
       if (seenRuns.current && window.alpha?.notify && store.get().settings?.notifications.enabled && !document.hasFocus()) {
         for (const run of relevant) if (seenRuns.current.get(run.id) !== run.status) {
           const name = data.automations.find(item => item.id === run.automationId)?.name ?? "自动化";
-          window.alpha.notify(`Alpha · ${name}`, `自动化运行${run.status === "complete" ? "完成" : run.status === "needs-input" ? "需要处理" : "失败"}`, run.taskId ?? "");
+          window.alpha.notify(`Alpha · ${name}`, (run.result ?? "").trim().slice(0, 200) || `自动化运行${run.status === "complete" ? "完成" : run.status === "needs-input" ? "需要处理" : "失败"}`, run.taskId ?? "");
         }
       }
       seenRuns.current = current;

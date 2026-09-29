@@ -78,6 +78,10 @@ export const planReducers: FamilyReducers = {
 
   "plan/revised": (state, event) => {
     assertActive(state);
+    // B3 (§3.7 护栏): three revisions with no finished node in between mean re-planning is going in circles; the fourth
+    // is refused here and the tool turns the refusal into a pause for the user.
+    const stall = state.cognition?.planStallRevisions ?? 0;
+    if (stall >= 3) throw new InvariantError("apply/plan-stall-revision", "计划修订过于频繁：三轮修订没有任何节点完成。先完成已就绪的节点并用 alpha_step 退出，或用 alpha_reopen 退回前提有误的节点；要大幅改计划就停下来等用户决定。");
     const input = event.payload.input;
     const legacyInput = !("nodes" in input);
     const rawNodes: unknown[] = !legacyInput && Array.isArray(input.nodes) ? input.nodes : "steps" in input && Array.isArray(input.steps) ? input.steps : [];
@@ -141,7 +145,7 @@ export const planReducers: FamilyReducers = {
     const nextScope = clean(input.scope, previous.scope);
     const nextConstraints = clean(input.constraints, previous.constraints);
     const materialChange = !!state.planApproval && (JSON.stringify(nextScope) !== JSON.stringify(previous.scope) || JSON.stringify(nextConstraints) !== JSON.stringify(previous.constraints) || nodes.some(node => !previous.nodes.some(prior => prior.id === node.id && prior.status !== "cancelled")) || previous.nodes.some(prior => prior.status !== "done" && prior.status !== "active" && prior.status !== "cancelled" && !nodes.some(node => node.id === prior.id && nodeDefinition(node) === nodeDefinition(prior))));
-    state.cognition = { ...previous, revision, basedOnRevision: state.revision, summary: input.summary.trim(), scope: nextScope, constraints: nextConstraints, openQuestions: clean(input.openQuestions, previous.openQuestions), candidates: [...new Set(input.candidates)], nodes: nodes.map(node => {
+    state.cognition = { ...previous, revision, planStallRevisions: stall + 1, basedOnRevision: state.revision, summary: input.summary.trim(), scope: nextScope, constraints: nextConstraints, openQuestions: clean(input.openQuestions, previous.openQuestions), candidates: [...new Set(input.candidates)], nodes: nodes.map(node => {
       const prior = previous.nodes.find(item => item.id === node.id);
       return prior ? { ...node, status: prior.status, statusReason: prior.statusReason, revision: prior.revision, claimedBy: prior.claimedBy, activation: prior.activation, handoff: prior.handoff, stale: prior.stale } : node;
     }), edges: input.edges === undefined ? previous.edges ?? [] : edges.map(edge => {

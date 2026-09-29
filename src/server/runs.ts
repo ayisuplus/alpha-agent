@@ -251,7 +251,10 @@ async function execute(ctx: ServerContext, run: RunState, objective: string, pro
       }
       // §3.3: while the approved graph has a node to exit or enter, the driver keeps the cursor moving instead of
       // stranding ready work when a run stops on its own. Two runs without graph or evidence progress end the loop.
-      const planCycle = nextPlanCycle({
+      // C3: a light run has no plan graph and is single-shot, so it never enters a plan cycle.
+      const planCycle = currentLedger.state.light
+        ? { continue: false, noProgressRuns: planStallRuns, stalled: false, blocked: false }
+        : nextPlanCycle({
         ledger: currentLedger, graphBefore: planGraphBefore, evidenceBefore: beforeProgress, noProgressRuns: planStallRuns,
         cancelled: controller.signal.aborted, userControl: webKernel.controlHolder === "user",
       });
@@ -460,6 +463,18 @@ async function startAutomation(ctx: ServerContext, pendingId: string, automation
     lease = ctx.operations.claim("run", { taskId: automation.targetTaskId ?? null, projectId: project?.id ?? null, roots: mount ? [mount.path] : [], runLimit: limit });
     if (!lease) return false;
     if (automation.modelSelector && !await isModelAvailable(automation.modelSelector)) throw new Error("Automation model is unavailable");
+    // C2: the notice tier is a plain reminder — a recorded task with the reminder text as its result, zero model calls
+    // and no plan graph. The task still lands in the list so clicking the notification opens something real.
+    if ((automation.runMode ?? "full") === "notice") {
+      const ledger = await createGeneralWorkspace({ taskType: "general", objective: automation.prompt, productsRoot: ctx.productsRoot, dataRoot: ctx.dataRoot, light: true });
+      ctx.nameTask(ledger, automation.name);
+      ctx.operations.bind(lease, { taskId: ledger.state.id, roots: [ledger.state.projectRoot] });
+      await ctx.automationStore.start(pendingId, ledger.state.id, randomUUID());
+      await ledger.complete();
+      await ctx.automationStore.finish(pendingId, "complete", automation.prompt);
+      ctx.emit({ type: "task", taskId: ledger.state.id, task: ctx.taskView(ledger) });
+      return true;
+    }
     if (automation.executor === "scoped-git-backup") {
       if (!project || !mount || project.permissionMode !== "full") throw new Error("Scoped backup project is unavailable or lacks full access");
       await verifySandbox({ cwd: mount.path, roots: await ctx.projectStore.roots(project.id, project.version), dataRoot: ctx.dataRoot, network: true, signal: lease.controller.signal });
@@ -501,6 +516,7 @@ async function startAutomation(ctx: ServerContext, pendingId: string, automation
       if (mount) await verifySandbox({ cwd: mount.path, roots: await ctx.projectStore.roots(project.id, project.version), dataRoot: ctx.dataRoot, network: project.permissionMode === "full", signal: lease.controller.signal });
       ledger = await TaskLedger.create(ctx.dataRoot, { objective: automation.prompt, projectRoot, taskType: "general", criteria: [],
         workspaceOrigin: { kind: mount ? "direct" : "generated", ...(mount ? { checks: await configuredChecks(mount.path) } : {}) },
+        ...(automation.runMode === "light" ? { light: true } : {}),
         projectId: project.id, projectVersion: project.version, permissionMode: project.permissionMode ?? "ask", modelSelector: automation.modelSelector ?? undefined });
       if (mount) {
         const baseline = await snapshotSourceHashes(projectRoot);
@@ -508,7 +524,7 @@ async function startAutomation(ctx: ServerContext, pendingId: string, automation
         await writeFile(join(ctx.directBaselineRoot, `${ledger.state.id}.json`), JSON.stringify({ format: 2, files: baseline }), { flag: "wx" });
       }
     } else {
-      ledger = await createGeneralWorkspace({ taskType: "general", objective: automation.prompt, productsRoot: ctx.productsRoot, dataRoot: ctx.dataRoot, modelSelector: automation.modelSelector ?? undefined });
+      ledger = await createGeneralWorkspace({ taskType: "general", objective: automation.prompt, productsRoot: ctx.productsRoot, dataRoot: ctx.dataRoot, modelSelector: automation.modelSelector ?? undefined, ...(automation.runMode === "light" ? { light: true } : {}) });
       ctx.operations.bind(lease, { roots: [ledger.state.projectRoot] });
     }
     ctx.nameTask(ledger, automation.name);

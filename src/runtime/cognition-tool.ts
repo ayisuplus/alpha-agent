@@ -5,7 +5,8 @@ import { type } from "@oh-my-pi/omptype";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent";
 import { ExpertStore } from "./experts";
 import { SkillPluginStore } from "../plugins/third-party";
-import { accessOf, planApprovalModeOf, type PlanNode, type TaskLedger } from "./task-ledger";
+import { InvariantError } from "./task-events/errors";
+import { planApprovalModeOf, type PlanNode, type TaskLedger } from "./task-ledger";
 import { gateActorFor } from "./expert-selection";
 import { discoverForGap } from "./skill-discovery";
 import { taskProfile } from "./task-profile";
@@ -109,21 +110,35 @@ export function createCognitionTools(ledger: TaskLedger, dataRoot: string, hooks
             throw new Error(`没有已启用专家能承担 gate「${node.gateRole}」；可用角色：${available.join("、")}。改用可用角色，或去掉该节点的 gateRole 当作普通审查`);
           }
           await ledger.reviseCognition({ summary: args.summary, reason: args.reason, scope: args.scope, constraints: args.constraints, openQuestions: args.openQuestions, candidates, nodes, ...(args.edges ? { edges: args.edges } : {}) });
-          // §3.6/§7: an auto-approved plan moves the cursor onto the graph, and this run's session was built before
-          // the plan existed — no node, default access. The run ends here so the driver's next run enters the first
-          // node with that node's expert and access tier; without it the graph never runs.
+          // §3.6/§7: an auto-approved plan moves the cursor onto the graph. When the first node to run carries the
+          // same expert as the node this session is already in, this run keeps going there (B2 合轮); otherwise the
+          // run ends at the boundary so the driver's next run enters that node with its expert and access tier.
           const live = ledger.state.cognition?.nodes ?? [];
           const firstReady = live.find(node => (node.status === "ready" || node.status === "reopened" || node.status === "waiting") && node.host === "coordinator");
-          if (ledger.state.phase === "execute" && planApprovalModeOf(ledger.state) === "auto" && !live.some(node => node.status === "active" && node.host === "coordinator") && firstReady) {
-            hooks.onCursorMoved?.({ next: { nodeId: firstReady.id, sameConfig: false } });
-            return { content: [{ type: "text", text: `计划修订 v${ledger.state.cognition?.revision} 已记录并自动批准（${nodes.length} 个节点）。本轮到此结束，下一轮从节点 ${firstReady.id} 开始执行；候选专家不会自动启动。` }] };
+          if (ledger.state.phase === "execute" && planApprovalModeOf(ledger.state) === "auto" && firstReady) {
+            const current = live.find(node => node.status === "active" && node.host === "coordinator");
+            const sameConfig = !!current
+              && (firstReady.expertDecision.expertId ?? null) === (current.activation?.expert?.id ?? null)
+              && !firstReady.expertDecision.temporaryExpert && !current.activation?.temporaryExpert;
+            if (sameConfig) {
+              const expert = firstReady.expertDecision.expertId ? (await new ExpertStore(dataRoot).enabled()).find(item => item.id === firstReady.expertDecision.expertId) : undefined;
+              if (firstReady.expertDecision.expertId && !expert) throw new Error(`节点 ${firstReady.id} 指定的专家未启用：${firstReady.expertDecision.expertId}`);
+              await ledger.enterNode({ nodeId: firstReady.id, host: "coordinator", runId: ledger.runId ?? "unbound", ...(expert ? { expert } : {}) });
+            }
+            hooks.onCursorMoved?.({ next: { nodeId: firstReady.id, sameConfig } });
+            return { content: [{ type: "text", text: `计划修订 v${ledger.state.cognition?.revision} 已记录并自动批准（${nodes.length} 个节点）。${sameConfig ? `游标移至 ${firstReady.id}，继续执行。` : `本轮到此结束，下一轮从节点 ${firstReady.id} 开始执行；候选专家不会自动启动。`}` }] };
           }
           const outcome = ledger.state.phase === "execute"
             ? planApprovalModeOf(ledger.state) === "auto" ? "计划已自动批准，继续按计划执行。候选专家不会自动启动。" : "候选专家不会自动启动。"
             : ledger.state.phase === "plan-review" ? "计划正在等待用户审阅；此轮到此结束，不要声称已批准。"
             : "计划将交给用户审阅；此轮规划到此结束，不要声称已批准。";
           return { content: [{ type: "text", text: `计划修订 v${ledger.state.cognition?.revision} 已记录（${nodes.length} 个节点）。${outcome}` }] };
-        } catch (error) { return { content: [{ type: "text", text: String(error) }], isError: true }; }
+        } catch (error) {
+          // B3: the stall guard's refusal is a pause, not just an error string — the run ends in needs-input so the
+          // user decides how to continue (§3.7 护栏).
+          if (error instanceof InvariantError && error.code === "apply/plan-stall-revision") await ledger.needInput(error.message, "question");
+          return { content: [{ type: "text", text: String(error) }], isError: true };
+        }
       },
     },
     {
@@ -174,8 +189,7 @@ export function createCognitionTools(ledger: TaskLedger, dataRoot: string, hooks
           const next = ledger.state.cognition?.nodes.find(node => node.status === "ready" && node.host === "coordinator");
           let sameConfig = false;
           if (next && exited) {
-            sameConfig = accessOf(next.kind) === accessOf(exited.kind)
-              && (next.expertDecision.expertId ?? null) === (exited.activation?.expert?.id ?? null)
+            sameConfig = (next.expertDecision.expertId ?? null) === (exited.activation?.expert?.id ?? null)
               && !next.expertDecision.temporaryExpert && !exited.activation?.temporaryExpert;
             if (sameConfig) {
               const expert = next.expertDecision.expertId ? (await new ExpertStore(dataRoot).enabled()).find(item => item.id === next.expertDecision.expertId) : undefined;

@@ -121,6 +121,8 @@ export const graphReducers: FamilyReducers = {
     refreshReady(state);
     // A re-exit with different artifacts invalidates what downstream nodes consumed (§3.5).
     refreshStale(state);
+    // B3: a finished node is real progress, so the revision-stall counter resets (§3.7 护栏).
+    state.cognition!.planStallRevisions = 0;
   },
 
   "node/reopened": (state, event) => {
