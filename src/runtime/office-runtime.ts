@@ -6,7 +6,9 @@ import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } 
 import { pathToFileURL } from "node:url";
 import { pdfToMarkdown } from "@oh-my-pi/pi-natives";
 import { degrees, PDFDocument } from "pdf-lib";
-import type { TaskLedger } from "./task-ledger";
+export interface OfficeWorkspace {
+  state: { id: string; projectRoot: string; inputs?: Array<{ id: string; name: string; path: string; sha256: string; mimeType: string; size?: number; uploadedAt: string }> };
+}
 
 type OfficeFormat = "docx" | "xlsx" | "pptx" | "pdf";
 type OfficeSource = { id: string; name: string; path: string; format: OfficeFormat; sha256: string };
@@ -89,7 +91,7 @@ async function runOfficeJob(job: OfficeJob, signal?: AbortSignal): Promise<{ bef
   }
 }
 
-export async function officeSource(ledger: TaskLedger, dataRoot: string, id: string): Promise<OfficeSource> {
+export async function officeSource(ledger: OfficeWorkspace, dataRoot: string, id: string): Promise<OfficeSource> {
   if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error("Invalid document ID");
   let item = ledger.state.inputs?.find(input => input.id === id);
   if (!item) {
@@ -111,7 +113,7 @@ export async function officeSource(ledger: TaskLedger, dataRoot: string, id: str
   return { id, name: item.name, path, format: format as OfficeFormat, sha256: item.sha256 };
 }
 
-async function stage(ledger: TaskLedger, dataRoot: string, source: OfficeSource) {
+async function stage(ledger: OfficeWorkspace, dataRoot: string, source: OfficeSource) {
   const directory = join(dataRoot, "office-jobs", ledger.state.id, randomUUID());
   await mkdir(directory, { recursive: true });
   const input = join(directory, `input.${source.format}`);
@@ -120,7 +122,7 @@ async function stage(ledger: TaskLedger, dataRoot: string, source: OfficeSource)
   return { directory, input, profile: join(tmpdir(), `ao-${randomUUID().slice(0, 8)}`) };
 }
 
-export async function readOffice(ledger: TaskLedger, dataRoot: string, id: string, preview = false, signal?: AbortSignal) {
+export async function readOffice(ledger: OfficeWorkspace, dataRoot: string, id: string, preview = false, signal?: AbortSignal) {
   const source = await officeSource(ledger, dataRoot, id);
   const job = await stage(ledger, dataRoot, source);
   if (source.format === "pdf") {
@@ -132,7 +134,7 @@ export async function readOffice(ledger: TaskLedger, dataRoot: string, id: strin
   return { source: { id, name: source.name, sha256: source.sha256 }, format: source.format, content: result.before, unsupported: result.unsupported, previewPath };
 }
 
-export async function editOffice(ledger: TaskLedger, dataRoot: string, id: string, edits: unknown[], signal?: AbortSignal) {
+export async function editOffice(ledger: OfficeWorkspace, dataRoot: string, id: string, edits: unknown[], signal?: AbortSignal) {
   const source = await officeSource(ledger, dataRoot, id);
   if (source.format === "pdf") return editPdf(ledger, dataRoot, source, edits);
   const job = await stage(ledger, dataRoot, source);
@@ -165,7 +167,7 @@ export async function editOffice(ledger: TaskLedger, dataRoot: string, id: strin
   return publishOffice(ledger, dataRoot, source, draft, preview, { before: result.before, after: verified.before, unsupported: result.unsupported }, beforePreview);
 }
 
-export async function exportOfficePdf(ledger: TaskLedger, dataRoot: string, id: string, signal?: AbortSignal) {
+export async function exportOfficePdf(ledger: OfficeWorkspace, dataRoot: string, id: string, signal?: AbortSignal) {
   const source = await officeSource(ledger, dataRoot, id);
   if (source.format === "pdf") throw new Error("This document is already a PDF");
   const job = await stage(ledger, dataRoot, source);
@@ -182,7 +184,7 @@ export async function exportOfficePdf(ledger: TaskLedger, dataRoot: string, id: 
   return record;
 }
 
-async function editPdf(ledger: TaskLedger, dataRoot: string, source: OfficeSource, edits: unknown[]) {
+async function editPdf(ledger: OfficeWorkspace, dataRoot: string, source: OfficeSource, edits: unknown[]) {
   const original = await PDFDocument.load(await readFile(source.path));
   const output = await PDFDocument.create();
   let pages = Array.from({ length: original.getPageCount() }, (_, index) => index);
@@ -222,7 +224,7 @@ async function editPdf(ledger: TaskLedger, dataRoot: string, source: OfficeSourc
   return publishOffice(ledger, dataRoot, source, draft, draft, { before: { pages: original.getPageCount() }, after: { pages: output.getPageCount() }, unsupported: [] }, source.path);
 }
 
-async function publishOffice(ledger: TaskLedger, dataRoot: string, source: OfficeSource, draft: string, preview: string, report: unknown, beforePreview?: string) {
+async function publishOffice(ledger: OfficeWorkspace, dataRoot: string, source: OfficeSource, draft: string, preview: string, report: unknown, beforePreview?: string) {
   if (hash(await readFile(source.path)) !== source.sha256) throw new Error("Original document changed during editing");
   const id = randomUUID();
   const directory = join(ledger.state.projectRoot, "outputs");

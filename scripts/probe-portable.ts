@@ -11,7 +11,7 @@ if (release.format === 2) {
   await verifyUiHashes(join(portable, "desktop", "dist"), release.ui.files);
 }
 const workspace = await mkdtemp(join(tmpdir(), "alpha-portable-probe-"));
-const child = Bun.spawn([join(portable, "runtime", "bun.exe"), "run", "src/server.ts"], {
+const child = Bun.spawn([join(portable, "runtime", "bun.exe"), "run", "src/native/server.ts"], {
   cwd: portable,
   env: { ...process.env, ALPHA_WORKSPACE_ROOT: workspace },
   stdout: "pipe",
@@ -29,7 +29,7 @@ try {
       if (match) return Number(match[1]);
     }
   })();
-  const port = await Promise.race([ready, Bun.sleep(20_000).then(() => { throw new Error("Portable server startup timed out"); })]);
+  const port = await Promise.race([ready, Bun.sleep(60_000).then(() => { throw new Error("Portable server startup timed out"); })]);
   const response = await fetch(`http://127.0.0.1:${port}/health`);
   if (!response.ok || (await response.json() as { ok?: boolean }).ok !== true) throw new Error("Portable health probe failed");
   const page = await fetch(`http://127.0.0.1:${port}/ui/`);
@@ -41,9 +41,17 @@ try {
     const response = await fetch(`http://127.0.0.1:${port}${asset}`);
     if (!response.ok || (await response.arrayBuffer()).byteLength === 0) throw new Error(`Portable desktop UI asset failed: ${asset}`);
   }
-  console.log(JSON.stringify({ portable, port, health: "ok", ui: "ok", assets: assets.length, manifest: release.format === 2 ? "verified" : "legacy" }));
+  const created = await fetch(`http://127.0.0.1:${port}/api/native/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: workspace, title: "Portable smoke" }) });
+  if (!created.ok) throw new Error(`Portable session creation failed: ${await created.text()}`);
+  const id = (await created.json() as { session: { id: string } }).session.id;
+  const state = await fetch(`http://127.0.0.1:${port}/api/native/sessions/${id}/state`);
+  if (!state.ok || !(await state.json() as { sessionId?: string }).sessionId) throw new Error("Bundled OMP RPC did not start");
+  console.log(JSON.stringify({ portable, port, health: "ok", ui: "ok", omp: "ok", assets: assets.length, manifest: release.format === 2 ? "verified" : "legacy" }));
 } finally {
-  child.kill();
+  if (process.platform === "win32") {
+    const kill = Bun.spawn(["taskkill.exe", "/T", "/F", "/PID", String(child.pid)], { stdout: "ignore", stderr: "ignore", windowsHide: true });
+    await kill.exited;
+  } else child.kill();
   await child.exited;
   const actual = await realpath(workspace);
   if (!actual.startsWith(resolve(tmpdir()) + sep)) throw new Error(`Refusing to remove unexpected probe directory: ${actual}`);

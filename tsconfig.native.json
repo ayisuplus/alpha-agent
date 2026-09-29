@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "src/native/**/*.ts",
+    "desktop/ui/src/main.tsx",
+    "desktop/ui/src/app/NativeApp.tsx",
+    "desktop/ui/src/app/NativeTerminal.tsx",
+    "desktop/ui/src/api/types.ts",
+    "scripts/package-portable.ts",
+    "scripts/probe-desktop.ts",
+    "scripts/probe-portable.ts",
+    "scripts/probe-office-runtime.ts",
+    "test/native-*.test.ts"
+  ],
+  "exclude": ["reference", "node_modules"]
+}

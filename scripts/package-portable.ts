@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { cp, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
+import ts from "typescript";
 import { uiHashes, verifyUiHashes } from "./portable-ui";
 
 const root = resolve(import.meta.dir, "..");
@@ -15,12 +16,39 @@ if (await uiBuild.exited !== 0) throw new Error("Desktop UI build failed; no rel
 const ui = await uiHashes(join(root, "desktop", "dist"));
 await mkdir(output, { recursive: false });
 
-for (const source of ["src", "templates", "presets", "desktop/dist", "docs"]) {
+// Ship the native host and only its reachable source modules; the retired Alpha
+// planner, scheduler, sandbox wrapper and old web server are not part of this app.
+const activeSource = new Set<string>();
+async function collectSource(file: string): Promise<void> {
+  if (activeSource.has(file)) return;
+  activeSource.add(file);
+  const source = ts.createSourceFile(file, await readFile(file, "utf8"), ts.ScriptTarget.Latest, true);
+  const imports: string[] = [];
+  source.forEachChild(node => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && !node.importClause?.isTypeOnly) imports.push(node.moduleSpecifier.text);
+    if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier) && !node.isTypeOnly) imports.push(node.moduleSpecifier.text);
+  });
+  for (const specifier of imports.filter(value => value.startsWith("."))) {
+    const base = resolve(file, "..", specifier);
+    const target = [base, `${base}.ts`, `${base}.tsx`, join(base, "index.ts")].find(candidate => Bun.file(candidate).size > 0);
+    if (!target) throw new Error(`Missing active source import: ${file} → ${specifier}`);
+    await collectSource(target);
+  }
+}
+for (const entry of ["server.ts", "tianshu-extension.ts", "capabilities-extension.ts"]) await collectSource(join(root, "src", "native", entry));
+for (const file of activeSource) {
+  const target = join(output, file.slice(root.length + 1));
+  await mkdir(resolve(target, ".."), { recursive: true });
+  await cp(file, target);
+}
+for (const source of ["desktop/dist", "licenses"]) {
   const target = join(output, source);
   await mkdir(resolve(target, ".."), { recursive: true });
   await cp(join(root, source), target, { recursive: true });
 }
-for (const source of ["desktop/main.cjs", "desktop/preload.cjs", "scripts/start-desktop.ts", "scripts/verify-inventory.ts", "scripts/run-worker.ts", "scripts/probe-portable.ts", "scripts/portable-ui.ts", "scripts/probe-portable-sandbox.ts", "scripts/office-worker.py", "scripts/probe-office-runtime.ts", "package.json", "package-lock.json"]) {
+await mkdir(join(output, "presets"), { recursive: true });
+for (const name of ["flux2-image.api.json", "voxcpm2-voice.api.json", "h3-video.api.json"]) await cp(join(root, "presets", name), join(output, "presets", name));
+for (const source of ["desktop/main.cjs", "desktop/preload.cjs", "scripts/start-desktop.ts", "scripts/probe-portable.ts", "scripts/portable-ui.ts", "scripts/office-worker.py", "scripts/probe-office-runtime.ts", "package.json", "package-lock.json"]) {
   const target = join(output, source);
   await mkdir(resolve(target, ".."), { recursive: true });
   await cp(join(root, source), target);
@@ -31,12 +59,6 @@ for (const source of ["office-deck.pptx", "office-replacement.png"]) await cp(jo
 
 const npm = Bun.spawn(["npm.cmd", "ci", "--omit=dev", "--no-audit", "--no-fund"], { cwd: output, stdout: "inherit", stderr: "inherit" });
 if (await npm.exited !== 0) throw new Error(`Production dependency install failed in ${output}`);
-
-const sandboxBin = join(output, "node_modules", "@openai", "codex-win32-x64", "vendor", "x86_64-pc-windows-msvc", "bin", "codex.exe");
-const sandboxSetup = join(output, "node_modules", "@openai", "codex-win32-x64", "vendor", "x86_64-pc-windows-msvc", "codex-resources", "codex-windows-sandbox-setup.exe");
-for (const file of [sandboxBin, sandboxSetup]) if (!(await stat(file)).isFile()) throw new Error(`Portable sandbox component missing: ${file}`);
-const sandboxProbe = Bun.spawn([sandboxBin, "sandbox", "--help"], { cwd: output, env: { SystemRoot: process.env.SystemRoot ?? "C:\\Windows" }, stdout: "pipe", stderr: "pipe" });
-if (await sandboxProbe.exited !== 0) throw new Error("Portable sandbox runner did not start independently");
 
 await mkdir(join(output, "node_modules", "electron"), { recursive: true });
 await cp(join(root, "node_modules", "electron", "dist"), join(output, "node_modules", "electron", "dist"), { recursive: true });
@@ -64,7 +86,7 @@ await writeFile(join(output, "release.json"), JSON.stringify({
   bun: Bun.version,
   electron: packageJson.devDependencies.electron,
   omp: packageJson.dependencies["@oh-my-pi/pi-coding-agent"],
-  sandboxRunner: packageJson.dependencies["@openai/codex"],
+  nativeSourceFiles: activeSource.size,
   ui: { files: ui },
   office: { version: "26.2.5.2", buildId: "cd7284b4cbbfeb507e630c1aac019f4157393acb", sofficeSha256: officeHash, location: "runtime/libreoffice" },
   launch: "Alpha.cmd",
@@ -73,11 +95,12 @@ await writeFile(join(output, "release.json"), JSON.stringify({
 await writeFile(join(output, "README.txt"), [
   "Alpha 本机可携带版",
   "",
-  "双击 Alpha.cmd 启动桌面工作台。首次运行会在上一级目录创建共享的 products 和 .alpha，供同一 release 目录下的版本使用。",
+  "双击 Alpha.cmd 启动桌面工作台。会话和更新检测记录保存在上一级目录的 .alpha，供同一 release 目录下的版本使用。",
   "模型凭据沿用当前 Windows 用户的已配置存储；本包不包含凭据、既有产品或任务数据。",
-  "本包只在本机启动预览，不上传部署。关闭工作台后预览服务停止；重新打开可在任务中重新发布并复验。",
-  "新项目的受限任务使用包内 Windows 沙箱执行器。首次使用需要管理员完成本机初始化；失败时任务暂停，不会改用普通进程执行。",
+  "本包在本机运行，不自动上传或部署。关闭工作台后 OMP 会话进程和更新检测停止。",
+  "会话、模型、工具与终端由 OMP 18.4.3 原生内核执行；Alpha 提供桌面界面和天枢认知扩展。",
   "第三方许可证保存在 node_modules 对应包及 node_modules/electron/LICENSE。",
+  "天枢认知改编代码的 Apache-2.0 许可证在 licenses/Tianshu-APACHE-2.0.txt。",
   "离线办公引擎及其许可证保存在 runtime/libreoffice；通过任务附件读取与修改 DOCX、XLSX、PPTX 和 PDF。",
   "",
 ].join("\r\n"));

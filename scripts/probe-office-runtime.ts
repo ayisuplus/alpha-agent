@@ -1,11 +1,11 @@
 import { strict as assert } from "node:assert";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Document, Packer, Paragraph, TextRun } from "docx";
 import ExcelJS from "exceljs";
-import { createGeneralWorkspace } from "../src/runtime/general-work";
-import { editOffice, readOffice } from "../src/runtime/office-runtime";
+import { editOffice, readOffice, type OfficeWorkspace } from "../src/runtime/office-runtime";
 
 const root = await mkdtemp(join(tmpdir(), "alpha-office-probe-"));
 try {
@@ -17,12 +17,22 @@ try {
   sheet.getCell("A3").value = { formula: "SUM(A1:A2)", result: 3 };
   const excel = new Uint8Array(await book.xlsx.writeBuffer());
   const dataRoot = join(root, "state");
-  const ledger = await createGeneralWorkspace({ taskType: "file-work", objective: "Edit documents", productsRoot: join(root, "products"), dataRoot,
-    files: [{ name: "letter.docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", bytes: word },
-      { name: "totals.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", bytes: excel },
-      { name: "deck.pptx", mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", bytes: await readFile(join(import.meta.dir, "..", "test", "fixtures", "office-deck.pptx")) },
-      { name: "replacement.png", mimeType: "image/png", bytes: await readFile(join(import.meta.dir, "..", "test", "fixtures", "office-replacement.png")) }] });
-  const [docxId, xlsxId, pptxId, imageId] = ledger.state.inputs!.map(item => item.id);
+  const projectRoot = join(root, "project");
+  const inputsRoot = join(projectRoot, "inputs");
+  await mkdir(inputsRoot, { recursive: true });
+  const files = [
+    { name: "letter.docx", bytes: word }, { name: "totals.xlsx", bytes: excel },
+    { name: "deck.pptx", bytes: await readFile(join(import.meta.dir, "..", "test", "fixtures", "office-deck.pptx")) },
+    { name: "replacement.png", bytes: await readFile(join(import.meta.dir, "..", "test", "fixtures", "office-replacement.png")) },
+  ];
+  const inputs = await Promise.all(files.map(async file => {
+    const id = randomUUID();
+    const path = join(inputsRoot, `${id}-${file.name}`);
+    await writeFile(path, file.bytes);
+    return { id, name: file.name, path, sha256: createHash("sha256").update(file.bytes).digest("hex"), mimeType: "", size: file.bytes.length, uploadedAt: new Date().toISOString() };
+  }));
+  const ledger: OfficeWorkspace = { state: { id: randomUUID(), projectRoot, inputs } };
+  const [docxId, xlsxId, pptxId, imageId] = inputs.map(item => item.id);
   const beforeWord = await readOffice(ledger, dataRoot, docxId);
   assert.match(JSON.stringify(beforeWord.content), /First target last/);
   const editedWord = await editOffice(ledger, dataRoot, docxId, [{ paragraph: 0, expected: "target", replacement: "updated" }]);

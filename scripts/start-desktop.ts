@@ -7,6 +7,7 @@ const address = server.address();
 if (!address || typeof address === "string") throw new Error("Could not choose a CDP port");
 const port = address.port;
 await new Promise<void>(resolve => server.close(() => resolve()));
+console.log(`ALPHA_CDP_READY ${port}`);
 
 const env: NodeJS.ProcessEnv = { ...process.env, ALPHA_CDP_PORT: String(port), ALPHA_BUN_PATH: process.execPath };
 delete env.ELECTRON_RUN_AS_NODE;

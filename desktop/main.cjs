@@ -229,7 +229,7 @@ const emptyPreview = "data:text/html," + encodeURIComponent("<title>Alpha previe
 function startSidecar() {
   return new Promise((resolve, reject) => {
     const executable = process.env.ALPHA_BUN_PATH || "bun";
-    sidecar = spawn(executable, ["run", "src/server.ts"], { cwd: root, env: { ...process.env, ALPHA_ELECTRON_VERSION: process.versions.electron, ALPHA_BROWSER_BRIDGE_PORT: String(bridgePort), ALPHA_BROWSER_BRIDGE_TOKEN: bridgeToken }, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    sidecar = spawn(executable, ["run", "src/native/server.ts"], { cwd: root, env: { ...process.env, ALPHA_ELECTRON_VERSION: process.versions.electron, ALPHA_BROWSER_BRIDGE_PORT: String(bridgePort), ALPHA_BROWSER_BRIDGE_TOKEN: bridgeToken }, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     let buffer = "";
     let errorTail = "";
     const timeout = setTimeout(() => { sidecar.kill(); reject(new Error(`Alpha sidecar did not start\n${errorTail}`)); }, 60_000);
@@ -407,7 +407,10 @@ app.whenReady().then(async () => {
       } catch { return "目录不存在"; }
     });
     ipcMain.handle("alpha:open-external", async (event, value) => {
-      if (event.sender !== shell.webContents || !localPreviewUrl(value)) return false;
+      if (event.sender !== shell.webContents || typeof value !== "string") return false;
+      let url;
+      try { url = new URL(value); } catch { return false; }
+      if (url.protocol !== "https:" && !localPreviewUrl(value)) return false;
       await electronShell.openExternal(value);
       return true;
     });
@@ -421,9 +424,9 @@ app.whenReady().then(async () => {
     });
     ipcMain.on("alpha:notify", (event, title, body, taskId) => {
       if (event.sender !== shell.webContents || window.isFocused() || !Notification.isSupported() ||
-          typeof title !== "string" || typeof body !== "string" || !/^[0-9a-f-]{36}$/.test(taskId)) return;
+          typeof title !== "string" || typeof body !== "string" || (taskId !== "omp-update" && !/^[0-9a-f-]{36}$/.test(taskId))) return;
       const notice = new Notification({ title: title.slice(0, 100), body: body.slice(0, 250) });
-      notice.on("click", () => { window.show(); window.focus(); shell.webContents.send("alpha:open-task", taskId); });
+      notice.on("click", () => { window.show(); window.focus(); if (taskId !== "omp-update") shell.webContents.send("alpha:open-task", taskId); });
       notice.show();
     });
     ipcMain.on("alpha:attention", event => {
@@ -445,4 +448,8 @@ app.whenReady().then(async () => {
 }
 
 app.on("window-all-closed", () => app.quit());
-app.on("before-quit", () => { sidecar?.kill(); browserBridge?.close(); });
+app.on("before-quit", () => {
+  if (sidecar?.pid && process.platform === "win32") spawn("taskkill.exe", ["/T", "/F", "/PID", String(sidecar.pid)], { windowsHide: true, stdio: "ignore" }).unref();
+  else sidecar?.kill();
+  browserBridge?.close();
+});
