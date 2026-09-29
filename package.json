@@ -8,6 +8,7 @@
     "dev:ui": "vite build --watch",
     "desktop": "bun run scripts/start-desktop.ts",
     "package:portable": "bun run scripts/package-portable.ts",
+    "package:exe": "bun run scripts/package-installer.ts",
     "probe:desktop": "bun run scripts/probe-desktop.ts",
     "check": "tsc --noEmit -p tsconfig.native.json",
     "test": "bun test ./test/native-*.test.ts",

@@ -66,10 +66,7 @@ export function NativeApp() {
   selectedRef.current = selected;
 
   useEffect(() => {
-    const refresh = () => { void api<UpdateStatus>("/api/native/updates").then(setUpdate, cause => setError(String(cause))); };
-    refresh();
-    const timer = setInterval(refresh, 10_000);
-    return () => clearInterval(timer);
+    void api<UpdateStatus>("/api/native/updates").then(setUpdate, cause => setError(String(cause)));
   }, []);
   useEffect(() => {
     if (!update?.available || !update.latest || update.notifiedVersion === update.latest || alertedVersion.current === update.latest || !window.alpha?.notify) return;

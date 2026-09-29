@@ -10,7 +10,7 @@ if (!Bun.argv[2]) throw new Error("Usage: bun run scripts/package-installer.ts <
 const manifest = JSON.parse(await readFile(join(portable, "release.json"), "utf8"));
 if (manifest.format !== 2 || !manifest.ui?.files) throw new Error("Installer requires a verified format-2 portable release");
 await verifyUiHashes(join(portable, "desktop", "dist"), manifest.ui.files);
-for (const file of ["desktop/main.cjs", "desktop/preload.cjs", "runtime/bun.exe", "runtime/libreoffice/program/soffice.bin", "src/server.ts", "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe"]) {
+for (const file of ["desktop/main.cjs", "desktop/preload.cjs", "runtime/bun.exe", "runtime/libreoffice/program/soffice.bin", "src/native/server.ts", "node_modules/@oh-my-pi/pi-coding-agent/package.json", "node_modules/@oh-my-pi/pi-natives/package.json"]) {
   if (!(await stat(join(portable, file))).isFile()) throw new Error(`Portable component missing: ${file}`);
 }
 
@@ -28,7 +28,7 @@ const command = Bun.spawn([builder, "--win", "nsis", "--x64", "--config", join(r
 if (await command.exited !== 0) throw new Error("Windows installer build failed");
 const bundled = join(output, "win-unpacked", "resources", "alpha");
 await verifyUiHashes(join(bundled, "desktop", "dist"), manifest.ui.files);
-for (const file of ["runtime/bun.exe", "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe"]) {
+for (const file of ["src/native/server.ts", "runtime/bun.exe", "node_modules/@oh-my-pi/pi-coding-agent/package.json", "node_modules/@oh-my-pi/pi-natives/package.json"]) {
   if (!(await stat(join(bundled, file))).isFile()) throw new Error(`Installer component missing: ${file}`);
 }
 const bundledOffice = createHash("sha256").update(await readFile(join(bundled, "runtime", "libreoffice", "program", "soffice.bin"))).digest("hex");

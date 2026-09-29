@@ -271,7 +271,6 @@ const server = Bun.serve({
 
 console.log(`ALPHA_SERVER_READY ${server.port}`);
 process.on("SIGINT", () => {
-  updates.stop();
   for (const terminal of terminals.values()) terminal.pty.kill();
   for (const pending of processes.values()) void pending.then(child => child.stop(), () => undefined);
   server.stop(true);

@@ -24,20 +24,20 @@ test("requires all four official npm packages to publish one coherent version", 
 test("records a new release and remembers that the desktop announced it", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-omp-update-test-"));
   try {
-    const fetcher = async () => Response.json({ version: "18.5.0" });
+    let calls = 0;
+    const fetcher = async () => { calls++; return Response.json({ version: "18.5.0" }); };
     const monitor = new OmpUpdateMonitor("18.4.3", root, fetcher);
     await monitor.start();
-    const available = await monitor.check();
+    const available = monitor.status();
     expect(available.available).toBe(true);
     expect(available.latest).toBe("18.5.0");
+    expect(calls).toBe(4);
     await monitor.markNotified("18.5.0");
     expect(monitor.status().notifiedVersion).toBe("18.5.0");
-    monitor.stop();
     const resumed = new OmpUpdateMonitor("18.4.3", root, fetcher);
     await resumed.start();
-    await resumed.check();
     expect(resumed.status().notifiedVersion).toBe("18.5.0");
-    resumed.stop();
+    expect(calls).toBe(8);
   } finally {
     const actual = await realpath(root);
     if (!actual.startsWith(resolve(tmpdir()) + sep)) throw new Error("Update test directory left temp root");

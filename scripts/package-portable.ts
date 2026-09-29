@@ -97,7 +97,7 @@ await writeFile(join(output, "README.txt"), [
   "",
   "双击 Alpha.cmd 启动桌面工作台。会话和更新检测记录保存在上一级目录的 .alpha，供同一 release 目录下的版本使用。",
   "模型凭据沿用当前 Windows 用户的已配置存储；本包不包含凭据、既有产品或任务数据。",
-  "本包在本机运行，不自动上传或部署。关闭工作台后 OMP 会话进程和更新检测停止。",
+  "本包在本机运行，不自动上传或部署。每次启动时检查一次 OMP 更新，运行期间不定时复查。",
   "会话、模型、工具与终端由 OMP 18.4.3 原生内核执行；Alpha 提供桌面界面和天枢认知扩展。",
   "第三方许可证保存在 node_modules 对应包及 node_modules/electron/LICENSE。",
   "天枢认知改编代码的 Apache-2.0 许可证在 licenses/Tianshu-APACHE-2.0.txt。",

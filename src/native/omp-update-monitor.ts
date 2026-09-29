@@ -2,7 +2,6 @@ import { readFile, mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 const packages = ["pi-coding-agent", "pi-agent-core", "pi-natives", "omptype"] as const;
-const intervalMs = 15 * 60_000;
 type RegistryFetch = (url: string, init?: RequestInit) => Promise<Response>;
 
 export function compareVersions(left: string, right: string): number {
@@ -41,7 +40,6 @@ export class OmpUpdateMonitor {
   readonly current: string;
   readonly file: string;
   #status: UpdateStatus;
-  #timer: ReturnType<typeof setInterval> | null = null;
   #running: Promise<UpdateStatus> | null = null;
   #saveQueue = Promise.resolve();
 
@@ -55,11 +53,9 @@ export class OmpUpdateMonitor {
     const saved = await readFile(this.file, "utf8").then(text => JSON.parse(text) as Partial<UpdateStatus>, () => null).catch(() => null);
     if (saved) this.#status = { ...this.#status, latest: saved.latest ?? null, checkedAt: saved.checkedAt ?? null,
       notifiedVersion: saved.notifiedVersion ?? null, available: saved.latest ? compareVersions(saved.latest, this.current) > 0 : false };
-    this.#timer = setInterval(() => { void this.check(); }, intervalMs);
-    void this.check();
+    await this.check();
   }
 
-  stop(): void { if (this.#timer) clearInterval(this.#timer); this.#timer = null; }
   status(): UpdateStatus { return { ...this.#status }; }
 
   check(): Promise<UpdateStatus> {
