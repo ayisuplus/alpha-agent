@@ -13,7 +13,7 @@ if (release.format === 2) {
 const workspace = await mkdtemp(join(tmpdir(), "alpha-portable-probe-"));
 const child = Bun.spawn([join(portable, "runtime", "bun.exe"), "run", "src/native/server.ts"], {
   cwd: portable,
-  env: { ...process.env, ALPHA_WORKSPACE_ROOT: workspace },
+  env: { ...process.env, ALPHA_WORKSPACE_ROOT: workspace, ALPHA_SERVER_TOKEN: "portable-probe-token" },
   stdout: "pipe",
   stderr: "pipe",
 });
@@ -41,10 +41,13 @@ try {
     const response = await fetch(`http://127.0.0.1:${port}${asset}`);
     if (!response.ok || (await response.arrayBuffer()).byteLength === 0) throw new Error(`Portable desktop UI asset failed: ${asset}`);
   }
-  const created = await fetch(`http://127.0.0.1:${port}/api/native/sessions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cwd: workspace, title: "Portable smoke" }) });
+  const auth = { "x-alpha-token": "portable-probe-token" };
+  const created = await fetch(`http://127.0.0.1:${port}/api/native/sessions`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify({ cwd: workspace, title: "Portable smoke" }) });
   if (!created.ok) throw new Error(`Portable session creation failed: ${await created.text()}`);
   const id = (await created.json() as { session: { id: string } }).session.id;
-  const state = await fetch(`http://127.0.0.1:${port}/api/native/sessions/${id}/state`);
+  const opened = await fetch(`http://127.0.0.1:${port}/api/native/sessions/${id}/open`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: "{}" });
+  if (!opened.ok) throw new Error(`Portable session open failed: ${await opened.text()}`);
+  const state = await fetch(`http://127.0.0.1:${port}/api/native/sessions/${id}/state`, { headers: auth });
   if (!state.ok || !(await state.json() as { sessionId?: string }).sessionId) throw new Error("Bundled OMP RPC did not start");
   console.log(JSON.stringify({ portable, port, health: "ok", ui: "ok", omp: "ok", assets: assets.length, manifest: release.format === 2 ? "verified" : "legacy" }));
 } finally {

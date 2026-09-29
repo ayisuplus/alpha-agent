@@ -7,8 +7,8 @@
 - 读取文件与文档（docx、xlsx、pptx、pdf、epub 按路径转成 Markdown）：用原生 `read` 工具。
 - 办公文档的检查、编辑、生成、格式转换、PDF 处理与页面预览：用 `alpha_office`，动作是 `inspect`、`edit`、`create`、`convert`、`pdf`、`preview`。产物写在项目内、名字可读、永不覆盖原件；编辑类产物带前后预览。
 - 图片、配音、视频生成：`alpha_generate_image`、`alpha_generate_voice`、`alpha_generate_video`，产出写到 `outputs/media/`。
-- 浏览器自动化：原生 `browser` 工具，经用户授权后操作可见浏览器，可访问本机开发服务器。
-- 搜索与网页抓取：`web_search`、`fetch`。
+- 浏览器自动化：`eval` 的 `browser` 命名空间（browser.open/run/call/tabs/close…），经用户授权后操作可见浏览器，可访问本机开发服务器。
+- 搜索与网页抓取：`web_search` 搜索；读取网页内容用 `eval` 内的 fetch，或用 `browser` 命名空间打开后提取。
 
 工具能力不足或依赖服务不可用时，如实上报缺口并给出可选做法，不虚构执行结果。
 

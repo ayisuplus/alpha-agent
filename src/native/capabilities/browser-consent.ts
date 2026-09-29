@@ -39,6 +39,19 @@ export interface BrowserConsentContext {
 type Consent = "once" | "session" | "denied";
 type Choice = "once" | "session" | "deny";
 
+/**
+ * OMP 18.4 的浏览器能力是 `eval` 的 browser 预声明空间（browser.open/run/call/tabs…），部分内核另有
+ * 独立 `browser` 工具。两种入口都要过会话级授权；eval 里没有 browser 调用时不打扰用户。
+ */
+export function drivesBrowser(toolName: string, input: unknown): boolean {
+  if (toolName === "browser") return true;
+  if (toolName !== "eval") return false;
+  const source = input && typeof input === "object" ? input : {};
+  const code = "code" in source && typeof source.code === "string" ? source.code
+    : "script" in source && typeof source.script === "string" ? source.script : "";
+  return /\bbrowser\s*\.\s*[A-Za-z_$][\w$]*\s*\(/.test(code);
+}
+
 const ASK_TIMEOUT_MS = 25_000;
 const CHOICE_ONCE = "仅这次";
 const CHOICE_SESSION = "本会话";
@@ -81,7 +94,7 @@ async function askConsent(ui: ExtensionContext["ui"]): Promise<Choice | null> {
 
 /**
  * 挂接浏览器授权拦截。只应挂接一次：重复调用会叠加处理器（拦截语义不变，但提示可能重复）。
- * 非 `browser` 工具的调用原样放行。
+ * 未驱动浏览器的调用（普通 eval、bash 等）原样放行；见 drivesBrowser。
  */
 export function attachBrowserConsent(pi: ExtensionAPI, ctx: BrowserConsentContext): void {
   const file = join(ctx.dataRoot, "native", "browser-consent.json");
@@ -108,7 +121,7 @@ export function attachBrowserConsent(pi: ExtensionAPI, ctx: BrowserConsentContex
   };
 
   pi.on("tool_call", (event, runtime) => {
-    if (event.toolName !== "browser") return;
+    if (!drivesBrowser(event.toolName, event.input)) return;
     return enqueue(async (): Promise<ToolCallEventResult | undefined> => {
       const state = await load();
       const current = state[ctx.sessionId];
