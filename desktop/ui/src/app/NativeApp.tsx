@@ -4,14 +4,14 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { ClipboardCheck, Globe2, Terminal, X } from "lucide-react";
 import { loadConfiguration, request, type NativeCatalog, type NativeConfig, type UpdateStatus } from "./native-api";
 import { NativeDialogs } from "./NativeDialogs";
 import { NativeHome } from "./NativeHome";
 import { NativeSettings } from "./NativeSettings";
 import { NativeSidebar } from "./NativeSidebar";
 import { NativeThread } from "./NativeThread";
-import { NativeWorkspace } from "./NativeWorkspace";
+import { NativeWorkspace, type WorkspaceTab } from "./NativeWorkspace";
 import { useSession } from "./useSession";
 import "./NativeApp.css";
 
@@ -27,6 +27,12 @@ export function NativeApp() {
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem("alpha-native-font-size")) || 14);
   const [workspaceVisible, setWorkspaceVisible] = useState(() => localStorage.getItem("alpha-native-workspace") !== "false");
+  const [workspaceRequested, setWorkspaceRequested] = useState(false);
+  const [workspaceTab, setWorkspaceTab] = useState<WorkspaceTab>(() => {
+    const saved = localStorage.getItem("alpha-native-workspace-tab");
+    return saved === "review" || saved === "terminal" || saved === "files" || saved === "logs" ? saved : "browser";
+  });
+  const openWorkspace = (tab: WorkspaceTab) => { setWorkspaceTab(tab); setWorkspaceVisible(true); setWorkspaceRequested(true); setSettingsOpen(false); };
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("alpha-native-sidebar-collapsed") === "true");
   const [diagnostics, setDiagnostics] = useState(() => localStorage.getItem("alpha-native-diagnostics") === "1");
   const [error, setError] = useState("");
@@ -42,6 +48,7 @@ export function NativeApp() {
   }, []);
   useEffect(() => { localStorage.setItem("alpha-native-font-size", String(fontSize)); }, [fontSize]);
   useEffect(() => { localStorage.setItem("alpha-native-workspace", String(workspaceVisible)); }, [workspaceVisible]);
+  useEffect(() => { localStorage.setItem("alpha-native-workspace-tab", workspaceTab); }, [workspaceTab]);
   useEffect(() => { localStorage.setItem("alpha-native-sidebar-collapsed", String(sidebarCollapsed)); }, [sidebarCollapsed]);
   useEffect(() => { localStorage.setItem("alpha-native-diagnostics", diagnostics ? "1" : "0"); }, [diagnostics]);
 
@@ -67,7 +74,8 @@ export function NativeApp() {
   }, []);
 
   const displayError = session.error || error;
-  return <div className={`native-workbench ${!session.current || settingsOpen || !workspaceVisible ? "native-wide" : ""} ${sidebarCollapsed ? "native-sidebar-collapsed" : ""}`} style={{ "--native-message-size": `${fontSize}px` } as React.CSSProperties}>
+  const showWorkspace = workspaceVisible && !settingsOpen && !!(session.current || workspaceRequested);
+  return <div className={`native-workbench ${!showWorkspace ? "native-wide" : ""} ${sidebarCollapsed ? "native-sidebar-collapsed" : ""}`} style={{ "--native-message-size": `${fontSize}px` } as React.CSSProperties}>
     <NativeSidebar
       collapsed={sidebarCollapsed}
       onToggle={() => setSidebarCollapsed(value => !value)}
@@ -117,7 +125,7 @@ export function NativeApp() {
         onCheckUpdate={() => void request<UpdateStatus>("/api/native/updates/check", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(setUpdate, cause => setError(String(cause)))}
         sessionId={session.selected}
       />
-        : session.current ? <NativeThread session={session} sessionInfo={session.current} onOpenSettings={openSettings} />
+        : session.current ? <NativeThread session={session} sessionInfo={session.current} onOpenSettings={openSettings} onOpenTerminal={() => openWorkspace("terminal")} />
         : <NativeHome
           session={session}
           catalog={catalog}
@@ -127,7 +135,11 @@ export function NativeApp() {
           onOpenSettings={openSettings}
         />}
     </main>
-    {session.current && workspaceVisible && !settingsOpen && <NativeWorkspace session={session} diagnostics={diagnostics} />}
+    {showWorkspace && <NativeWorkspace session={session} diagnostics={diagnostics} tab={workspaceTab} setTab={setWorkspaceTab} onClose={() => setWorkspaceVisible(false)} />}
+    <nav className="native-workspace-rail" aria-label="右侧工作区入口">
+      {[{ id: "review" as const, label: "审查", Icon: ClipboardCheck }, { id: "terminal" as const, label: "终端", Icon: Terminal }, { id: "browser" as const, label: "浏览器", Icon: Globe2 }].map(({ id, label, Icon }) =>
+        <button key={id} onClick={() => openWorkspace(id)} aria-label={`打开${label}栏`} title={label} aria-controls="native-workspace" aria-expanded={showWorkspace && workspaceTab === id}><Icon size={18} /><span>{label}</span></button>)}
+    </nav>
     {displayError && <div className="native-error" role="alert">{displayError}<button onClick={() => { session.setError(""); setError(""); }}>关闭</button></div>}
     <NativeDialogs
       session={session}

@@ -18,7 +18,7 @@ test("desktop settings persist through OMP and a new RPC session uses the select
   const root = await mkdtemp(join(tmpdir(), "alpha-native-settings-"));
   const agentDir = join(root, "omp");
   await mkdir(agentDir);
-  await writeFile(join(agentDir, "config.yml"), "modelRoles:\n  slow: deepseek/deepseek-reasoner\nretry:\n  maxRetries: 3\n");
+  await writeFile(join(agentDir, "config.yml"), "modelRoles:\n  slow: deepseek/deepseek-reasoner\nretry:\n  maxRetries: 3\nstartup:\n  setupWizard: false\n  checkUpdate: false\n");
   const child = Bun.spawn([process.execPath, "run", "src/native/server.ts"], {
     cwd: resolve(import.meta.dir, ".."), env: { ...process.env, DEEPSEEK_API_KEY: "alpha-env-not-a-real-key", ALPHA_WORKSPACE_ROOT: root, PI_CODING_AGENT_DIR: agentDir },
     stdout: "pipe", stderr: "pipe", windowsHide: true,
@@ -81,6 +81,40 @@ test("desktop settings persist through OMP and a new RPC session uses the select
     expect(state.status).toBe(200);
     const model2 = row(row(state.value).model);
     expect(`${model2.provider}/${model2.id}`).toBe(selector);
+    // Idle workspaces still need a live event stream for terminal output and state changes.
+    const eventResponse = await fetch(`http://127.0.0.1:${port}/api/native/sessions/${sessionId}/events`, { headers: { "x-alpha-token": token } });
+    const events = eventResponse.body!.getReader();
+    try {
+      expect((await events.read()).done).toBe(false);
+      const nextEvent = events.read();
+      for (let interval = 0; interval < 5; interval++) await Bun.sleep(25_000);
+      expect((await request(`sessions/${sessionId}/command`, { type: "get_state" })).status).toBe(200);
+      const frame = await Promise.race([nextEvent, Bun.sleep(3_000).then(() => { throw new Error("Idle event stream did not receive the next frame"); })]);
+      expect(frame.done).toBe(false);
+      expect(new TextDecoder().decode(frame.value)).toContain("response");
+    } finally { await events.cancel(); }
+    // Empty RPC sessions have ids but no durable JSONL yet; switching to TUI must still work.
+    expect((await request(`sessions/${sessionId}/terminal/start`, { cols: 100, rows: 30 })).status).toBe(200);
+    const waitTerminal = async (match: (terminal: Row) => boolean): Promise<Row> => {
+      let last: Row = {};
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const terminal = row((await request(`sessions/${sessionId}/terminal`)).value);
+        last = terminal;
+        if (match(terminal)) return terminal;
+        await Bun.sleep(250);
+      }
+      throw new Error(`Native terminal transition timed out: ${JSON.stringify(last).slice(-3_000)}`);
+    };
+    const live = await waitTerminal(value => String(value.output).includes("Alpha"));
+    expect(live.active).toBe(true);
+    await Bun.sleep(1_000);
+    expect((await request(`sessions/${sessionId}/terminal/input`, { data: "/alpha\r" })).status).toBe(200);
+    const report = await waitTerminal(value => String(value.output).includes("alpha_office"));
+    expect(report.active).toBe(true);
+    expect((await request(`sessions/${sessionId}/terminal/stop`, {})).status).toBe(200);
+    await waitTerminal(value => value.active === false);
+    expect((await request(`sessions/${sessionId}/open`, {})).status).toBe(200);
+    expect((await request(`sessions/${sessionId}/state`)).status).toBe(200);
     expect((await request(`sessions/${sessionId}`, { title: "Renamed regression", archived: true })).status).toBe(200);
     const renamed = findRow(row((await request("sessions")).value).sessions, { id: sessionId });
     expect(renamed?.title).toBe("Renamed regression");
@@ -101,4 +135,4 @@ test("desktop settings persist through OMP and a new RPC session uses the select
     if (!actual.startsWith(resolve(tmpdir()) + sep)) throw new Error("Settings test directory left temp root");
     await rm(actual, { recursive: true, force: true });
   }
-}, 120_000);
+}, 180_000);

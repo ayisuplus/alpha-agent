@@ -12,7 +12,6 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type Keyboard
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ArrowUp, CircleStop, FileText, RotateCcw, Terminal } from "lucide-react";
-import { NativeTerminal } from "./NativeTerminal";
 import {
   argsSummary, contentImages, plain, toolPayload, request, sessionRequest,
   type NativeMessage, type SessionItem, type ToolPayload,
@@ -289,7 +288,7 @@ function Composer({ session, onOpenSettings }: { session: SessionController; onO
 }
 
 /** 会话视图：顶栏（天枢状态段）+ 进程提示 + 对话流 + 输入框（setWidget 行在输入框上方）。 */
-export function NativeThread({ session, sessionInfo, onOpenSettings }: { session: SessionController; sessionInfo: SessionItem; onOpenSettings(): void }) {
+export function NativeThread({ session, sessionInfo, onOpenSettings, onOpenTerminal }: { session: SessionController; sessionInfo: SessionItem; onOpenSettings(): void; onOpenTerminal(): void }) {
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(sessionInfo.title);
   useEffect(() => { setName(sessionInfo.title); setRenaming(false); }, [sessionInfo.id]);
@@ -324,21 +323,18 @@ export function NativeThread({ session, sessionInfo, onOpenSettings }: { session
         <button title="刷新" onClick={() => session.refresh()}><RotateCcw size={16} /></button>
         {session.terminalActive
           ? <button title="关闭 Alpha 终端" onClick={() => void session.terminal("stop")}><CircleStop size={17} /></button>
-          : <button title="Alpha 终端" disabled={!state?.isSettled || state?.hasPendingAsyncWork} onClick={() => void session.terminal("start")}><Terminal size={17} /></button>}
+          : <button title="打开终端栏" aria-label="打开终端栏" onClick={onOpenTerminal}><Terminal size={17} /></button>}
         {state?.isStreaming && <button title="停止" onClick={() => void session.command({ type: "abort" })}><CircleStop size={17} /></button>}
       </div>
     </header>
     {renaming && <form className="native-compose-tools" onSubmit={event => { event.preventDefault(); void edit({ title: name }); }}><input aria-label="会话名称" value={name} maxLength={120} onChange={event => setName(event.target.value)} /><button disabled={!name.trim()}>保存名称</button><button type="button" onClick={() => setRenaming(false)}>取消</button></form>}
-    {session.hostNotice && <div className="native-update-banner" role="status">
+    {session.hostNotice && !session.terminalActive && <div className="native-update-banner" role="status">
       <strong>会话进程未运行</strong>
       <span>{session.hostNotice}</span>
       <button onClick={() => session.reopen()}>重新打开会话</button>
     </div>}
-    {session.terminalActive
-      ? <NativeTerminal id={sessionInfo.id} output={session.terminalOutput} />
-      : <>
-        <ThreadBody items={items} setError={session.setError} cwd={session.current?.cwd} />
-        <Composer session={session} onOpenSettings={onOpenSettings} />
-      </>}
+    <ThreadBody items={items} setError={session.setError} cwd={session.current?.cwd} />
+    {session.terminalActive ? <div className="native-update-banner" role="status"><span>Alpha 终端正在使用这个会话。关闭终端后可继续对话。</span><button onClick={onOpenTerminal}>查看终端</button><button onClick={() => void session.terminal("stop")}>关闭终端</button></div>
+      : <Composer session={session} onOpenSettings={onOpenSettings} />}
   </>;
 }

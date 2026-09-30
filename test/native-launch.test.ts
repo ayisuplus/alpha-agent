@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { buildLaunch, buildLaunchEnv, defaultWorkspaceRoot, writeLaunchConfig, type LaunchOptions } from "../src/native/launch";
+import { buildLaunch, buildLaunchEnv, defaultWorkspaceRoot, persistedSessionId, writeLaunchConfig, type LaunchOptions } from "../src/native/launch";
 
 const created: string[] = [];
 function options(overrides: Partial<LaunchOptions> = {}): LaunchOptions {
@@ -25,6 +25,15 @@ afterEach(async () => {
 });
 
 describe("Alpha launch construction", () => {
+  test("only saved OMP sessions resume; empty ids can restart without discarding other history", async () => {
+    const sessionDir = await mkdtemp(join(tmpdir(), "alpha-resume-"));
+    created.push(sessionDir);
+    expect(await persistedSessionId(sessionDir, "empty-id")).toBeUndefined();
+    await writeFile(join(sessionDir, "2026-09-30_saved-id.jsonl"), '{"type":"session","id":"saved-id"}\n');
+    expect(await persistedSessionId(sessionDir, "saved-id")).toBe("saved-id");
+    await expect(persistedSessionId(sessionDir, "missing-id")).rejects.toThrow("已有会话文件未改动");
+    expect(await readFile(join(sessionDir, "2026-09-30_saved-id.jsonl"), "utf8")).toContain('"id":"saved-id"');
+  });
   test("rpc and terminal argv differ only by --mode", async () => {
     const input = options();
     const rpc = await buildLaunch(input);

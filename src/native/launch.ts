@@ -1,4 +1,4 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 /**
@@ -35,6 +35,15 @@ export interface LaunchPlan {
   env: Record<string, string>;
   /** The generated per-launch OMP config overlay (written by writeLaunchConfig). */
   configPath: string;
+}
+
+/** OMP allocates ids before its lazy session file exists; only durable sessions can resume. */
+export async function persistedSessionId(sessionDir: string, id?: string): Promise<string | undefined> {
+  if (!id) return undefined;
+  const files = (await readdir(sessionDir)).filter(name => name.endsWith(".jsonl"));
+  if (files.some(name => name.endsWith(`_${id}.jsonl`))) return id;
+  if (files.length) throw new Error(`保存的 OMP 会话 ${id} 不存在；已有会话文件未改动`);
+  return undefined;
 }
 
 /** OS/runtime variables the OMP process and its tools actually need on Windows and POSIX. */

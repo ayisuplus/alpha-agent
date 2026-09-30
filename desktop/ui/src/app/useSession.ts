@@ -137,6 +137,7 @@ export function useSession(): SessionController {
     ]);
     if (selectedRef.current !== id) return;
     setState(nextState);
+    setOpened(true); setHostNotice(null);
     setMessages(history.messages ?? []);
     setModels(available.models ?? []);
     setFiles(directory.files ?? []);
@@ -171,11 +172,14 @@ export function useSession(): SessionController {
     };
     void (async () => {
       try {
-        await openSession(selected);
+        const terminal = await sessionRequest<{ active: boolean }>(selected, "terminal");
+        if (!terminal.active) await openSession(selected);
         if (cancelled) return;
         setOpened(true);
         void reloadList().catch(() => undefined);
         feed = new EventSource(await sessionEventsUrl(selected));
+        const disconnected = "与 Alpha 本机服务的事件连接已断开，正在重连。";
+        feed.onopen = () => setError(current => current === disconnected ? "" : current);
         feed.onmessage = event => {
           const frame = JSON.parse(event.data) as Record<string, unknown>;
           const type = String(frame.type ?? "");
@@ -238,7 +242,7 @@ export function useSession(): SessionController {
           if (REFRESH_EVENTS.includes(type)) refresh();
           if (LOG_EVENTS.includes(type)) setLogs(items => [...items.slice(-149), { at, text: `${type}: ${String(frame.toolName ?? frame.payload ?? "")}` }]);
         };
-        feed.onerror = () => setError("与 Alpha 本机服务的事件连接已断开，正在重连。");
+        feed.onerror = () => setError(disconnected);
         await loadSelected(selected);
       } catch (cause) {
         if (cancelled) return;
@@ -333,8 +337,9 @@ export function useSession(): SessionController {
     const id = selectedRef.current;
     if (!id) return;
     try {
+      if (action === "start") setTerminalOutput("");
       await sessionRequest(id, `terminal/${action}`, action === "start" ? { cols: 100, rows: 30 } : {});
-      if (action === "start") { setTerminalOutput(""); setTerminalActive(true); }
+      if (action === "start") setTerminalActive(true);
     } catch (cause) { setError(String(cause)); }
   }, []);
 

@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { ITheme } from "@xterm/xterm";
+import { sessionRequest } from "./native-api";
 
 /**
  * 墨·深 (alpha-ink) xterm palette: the 16 ANSI slots mirror presets/terminal-themes/alpha-ink.json
@@ -32,36 +33,28 @@ const ALPHA_INK: ITheme = {
 };
 
 /** Native OMP TUI in the same session; the server suspends RPC while this owns it. */
-export function NativeTerminal({ id, output }: { id: string; output: string }) {
+export function NativeTerminal({ id, output, onError }: { id: string; output: string; onError(value: string): void }) {
   const element = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
   const written = useRef("");
   useEffect(() => {
     if (!element.current) return;
-    const post = async (path: string, data: unknown) => {
-      // The native server requires the bridge token on /api; window.alpha carries it.
-      const token = await (window.alpha as unknown as { serverToken?: () => Promise<string> } | undefined)?.serverToken?.();
-      await fetch(path, {
-        method: "POST",
-        headers: { "content-type": "application/json", ...(token ? { "x-alpha-token": token } : {}) },
-        body: JSON.stringify(data),
-      });
-    };
+    const post = (action: string, data: unknown) => sessionRequest(id, `terminal/${action}`, data).catch(cause => onError(String(cause)));
     const xterm = new Terminal({ fontFamily: "Cascadia Code, Consolas, monospace", fontSize: 13, theme: ALPHA_INK });
     const fit = new FitAddon();
     xterm.loadAddon(fit);
     xterm.open(element.current);
     terminal.current = xterm;
     fit.fit();
-    const input = xterm.onData(data => { void post(`/api/native/sessions/${id}/terminal/input`, { data }); });
+    const input = xterm.onData(data => { void post("input", { data }); });
     const resize = new ResizeObserver(() => {
       fit.fit();
-      void post(`/api/native/sessions/${id}/terminal/resize`, { cols: xterm.cols, rows: xterm.rows });
+      void post("resize", { cols: xterm.cols, rows: xterm.rows });
     });
     resize.observe(element.current);
     xterm.focus();
     return () => { input.dispose(); resize.disconnect(); xterm.dispose(); terminal.current = null; written.current = ""; };
-  }, [id]);
+  }, [id, onError]);
   useEffect(() => {
     if (!terminal.current) return;
     if (output.startsWith(written.current)) terminal.current.write(output.slice(written.current.length));

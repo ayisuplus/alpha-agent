@@ -7,10 +7,11 @@ import type { RpcCommand } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import { RpcProcess } from "./rpc-process";
 import { OmpUpdateMonitor } from "./omp-update-monitor";
 import { NativeConfiguration } from "./configuration";
-import { buildLaunch, defaultWorkspaceRoot } from "./launch";
+import { buildLaunch, defaultWorkspaceRoot, persistedSessionId } from "./launch";
 import { officeRuntimeStatus } from "./capabilities/office/office-runtime";
 import { ComfyClient } from "./capabilities/comfyui/comfy-client";
 import { ScheduleStore, Scheduler, type Schedule, type ScheduleDeliver } from "./scheduler";
+import { projectReview } from "./project-review";
 
 interface SessionRecord {
   id: string;
@@ -193,7 +194,8 @@ async function openHost(id: string): Promise<RpcProcess> {
     if (!(await stat(item.cwd)).isDirectory()) throw new Error(`Project directory unavailable: ${item.cwd}`);
     const dir = join(nativeRoot, "sessions", id);
     await mkdir(dir, { recursive: true });
-    const plan = await buildLaunch({ appRoot, cwd: item.cwd, sessionDir: dir, sessionId: id, dataRoot, mode: "rpc", ...(item.ompSessionId ? { ompSessionId: item.ompSessionId } : {}) });
+    const ompSessionId = await persistedSessionId(dir, item.ompSessionId);
+    const plan = await buildLaunch({ appRoot, cwd: item.cwd, sessionDir: dir, sessionId: id, dataRoot, mode: "rpc", ...(ompSessionId ? { ompSessionId } : {}) });
     const child = new RpcProcess({ cwd: item.cwd, argv: plan.argv, env: plan.env });
     child.on("frame", frame => {
       if (frame.type === "session_info_update" && typeof frame.title === "string" && frame.title.trim()) {
@@ -202,11 +204,11 @@ async function openHost(id: string): Promise<RpcProcess> {
       }
       emit(id, frame);
     });
-    child.on("exit", error => { processes.delete(id); if (!terminals.has(id)) emit(id, { type: "host_exit", error: error.message }); });
+    child.on("exit", error => { if (processes.delete(id) && !terminals.has(id)) emit(id, { type: "host_exit", error: error.message }); });
     child.on("protocol_error", error => emit(id, { type: "host_error", error: String(error) }));
     await child.ready;
     await child.command({ type: "negotiate_protocol", protocolVersion: 2 });
-    if (!item.ompSessionId) {
+    if (!ompSessionId) {
       const state = await child.command({ type: "get_state" });
       const data = "data" in state ? state.data : null;
       const ompSessionId = data && typeof data === "object" && "sessionId" in data ? data.sessionId : undefined;
@@ -291,7 +293,7 @@ function uiFile(pathname: string): Response {
 
 const server = Bun.serve({
   hostname: "127.0.0.1", port: 0, idleTimeout: 120,
-  async fetch(request) {
+  async fetch(request, nativeServer) {
     const url = new URL(request.url);
     const origin = `http://127.0.0.1:${server.port}`;
     if (request.headers.get("host") !== `127.0.0.1:${server.port}`) return new Response("Forbidden", { status: 403 });
@@ -376,6 +378,9 @@ const server = Bun.serve({
         if (!action && request.method === "GET") return json({ active: terminals.has(id), output: terminals.get(id)?.output ?? "" });
         if (action === "start" && request.method === "POST") {
           if (terminals.has(id)) throw new Error("Alpha 终端已经打开");
+          const sessionDir = join(nativeRoot, "sessions", id);
+          await mkdir(sessionDir, { recursive: true });
+          const ompSessionId = await persistedSessionId(sessionDir, item.ompSessionId);
           const running = processes.get(id);
           if (running) {
             const rpc = await running;
@@ -383,19 +388,19 @@ const server = Bun.serve({
             const data = "data" in state ? state.data : null;
             const settled = data && typeof data === "object" ? data : {};
             if (rpc.hasPendingWork || !("isSettled" in settled) || !settled.isSettled || ("hasPendingAsyncWork" in settled && settled.hasPendingAsyncWork)) throw new Error("请等待会话完成后再打开原生终端");
-            await rpc.stop();
             processes.delete(id);
             lastUsed.delete(id);
+            await rpc.stop();
           }
+          if (!ompSessionId) { delete item.ompSessionId; await saveRecords(); }
           const input = await body(request);
           const cols = Math.max(40, Math.min(240, Number(input.cols) || 100));
           const rows = Math.max(12, Math.min(100, Number(input.rows) || 30));
           const pty = new PtySession();
           const terminal = { pty, output: "" };
           terminals.set(id, terminal);
-          const sessionDir = join(nativeRoot, "sessions", id);
           const plan = await buildLaunch({ appRoot, cwd: item.cwd, sessionDir, sessionId: id, dataRoot, agentDir: configuration.agentDir,
-            mode: "terminal", terminalTheme: await configuration.themeUnset(), ...(item.ompSessionId ? { ompSessionId: item.ompSessionId } : {}) });
+            mode: "terminal", terminalTheme: await configuration.themeUnset(), ...(ompSessionId ? { ompSessionId } : {}) });
           void captureTerminalSession(id, sessionDir);
           void pty.startArgv({ application: process.execPath, args: plan.argv, cwd: item.cwd, env: plan.env, cols, rows }, (error, chunk) => {
             if (error) emit(id, { type: "terminal_error", error: error.message });
@@ -443,10 +448,11 @@ const server = Bun.serve({
         await writeFile(file, JSON.stringify(entries, null, 2), "utf8");
         return json({ revoked: true });
       }
-      const match = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/(state|messages|models|files|events|command|ui-response|open)$/.exec(url.pathname);
+      const match = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/(state|messages|models|files|review|events|command|ui-response|open)$/.exec(url.pathname);
       if (match) {
         const [, id, action] = match;
         record(id);
+        if (action === "review" && request.method === "GET") return json(await projectReview(record(id).cwd));
         if (action === "open" && request.method === "POST") {
           await host(id);
           return json({ open: true });
@@ -465,6 +471,7 @@ const server = Bun.serve({
           return json({ path, relative: part, files });
         }
         if (action === "events" && request.method === "GET") {
+          nativeServer.timeout(request, 0);
           let currentController: ReadableStreamDefaultController<Uint8Array> | undefined;
           const stream = new ReadableStream<Uint8Array>({
             start(controller) {

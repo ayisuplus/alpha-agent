@@ -1,18 +1,62 @@
 /**
- * 右栏（方案 8.2）：浏览器面板（按 desktop/preload.cjs 契约：标签列表 + 截屏流 JPEG 只读画面 +
- * 接管/交还；宿主不可用显示“当前为不可见模式”；换标签后重订阅截屏流）、文件、诊断日志（默认隐藏）。
+ * 右栏：项目审查、原生终端、浏览器面板、文件、诊断日志（默认隐藏）。
+ * 浏览器沿用 desktop/preload.cjs 的截屏流与接管/交还契约。
  */
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { FileText, FolderOpen, Globe2, Terminal } from "lucide-react";
+import { ClipboardCheck, FileText, FolderOpen, Globe2, PanelRightClose, Terminal } from "lucide-react";
 import type { BrowserHostStatus, BrowserTabInfo } from "../api/types";
 import type { SessionController } from "./useSession";
-import { nativeApi, sessionRequest } from "./native-api";
+import { nativeApi, sessionRequest, toolPayload } from "./native-api";
+import { NativeTerminal } from "./NativeTerminal";
 
 /** 截屏画面自适应样式：样式表没有对应图片规则，其余复用现有类。 */
 const FRAME_STYLE: CSSProperties = { maxWidth: "100%", maxHeight: "100%", border: "1px solid var(--border)", background: "white" };
 
-type WorkspaceTab = "browser" | "files" | "logs";
+export type WorkspaceTab = "review" | "terminal" | "browser" | "files" | "logs";
+
+type ProjectReview = { available: boolean; status: string; staged: string; unstaged: string; truncated: boolean; reason?: string };
+
+function ReviewPanel({ session }: { session: SessionController }) {
+  const [review, setReview] = useState<ProjectReview | null>(null);
+  const [error, setError] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    setReview(null); setError("");
+    if (!session.selected) return;
+    let cancelled = false;
+    void sessionRequest<ProjectReview>(session.selected, "review").then(value => { if (!cancelled) setReview(value); }, cause => { if (!cancelled) setError(String(cause)); });
+    return () => { cancelled = true; };
+  }, [session.selected, session.messages.length, refresh]);
+  if (!session.current) return <div className="native-panel"><p className="native-muted">选择会话后，可以审查项目改动和会话产物。</p></div>;
+  const artifacts = session.messages.filter(message => message.role === "toolResult").flatMap(message => toolPayload(message)?.artifacts ?? []);
+  return <div className="native-panel">
+    <h3>任务审查</h3><p>{session.current.title}</p><p className="native-muted">{session.current.cwd}</p>
+    {session.tianshuStatus && <p className="native-muted">天枢：{session.tianshuStatus}</p>}
+    <h4>项目改动 <button onClick={() => setRefresh(value => value + 1)}>刷新改动</button></h4>
+    <p className="native-muted">当前项目整体 Git 改动；未跟踪文件只列路径。</p>
+    {error ? <p role="alert">{error}</p> : !review ? <p className="native-muted">正在读取…</p> : !review.available ? <p className="native-muted">{review.reason}</p> : <>
+      <pre className="native-review-output">{review.status || "工作区没有改动。"}</pre>
+      {!!review.staged && <><h4>已暂存</h4><pre className="native-review-output">{review.staged}</pre></>}
+      {!!review.unstaged && <><h4>未暂存</h4><pre className="native-review-output">{review.unstaged}</pre></>}
+      {review.truncated && <p className="native-muted">改动内容较大，当前显示已截断。</p>}
+    </>}
+    <h4>会话产物</h4>
+    {artifacts.length ? artifacts.map((artifact, index) => <p className="native-muted" key={`${artifact.path}:${index}`}>{artifact.kind} · {artifact.path}</p>) : <p className="native-muted">还没有工具回传的产物。</p>}
+  </div>;
+}
+
+function TerminalPanel({ session }: { session: SessionController }) {
+  if (!session.selected) return <div className="native-panel"><p className="native-muted">选择或创建会话后，可打开该会话的 Alpha 终端。</p></div>;
+  return <div className="native-terminal-panel">
+    <div className="native-panel"><h3>Alpha 终端</h3><p className="native-muted">使用当前原生会话；打开期间对话由终端接管。收起右栏不会停止终端。</p>
+      {session.terminalActive ? <button onClick={() => void session.terminal("stop")}>关闭 Alpha 终端</button>
+        : <button disabled={session.busy || !session.state?.isSettled || session.state.hasPendingAsyncWork} onClick={() => void session.terminal("start")}>打开 Alpha 终端</button>}
+    </div>
+    {session.terminalActive ? <NativeTerminal id={session.selected} output={session.terminalOutput} onError={session.setError} />
+      : <div className="native-panel"><h4>运行日志</h4>{session.logs.length ? session.logs.map((log, index) => <p className="native-log" key={index}><time>{log.at}</time> {log.text}</p>) : <p className="native-muted">还没有运行事件。</p>}</div>}
+  </div>;
+}
 
 function BrowserPanel({ visible }: { visible: boolean }) {
   const [host, setHost] = useState<BrowserHostStatus | null>(null);
@@ -118,8 +162,8 @@ function BrowserPanel({ visible }: { visible: boolean }) {
     <div className="native-browser-slot" ref={slot}>
       {!host ? <p className="native-muted">正在连接浏览器宿主…</p>
         : !host.available ? <div className="native-muted">
-          <p>当前为不可见模式{host.reason ? `（${host.reason}）` : ""}。智能体的无头浏览器照常工作。</p>
-          <button onClick={() => void restartHost()}>重启浏览器宿主</button>
+          <p>{window.alpha ? `浏览器宿主不可用${host.reason ? `（${host.reason}）` : ""}。` : "网页预览不提供桌面浏览器宿主，请在 Alpha 桌面版查看和接管网页。"}</p>
+          {window.alpha?.browserHostRestart && <button onClick={() => void restartHost()}>重启浏览器宿主</button>}
         </div>
         : !target ? <p className="native-muted">智能体打开网页后，这里实时显示页面画面（只读）。“接管”后可登录、过验证码，“交还”后智能体继续使用同一登录状态。</p>
         : frame ? <img alt="页面实时画面" src={frame} style={FRAME_STYLE} />
@@ -143,6 +187,7 @@ function FilesPanel({ session }: { session: SessionController }) {
     if (!window.alpha?.openFolder) { session.setError("请在 Alpha 桌面版打开本机文件"); return; }
     const error = await window.alpha.openFolder(path); if (error) session.setError(error);
   };
+  if (!session.selected) return <div className="native-panel"><p className="native-muted">选择会话后，可以浏览项目文件。</p></div>;
   return <div className="native-panel">
     <h3>项目文件</h3>
     <p className="native-muted">{directory?.path ?? session.current?.cwd}</p>
@@ -156,22 +201,22 @@ function FilesPanel({ session }: { session: SessionController }) {
   </div>;
 }
 
-export function NativeWorkspace({ session, diagnostics }: { session: SessionController; diagnostics: boolean }) {
-  const [tab, setTab] = useState<WorkspaceTab>(() => {
-    const saved = localStorage.getItem("alpha-native-workspace-tab");
-    return saved === "files" || saved === "logs" || saved === "browser" ? saved : "browser";
-  });
-  useEffect(() => { localStorage.setItem("alpha-native-workspace-tab", tab); }, [tab]);
+export function NativeWorkspace({ session, diagnostics, tab, setTab, onClose }: { session: SessionController; diagnostics: boolean; tab: WorkspaceTab; setTab(tab: WorkspaceTab): void; onClose(): void }) {
   useEffect(() => { if (!diagnostics && tab === "logs") setTab("browser"); }, [diagnostics, tab]);
   const tabs: Array<{ id: WorkspaceTab; label: string; Icon: typeof Globe2 }> = [
+    { id: "review", label: "审查", Icon: ClipboardCheck },
+    { id: "terminal", label: "终端", Icon: Terminal },
     { id: "browser", label: "浏览器", Icon: Globe2 },
     { id: "files", label: "文件", Icon: FolderOpen },
     ...(diagnostics ? [{ id: "logs" as const, label: "日志", Icon: Terminal }] : []),
   ];
-  return <aside className={`native-workspace ${tab === "browser" ? "browser-open" : ""}`}>
-    <div className="native-tabs">
-      {tabs.map(({ id, label, Icon }) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}><Icon size={15} /> {label}</button>)}
+  return <aside id="native-workspace" aria-label="右侧工作区" className={`native-workspace ${tab === "browser" ? "browser-open" : ""}`}>
+    <div className="native-tabs" role="tablist" aria-label="工作区视图">
+      {tabs.map(({ id, label, Icon }) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}><Icon size={15} /> {label}</button>)}
+      <button className="native-workspace-close" aria-label="收起右侧栏" title="收起右侧栏" onClick={onClose}><PanelRightClose size={17} /></button>
     </div>
+    {tab === "review" && <ReviewPanel session={session} />}
+    {tab === "terminal" && <TerminalPanel session={session} />}
     {tab === "browser" && <BrowserPanel visible />}
     {tab === "files" && <FilesPanel session={session} />}
     {tab === "logs" && <div className="native-panel">
