@@ -28,7 +28,10 @@ const fixture = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request)
   captures.push({ model: body.model, user: user.slice(0, 180), hasImage: user.includes("image_url"), tools: body.tools?.map(item => item.function.name) ?? [] });
   await writeFile(join(evidence, "model-captures.json"), JSON.stringify(captures, null, 2));
   if (user.includes("验证错误")) return Response.json({ error: { message: "401 fixture: invalid API key", type: "authentication_error" } }, { status: 401 });
-  const call = user.includes("验证提问") && toolResults === 0
+  const call = user.includes("验证计划") && toolResults < 2
+    ? toolResults === 0 ? { name: "write", arguments: JSON.stringify({ path: "local://desktop-ui-plan.md", content: "# Plan UI proof\n\n## Delivery\nPreserve existing work and verify native execution.\n" }) }
+      : { name: "write", arguments: JSON.stringify({ path: "xd://propose", content: "desktop-ui" }) }
+    : user.includes("验证提问") && toolResults === 0
     ? { name: "ask", arguments: JSON.stringify({ questions: [{ id: "style", question: "选择文档风格", options: [{ label: "简洁" }, { label: "完整" }] }] }) }
     : user.includes("验证代码") && toolResults < 2
       ? toolResults === 0 ? { name: "read", arguments: JSON.stringify({ path: "app.ts" }) }
@@ -58,7 +61,7 @@ const models = [
 await writeFile(join(agentDir, "models.yml"), JSON.stringify({ providers: { "ui-fixture": { baseUrl: `http://127.0.0.1:${fixture.port}/v1`, api: "openai-completions", auth: "none", apiKey: "local-fixture-only", models } } }));
 await writeFile(join(agentDir, "config.yml"), "modelRoles:\n  default: ui-fixture/vision\ndefaultThinkingLevel: off\nstartup:\n  setupWizard: false\n  checkUpdate: false\nretry:\n  enabled: false\n");
 const token = randomBytes(24).toString("hex");
-const child = Bun.spawn([process.execPath, "run", "src/native/server.ts"], { cwd: appRoot, env: { ...process.env, ALPHA_WORKSPACE_ROOT: workspace, PI_CODING_AGENT_DIR: agentDir, ALPHA_SERVER_TOKEN: token }, stdout: "pipe", stderr: "pipe", windowsHide: true });
+const child = Bun.spawn([process.execPath, "run", "src/native/server.ts"], { cwd: appRoot, env: { ...process.env, HOME: workspace, USERPROFILE: workspace, ALPHA_WORKSPACE_ROOT: workspace, PI_CODING_AGENT_DIR: agentDir, ALPHA_SERVER_TOKEN: token }, stdout: "pipe", stderr: "pipe", windowsHide: true });
 void (async () => {
   const errors = child.stderr.getReader();
   for (;;) { const chunk = await errors.read(); if (chunk.done) return; await writeFile(join(evidence, "server-stderr.txt"), chunk.value, { flag: "a" }); }

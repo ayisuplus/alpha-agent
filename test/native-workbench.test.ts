@@ -5,12 +5,12 @@ import type { SessionItem } from "../desktop/ui/src/app/native-api";
 describe("workbench input preservation", () => {
   const values = new Map<string, string>();
   const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); }, removeItem: (key: string) => { values.delete(key); } };
-  test("restores session text and paths from disk without mixing sessions or serializing image bytes", () => {
+  test("restores session text, paths and image bytes without mixing sessions", () => {
     values.set("alpha-composer:restored", JSON.stringify({ text: "未发送内容", paths: ["E:\\资料\\计划.docx", 42], model: "p/m" }));
     expect(readDraft("restored", storage)).toEqual({ text: "未发送内容", paths: ["E:\\资料\\计划.docx"], model: "p/m", thinking: undefined, cwd: undefined });
-    writeDraft("session-one", { text: "任务一", paths: [], image: { name: "a.png", mimeType: "image/png", data: "private-image-bytes" } }, storage);
-    expect(readDraft("session-one", storage).image?.data).toBe("private-image-bytes");
-    expect(values.get("alpha-composer:session-one")).not.toContain("private-image-bytes");
+    writeDraft("session-one", { text: "任务一", paths: [], image: { name: "a.png", mimeType: "image/png", data: "aW1hZ2U=" } }, storage);
+    values.set("alpha-composer:restarted-image", values.get("alpha-composer:session-one")!);
+    expect(readDraft("restarted-image", storage).image?.data).toBe("aW1hZ2U=");
     expect(readDraft("session-two", storage).text).toBe("");
   });
   test("image-only input and path-only input create nonempty native prompts", () => {

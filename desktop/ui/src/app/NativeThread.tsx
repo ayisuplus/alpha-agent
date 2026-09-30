@@ -8,8 +8,9 @@
  * - 顶栏显示运行检查状态（SSE 转发的 setStatus，statusKey="tianshu"）。
  */
 
+import { desktopStorage } from "./desktop-storage";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ArrowDown, Check, Copy, MoreHorizontal, RotateCcw } from "lucide-react";
 import {
@@ -18,6 +19,8 @@ import {
 } from "./native-api";
 import type { PendingCall, SessionController } from "./useSession";
 import { NativeComposer } from "./NativeComposer";
+import { NativePlan } from "./NativePlan";
+import { invokeDesktopCommand } from "./desktop-commands";
 import { atBottom, evidenceLabel, toolLabel, toolTarget, withLiveMessage } from "./workbench-state";
 import "./Thread.css";
 
@@ -74,7 +77,7 @@ export function buildItems(messages: NativeMessage[], pending: PendingCall[], ti
     if (message.role === "assistant") {
       const parts = Array.isArray(message.content) ? message.content : [];
       const text = plain(message);
-      if (message.errorMessage) items.push({ kind: "note", key: `${key}:error`, text: message.stopReason === "aborted" ? "已停止生成" : `执行失败：${message.errorMessage}` });
+      if (message.errorMessage && !(typeof message.errorId === "number" && (message.errorId & 0x02000000))) items.push({ kind: "note", key: `${key}:error`, text: message.stopReason === "aborted" ? "已停止生成" : `执行失败：${message.errorMessage}` });
       const recovery = message.retryRecovery;
       if (recovery) {
         items.push({
@@ -160,7 +163,7 @@ async function revealOnDesktop(path: string, setError: (value: string) => void):
 
 /** 产物路径是项目相对路径；按会话项目目录拼成绝对路径再交给桌面桥。 */
 export function absoluteArtifactPath(path: string, cwd: string | undefined): string {
-  if (!cwd || path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) return path;
+  if (!cwd || path.startsWith("/") || path.startsWith("local://") || /^[A-Za-z]:[\\/]/.test(path)) return path;
   return `${cwd.replace(/[\\/]+$/, "")}${path.startsWith("/") ? "" : "\\"}${path.replace(/^[\\/]+/, "")}`;
 }
 
@@ -232,7 +235,7 @@ function ThreadBody({ items, setError, cwd, id, settled, loading, onOpenFile }: 
   const save = () => {
     const element = viewport.current;
     if (!element || !initialized.current) return;
-    try { localStorage.setItem(storageKey, JSON.stringify({ top: element.scrollTop, pinned: pinned.current })); } catch { /* Reading still works when storage is full. */ }
+    try { desktopStorage.setItem(storageKey, JSON.stringify({ top: element.scrollTop, pinned: pinned.current })); } catch { /* Reading still works when storage is full. */ }
   };
   const jump = () => { pinned.current = true; const element = viewport.current; if (element) element.scrollTop = element.scrollHeight; setHasNew(false); save(); };
   const readingIntent = (up: boolean) => {
@@ -244,7 +247,7 @@ function ThreadBody({ items, setError, cwd, id, settled, loading, onOpenFile }: 
     const element = viewport.current!;
     if (!initialized.current && items.length) {
       let saved: { top?: number; pinned?: boolean } = {};
-      try { saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}") ?? {}; } catch { /* Use the live tail. */ }
+      try { saved = JSON.parse(desktopStorage.getItem(storageKey) ?? "{}") ?? {}; } catch { /* Use the live tail. */ }
       pinned.current = saved.pinned !== false;
       element.scrollTop = pinned.current ? element.scrollHeight : Math.min(typeof saved.top === "number" ? saved.top : 0, Math.max(0, element.scrollHeight - element.clientHeight));
       setHasNew(!pinned.current);
@@ -287,7 +290,7 @@ function ThreadBody({ items, setError, cwd, id, settled, loading, onOpenFile }: 
       return <article key={item.key} className={`native-message ${item.kind}`}>
         <div className="native-message-heading"><div className="native-role">{item.kind === "user" ? "你" : "Alpha"}</div><button className="native-icon-button" aria-label="复制消息" title="复制消息" onClick={() => void copy(item.key, item.text)}>{copied === item.key ? <Check size={15} /> : <Copy size={15} />}</button></div>
         <div className="native-markdown">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => href && !/^[a-z]+:/i.test(href) && !href.startsWith("//") && !href.startsWith("#")
+          <ReactMarkdown urlTransform={url => url.startsWith("local://") ? url : defaultUrlTransform(url)} remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => href && (href.startsWith("local://") || !/^[a-z]+:/i.test(href)) && !href.startsWith("//") && !href.startsWith("#")
             ? <button className="native-file-link" onClick={() => { let path = href; try { path = decodeURI(href); } catch { /* A literal percent can be part of a file name. */ } onOpenFile(absoluteArtifactPath(path, cwd)); }}>{children}</button>
             : <a href={href} target="_blank" rel="noreferrer">{children}</a> }}>{item.text}</ReactMarkdown>
           {item.images.map(src => <img alt="消息附图" key={src} src={src} style={THUMB_STYLE} />)}
@@ -307,14 +310,6 @@ export function NativeThread({ session, sessionInfo, models, onOpenFile, onOpenS
     try { await request(`/api/native/sessions/${sessionInfo.id}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input) }); await session.reloadList(); setRenaming(false); }
     catch (cause) { session.setError(String(cause)); }
   };
-  const exportMessages = async () => {
-    const text = `# ${sessionInfo.title}\n\n项目：${sessionInfo.cwd}\n\n${session.messages.map(message => `## ${message.role}${message.toolName ? ` · ${message.toolName}` : ""}\n\n${plain(message)}${message.errorMessage ? `\n\n执行失败：${message.errorMessage}` : ""}`).join("\n\n")}\n`;
-    if (window.alpha?.saveText) await window.alpha.saveText(`${sessionInfo.title}.md`, text);
-    else {
-      const url = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" }));
-      const link = document.createElement("a"); link.href = url; link.download = `${sessionInfo.title.replace(/[<>:"/\\|?*]/g, "_")}.md`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1_000);
-    }
-  };
   const items = useMemo(
     () => buildItems(withLiveMessage(session.messages, session.liveMessage), session.pendingCalls, session.toolTiming, session.liveNotes),
     [session.messages, session.liveMessage, session.pendingCalls, session.toolTiming, session.liveNotes],
@@ -328,7 +323,9 @@ export function NativeThread({ session, sessionInfo, models, onOpenFile, onOpenS
         <details className="native-more"><summary aria-label="会话操作" title="会话操作"><MoreHorizontal size={18} /></summary><div onClick={event => event.currentTarget.parentElement?.removeAttribute("open")}>
           <button onClick={() => { setName(sessionInfo.title); setRenaming(value => !value); }}>重命名</button>
           <button onClick={() => void edit({ archived: !sessionInfo.archived })}>{sessionInfo.archived ? "恢复会话" : "归档"}</button>
-          <button onClick={() => void exportMessages().catch(cause => session.setError(String(cause)))}>导出</button>
+          <button onClick={() => void invokeDesktopCommand("history")}>历史与分支</button>
+          <button onClick={() => void invokeDesktopCommand("progress")}>任务进度与队列</button>
+          <button onClick={() => void invokeDesktopCommand("export")}>导出</button>
         </div></details>
         {session.tianshuStatus && <span className="native-tianshu-status" title={evidenceLabel(session.tianshuStatus)}>{evidenceLabel(session.tianshuStatus).replace(/(\d+\.\d+)%/g, (_, percent: string) => `${Number(percent).toFixed(1)}%`)}</span>}
         <span className={`native-status ${state?.isStreaming ? "running" : ""}`}>{session.terminalActive ? "终端运行中" : loading ? "正在打开" : session.hostNotice ? "会话未打开" : session.uiRequest ? "等待输入" : state?.isStreaming ? "运行中" : state?.hasPendingAsyncWork ? "后台任务" : state?.isSettled ? "本轮结束" : "就绪"}</span>
@@ -336,6 +333,7 @@ export function NativeThread({ session, sessionInfo, models, onOpenFile, onOpenS
         {workspaceActions}
       </div>
     </header>
+    {!session.terminalActive && <NativePlan key={sessionInfo.id} session={session} />}
     {renaming && <form className="native-compose-tools" onSubmit={event => { event.preventDefault(); void edit({ title: name }); }}><input aria-label="会话名称" value={name} maxLength={120} onChange={event => setName(event.target.value)} /><button disabled={!name.trim()}>保存名称</button><button type="button" onClick={() => setRenaming(false)}>取消</button></form>}
     {session.hostNotice && !session.terminalActive && <div className="native-update-banner" role="status">
       <strong>会话进程未运行</strong>

@@ -42,6 +42,9 @@ function onEvent(channel, callback) {
 }
 
 contextBridge.exposeInMainWorld("alpha", {
+  storage(operation, key, value) {
+    return ipcRenderer.sendSync("alpha:storage", operation, key, value);
+  },
   serverToken() {
     return ipcRenderer.invoke("alpha:server-token");
   },
@@ -53,6 +56,9 @@ contextBridge.exposeInMainWorld("alpha", {
   },
   revealItem(path) {
     return ipcRenderer.invoke("alpha:reveal-item", path);
+  },
+  openEditor(path) {
+    return ipcRenderer.invoke("alpha:open-editor", path);
   },
   openExternal(url) {
     return ipcRenderer.invoke("alpha:open-external", url);

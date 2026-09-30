@@ -33,6 +33,7 @@ export class RpcProcess extends EventEmitter {
     }) as ChildProcessWithoutNullStreams;
     this.child.on("message", message => {
       const frame = message as Frame;
+      if (frame.type === "alpha_event") { this.emit("frame", frame.event); return; }
       if (frame.type !== "alpha_response" || !frame.id) return;
       const pending = this.#hostPending.get(frame.id); if (!pending) return;
       this.#hostPending.delete(frame.id); clearTimeout(pending.timer);

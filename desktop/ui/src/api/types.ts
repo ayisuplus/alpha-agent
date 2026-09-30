@@ -435,10 +435,12 @@ export interface BrowserScreencastFrame {
 declare global {
   interface Window {
     alpha?: {
+      storage?(operation: "getItem" | "setItem" | "removeItem", key: string, value?: string): { value?: string | null; error?: string };
       serverToken?(): Promise<string>;
       openFolder?(path: string): Promise<string>;
       choosePaths?(kind: "directory" | "files"): Promise<string[]>;
       revealItem?(path: string): Promise<string>;
+      openEditor?(path: string): Promise<string>;
       openExternal?(url: string): Promise<boolean>;
       saveText?(filename: string, content: string): Promise<boolean>;
       notify?(title: string, body: string, taskId: string): void;

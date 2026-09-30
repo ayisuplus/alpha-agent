@@ -1,12 +1,13 @@
 /** 左栏：品牌、新会话、会话列表、默认折叠的旧版任务、设置入口（方案 8.2 身份文案）。 */
 
+import { desktopStorage } from "./desktop-storage";
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen, Pin, Plus, Settings, Sparkles, Timer } from "lucide-react";
-import type { LegacyTask, SessionItem } from "./native-api";
+import { nativeApi, type LegacyTask, type SessionItem } from "./native-api";
 import { groupSessions } from "./workbench-state";
 
 function savedList(key: string): string[] {
-  try { const value = JSON.parse(localStorage.getItem(key) ?? "[]"); return Array.isArray(value) ? value.filter(item => typeof item === "string") : []; }
+  try { const value = JSON.parse(desktopStorage.getItem(key) ?? "[]"); return Array.isArray(value) ? value.filter(item => typeof item === "string") : []; }
   catch { return []; }
 }
 
@@ -25,10 +26,18 @@ export function NativeSidebar({ collapsed, onToggle, sessions, legacy, selected,
   // 旧版任务默认折叠（方案 8.2：“旧任务 · 只读”→“旧版任务”，默认折叠）。
   const [legacyOpen, setLegacyOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [searchIds, setSearchIds] = useState<string[] | null>(null);
+  const [searchError, setSearchError] = useState("");
+  useEffect(() => {
+    if (!search.trim()) { setSearchIds(null); setSearchError(""); return; }
+    let cancelled = false;
+    const timer = setTimeout(() => void nativeApi<{ sessions: SessionItem[]; errors: Array<{ error: string }> }>(`sessions?search=${encodeURIComponent(search)}`).then(result => { if (!cancelled) { setSearchIds(result.sessions.map(item => item.id)); setSearchError(result.errors.map(item => item.error).join("; ")); } }, cause => { if (!cancelled) setSearchError(String(cause)); }), 250);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [search, sessions.length]);
   const [archived, setArchived] = useState(false);
   const [pinned, setPinned] = useState(() => savedList("alpha-pinned-sessions"));
   const [folded, setFolded] = useState(() => savedList("alpha-folded-projects"));
-  const [seen, setSeen] = useState<Record<string, string>>(() => { try { const value = JSON.parse(localStorage.getItem("alpha-seen-sessions") ?? "{}"); return value && typeof value === "object" && !Array.isArray(value) ? value : {}; } catch { return {}; } });
+  const [seen, setSeen] = useState<Record<string, string>>(() => { try { const value = JSON.parse(desktopStorage.getItem("alpha-seen-sessions") ?? "{}"); return value && typeof value === "object" && !Array.isArray(value) ? value : {}; } catch { return {}; } });
   const stamp = (item: SessionItem) => `${item.updatedAt}:${item.status}`;
   useEffect(() => {
     setSeen(current => {
@@ -37,10 +46,10 @@ export function NativeSidebar({ collapsed, onToggle, sessions, legacy, selected,
       return next;
     });
   }, [sessions, selected]);
-  useEffect(() => { localStorage.setItem("alpha-pinned-sessions", JSON.stringify(pinned)); }, [pinned]);
-  useEffect(() => { localStorage.setItem("alpha-folded-projects", JSON.stringify(folded)); }, [folded]);
-  useEffect(() => { localStorage.setItem("alpha-seen-sessions", JSON.stringify(seen)); }, [seen]);
-  const shown = sessions.filter(item => !!item.archived === archived && `${item.title} ${item.cwd}`.toLowerCase().includes(search.toLowerCase()));
+  useEffect(() => { desktopStorage.setItem("alpha-pinned-sessions", JSON.stringify(pinned)); }, [pinned]);
+  useEffect(() => { desktopStorage.setItem("alpha-folded-projects", JSON.stringify(folded)); }, [folded]);
+  useEffect(() => { desktopStorage.setItem("alpha-seen-sessions", JSON.stringify(seen)); }, [seen]);
+  const shown = sessions.filter(item => !!item.archived === archived && (searchIds ? searchIds.includes(item.id) : `${item.title} ${item.cwd} ${item.tags?.join(" ") ?? ""}`.toLowerCase().includes(search.toLowerCase())));
   return <aside className="native-sidebar" id="native-sidebar" aria-label="侧边栏">
     <div className="native-brand"><span className="native-brand-label"><strong>Alpha</strong></span>
       <button className="native-sidebar-toggle" onClick={onToggle} aria-label={collapsed ? "展开侧边栏" : "收起侧边栏"} title={collapsed ? "展开侧边栏" : "收起侧边栏"} aria-expanded={!collapsed} aria-controls="native-sidebar">
@@ -49,6 +58,7 @@ export function NativeSidebar({ collapsed, onToggle, sessions, legacy, selected,
     </div>
     <button className="native-new" onClick={onNew} disabled={busy} aria-label="新会话" title="新会话"><Plus size={16} /><span className="native-sidebar-label">新会话</span></button>
     <input className="native-session-search" aria-label="搜索会话" placeholder="搜索会话或项目…" value={search} onChange={event => setSearch(event.target.value)} />
+    {searchError && <p className="native-muted" role="alert">{searchError}</p>}
     <div className="native-list-title">会话</div>
     <button className="native-project-choice" onClick={() => setArchived(value => !value)}>{archived ? "返回会话" : "查看归档"}</button>
     <div className="native-session-list">{groupSessions(shown, pinned).map(project => <section className="native-project-group" key={project.key}>
@@ -57,7 +67,7 @@ export function NativeSidebar({ collapsed, onToggle, sessions, legacy, selected,
       </button>
       {(!folded.includes(project.key) || search) && project.rows.map(item => <div className="native-session-row" key={item.id}>
         <button className={`native-session ${selected === item.id ? "active" : ""}`} onClick={() => onSelect(item.id)} title={item.title}>
-          <span>{item.title}</span><small><i className={`native-status-dot ${item.status === "工作中" ? "running" : item.status === "失败" ? "danger" : item.status === "等待输入" ? "warning" : ""}`} />{item.status ?? "未打开"}
+          <span>{item.title}</span><small>{item.tags?.join(" · ")} <i className={`native-status-dot ${item.status === "工作中" ? "running" : item.status === "失败" ? "danger" : item.status === "等待输入" ? "warning" : ""}`} />{item.status ?? "未打开"}
             {item.id !== selected && seen[item.id] && seen[item.id] !== stamp(item) && ["完成", "失败", "等待输入"].includes(item.status ?? "") && <b className="native-unread" aria-label="有未读更新" />}
           </small>
         </button>

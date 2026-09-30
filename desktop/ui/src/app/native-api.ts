@@ -24,6 +24,7 @@ export interface SessionItem {
   /** OMP 显式 --resume 恢复用的会话 ID。 */
   ompSessionId?: string;
   archived?: boolean;
+  tags?: string[];
   status?: string;
   notice?: string;
 }
@@ -65,12 +66,16 @@ export interface NativeMessage {
   retryRecovery?: RetryRecoveryNote;
   stopReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
   errorMessage?: string;
+  errorId?: number;
 }
 
 export interface NativeState {
   model?: { provider: string; id: string; name?: string };
   thinkingLevel?: string;
   isStreaming: boolean;
+  isCompacting?: boolean;
+  queuedMessageCount?: number;
+  todoPhases?: Array<{ name: string; tasks: Array<{ content: string; status: string }> }>;
   isSettled: boolean;
   hasPendingAsyncWork: boolean;
   sessionName?: string;

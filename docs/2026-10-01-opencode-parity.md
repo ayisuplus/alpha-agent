@@ -7,8 +7,8 @@
 | 批次 | 来源 / 功能 | Alpha 适配 | 验收状态 |
 | --- | --- | --- | --- |
 | 1 | skills、mcp、plugins | 原生 SDK 宿主、运行时目录、Skill 导入编辑启停、MCP 生命周期与认证、原生插件管理 | 已接入；fixture 和 Electron 渲染通过，完整外部授权验收待做 |
-| 2 | session commands、composer、requests | 命令面板、补全、附件与草稿、队列、会话分支树、压缩导出、todo 与子 agent | 待实现 |
-| 2 | OMP 原生计划机制 | local:// 文件、xd://propose 审阅、五种选择、模型工具恢复、暂停重进 | 待实现 |
+| 2 | session commands、composer、requests | 共享命令目录、补全、多图草稿、队列、原生会话树、全文搜索标签、压缩导出、todo 与子 agent | 已接入；会话恢复集成与 Electron 入口通过，真实并行子任务和队列专项待做 |
+| 2 | OMP 原生计划机制 | local:// 文件、xd://propose 审阅、五种选择、模型工具恢复、暂停重进 | 五种选择及取消压缩通过真实内核 fixture；Electron 审阅和清空执行通过；外部编辑器/系统另存对话框待人工验收 |
 | 3 | workspace、file、review、terminal | worktree、文件搜索标签与行引用、行级反馈、独立 shell、外部编辑器 | 待实现 |
 | 3 | snapshot / revert | 独立快照、差异预览、冲突保护、撤销重做 | 待实现 |
 | 4 | providers、models、permissions、LSP | 原生配置与凭据、自定义服务商、权限规则、规则命令任务配置与 LSP | 待实现 |
@@ -33,15 +33,15 @@
 | 1.8 | 插件安装、链接、更新卸载、诊断 | 原生 PluginManager | 本地插件加载、禁用后重启、链接更新、卸载且源文件保留通过；registry 安装待专项 |
 | 1.9 | 插件配置、功能、来源许可错误 | 原生 settings/features/doctor，SDK 加载错误 | secret 配置不出现在目录响应；其它桌面操作专项待验收 |
 | 1.10 | 配置状态与运行状态区分 | 单写者；空闲安全重开，忙碌待生效；其他已打开会话提示待加载 | 代码已接；忙碌、异步任务、终端接管专项待做 |
-| 2.1 | 菜单/快捷键/斜杠共享命令与补全 | 原生 get_available_commands + 桌面命令目录 | 待实施 |
-| 2.2 | 文件引用、附件草稿恢复 | 现有 composer/draft + 原生 prompt | 已有文字/路径草稿；图片持久化与行范围引用待实施 |
-| 2.3 | 排队、中途补充及队列状态 | 原生 steer/follow_up 与队列 RPC | 中途补充已有；队列入口及查看待实施 |
-| 2.4 | 会话搜索标签、分支、历史树 | 原生 sessionManager / navigateTree / branch | 搜索已有；标签与树导航待实施 |
-| 2.5 | 压缩、本地导出 | 原生 compact / export_html | 压缩已有；本地导出待实施 |
-| 2.6 | todo、子 agent、待处理请求 | 原生 RPC / events | 请求对话已有；todo、子任务总览待实施 |
-| 2.7 | 原生计划入口、修订和重进恢复 | 原生 plan 状态、产物和模式日志 | TUI 源码审查完成；桌面适配待实施 |
-| 2.8 | 计划五种审阅与分节反馈 | 原生 prepare/resolvePlan、compact、新会话和模型转换 | 待实施与逐项专项验收 |
-| 2.9 | 计划模型工具恢复、互斥、内部停止 | 原生 model-transition、tool partition、mode exit teardown | 待实施与专项验收 |
+| 2.1 | 菜单/快捷键/斜杠共享命令与补全 | 原生 get_available_commands + 桌面命令目录 | Electron 命令目录和导航通过；Slash/Tab/中文组合输入有入口，逐键专项待做 |
+| 2.2 | 文件引用、附件草稿恢复 | 原生 prompt；Electron preload 的磁盘存储，限制图片合计大小 | Electron 销毁/重建窗口后文字和图片恢复通过；根目录 @ 补全已接；行范围引用留在第三批 |
+| 2.3 | 排队、中途补充及队列状态 | 原生 steer/follow_up、getQueuedMessages、clearQueue | UI 选择发送方式、查看及取回附件已接；流式队列专项待做 |
+| 2.4 | 会话全文搜索标签、分支、历史树 | 原生 session-loader / sessionManager / navigateTree / branch | native-session.test：正文搜索、标签、历史导航、带图片分支、新旧 ID 与冷启动恢复通过 |
+| 2.5 | 压缩、本地导出 | 原生 compact / export_html | 真实原生 HTML 生成通过；Electron 系统保存框待人工验收 |
+| 2.6 | todo、子 agent、待处理请求 | 原生 RPC / events | Electron 进度入口通过；真实多子任务、非空 todo 专项待做 |
+| 2.7 | 原生计划入口、修订和重进恢复 | 原生 plan 状态、产物和模式日志；薄桌面审阅控制器 | native-plan.test：write/edit 限制、持续修订、暂停/重进、审阅重启恢复通过；local:// 使用原生 resolver 预览 |
+| 2.8 | 计划五种审阅与分节反馈 | 原生 preparePlanForReview、compact、newSession、模型转换和产物复制 | 五种选择、旧内容冲突、关闭不批准、压缩取消不执行通过；分节反馈已接；外部编辑器/系统另存待人工验收 |
+| 2.9 | 计划模型工具恢复、互斥、内部停止 | 原生 model-transition、tool partition、mode exit teardown | 模型恢复、计划角色实时更改、批准后实际 write 恢复通过；内部停止独立显示；goal/vibe 互斥及异常失败专项仍待做 |
 | 3.1 | 项目、worktree、保留既有改动 | 原生 createSessionWorktree 与 vcs | 已有项目分组；工作区入口待实施 |
 | 3.2 | 文件树、搜索、标签与行引用 | 现有安全文件 API + 搜索适配 | 文件树/预览已有；搜索、标签、行引用待实施 |
 | 3.3 | 修改审查和行级反馈 | 现有 projectReview（整体项目 Git） | 审查已有；反馈回填待实施 |
@@ -64,6 +64,10 @@
 - Electron 41.2.2 隔离渲染探针：44 个运行时 Skill、正文导航、MCP/插件入口，无水平溢出。截图在 `artifacts/parity-2026-10-01/`，结果 `extension-ui-result.json`。这是 Electron renderer 验证，尚不等同于发行包 / 原生文件对话框 / 用户授权验收。
 - 内置浏览器对 loopback 返回 ERR_BLOCKED_BY_CLIENT；未替换线上服务。Electron 探针改用本机隔离渲染。
 - Bun 1.3.14 的 `.rejects.toThrow` 与子进程 IPC 组合在本机会阻塞预期的拒绝事件；改为先 await 捕获错误再断言，确认越界读取真实被拒绝。
+- 第二批回归：`bun run check`、`bun run test` 110 pass/0 fail（741 assertions，266.94 秒）、`bun run build:desktop-ui` 通过。随后增加原生计划模型角色变更与实际写入恢复专项：5 pass/0 fail、45 assertions；local:// 预览与遍历拒绝专项另记。
+- `native-plan.test.ts` 使用真实 write/edit/xdev、原生会话日志、模型切换、压缩与取消，不用提示词模拟写入限制。原生模式退出 teardown 包围上下文与模型工具转换；避免压缩完成后排队输入在计划模型上提前运行。
+- Electron 第二批结果 `session-ui-result.json`：真实生产 preload 与磁盘状态存储、窗口重建恢复图片/文字和选择、命令目录、历史/进度入口、计划正文编辑、关闭不批准、清空上下文后执行。截图 `plan-review-electron.png`、`session-electron.png`；本机模型固定输出只证明接口与渲染，不代替外部模型或系统文件对话框验收。
+- 原生 RPC branch 的响应只返回 `text`，会丢弃 SDK 的 `selectedImages`。桌面通过同一 session 的 SDK branch 补充带图响应，未改动原生 RPC 协议；记录旧 ID 与新 ID，并保持两者原始会话文件。
 
 # OMP 18.4.3 原生能力复用审查
 

@@ -4,6 +4,7 @@
  * 进程被回收（`host_exit`）时提示并允许重新 /open。
  */
 
+import { desktopStorage } from "./desktop-storage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   NativeApiError,
@@ -18,11 +19,13 @@ import {
   type UiRequest,
 } from "./native-api";
 import { readDraft, writeDraft } from "./workbench-state";
+import { desktopCommand, invokeDesktopCommand } from "./desktop-commands";
 
 export interface LogEntry { at: string; text: string }
 export interface PendingCall { toolCallId: string; toolName: string; args: unknown; startedAt: number }
 export interface WidgetBlock { key: string; lines: string[] }
 export interface AttachedImage { data: string; mimeType: string; name: string }
+export const nativeImages = (images: AttachedImage | AttachedImage[]) => (Array.isArray(images) ? images : [images]).map(image => ({ type: "image", data: image.data, mimeType: image.mimeType }));
 
 export interface SessionController {
   sessions: SessionItem[];
@@ -36,7 +39,7 @@ export interface SessionController {
   select(id: string | null): void;
   create(cwd?: string): Promise<boolean>;
   continueLegacy(task: LegacyTask): Promise<boolean>;
-  startFromHome(input: { text: string; cwd: string; model: string; thinking: string; image?: AttachedImage }): Promise<boolean>;
+  startFromHome(input: { text: string; cwd: string; model: string; thinking: string; image?: AttachedImage | AttachedImage[] }): Promise<boolean>;
   state: NativeState | null;
   messages: NativeMessage[];
   liveMessage: NativeMessage | null;
@@ -64,12 +67,13 @@ export interface SessionController {
   terminalOutput: string;
   terminal(action: "start" | "stop"): Promise<void>;
   command(value: Record<string, unknown>): Promise<boolean>;
-  send(text: string, image?: AttachedImage): Promise<boolean>;
+  send(text: string, image?: AttachedImage | AttachedImage[], mode?: "steer" | "follow_up"): Promise<boolean>;
   refresh(): void;
   reloadList(): Promise<void>;
   busy: boolean;
   error: string;
   setError(value: string): void;
+  planRevision: number;
 }
 
 const REFRESH_EVENTS = ["message_end", "prompt_result", "session_settled", "agent_end", "model_changed", "session_tree"];
@@ -105,8 +109,11 @@ export function useSession(): SessionController {
   const [error, setError] = useState("");
   const [queuedDraft, setQueuedDraft] = useState("");
   const [openNonce, setOpenNonce] = useState(0);
+  const [planRevision, setPlanRevision] = useState(0);
+  const planStop = useRef(false);
 
   const selectedRef = useRef<string | null>(null);
+  const restoreSelection = useRef(true);
   const toolStarts = useRef<Map<string, number>>(new Map());
   const completedLive = useRef<NativeMessage | null>(null);
   const statuses = useRef(new Map<string, string | undefined>());
@@ -123,6 +130,11 @@ export function useSession(): SessionController {
       request<{ tasks: LegacyTask[] }>("/api/native/legacy"),
     ]);
     setSessions(live.sessions);
+    if (restoreSelection.current) {
+      restoreSelection.current = false;
+      const remembered = desktopStorage.getItem("alpha-last-session");
+      if (remembered && live.sessions.some(item => item.id === remembered)) setSelected(remembered);
+    }
     for (const item of live.sessions) {
       const before = statuses.current.get(item.id);
       if (before && before !== item.status && ["完成", "失败", "等待输入"].includes(item.status ?? "")) {
@@ -200,6 +212,8 @@ export function useSession(): SessionController {
         feed.onmessage = event => {
           const frame = JSON.parse(event.data) as Record<string, unknown>;
           const type = String(frame.type ?? "");
+          if (type === "alpha_plan") { setPlanRevision(value => value + 1); refresh(); }
+          if (type === "alpha_plan_stop") planStop.current = frame.interrupting === true;
           if (type === "message_update") {
             const partial = (frame.assistantMessageEvent as { partial?: NativeMessage } | undefined)?.partial ?? frame.message as NativeMessage | undefined;
             if (partial?.role === "assistant") { completedLive.current = null; setLiveMessage(partial); }
@@ -209,7 +223,10 @@ export function useSession(): SessionController {
           if (type === "agent_start") setState(current => current ? { ...current, isStreaming: true, isSettled: false } : current);
           if (type === "prompt_result") {
             if (frame.status === "error") setError((frame.error as { message?: string } | undefined)?.message ?? "本轮执行失败");
-            if (frame.status === "aborted") setLiveNotes(current => [...current.filter(note => note.id !== "result"), { id: "result", text: "本轮已中止" }]);
+            if (frame.status === "aborted") {
+              setLiveNotes(current => [...current.filter(note => note.id !== "result"), { id: "result", text: planStop.current ? "计划已提交审阅，等待你的选择。" : "本轮已中止" }]);
+              planStop.current = false;
+            }
           }
           if (type === "command_output") setLiveNotes(current => [...current.filter(note => note.id !== "command"), { id: "command", text: String(frame.text ?? "") }]);
           const at = new Date().toLocaleTimeString();
@@ -278,7 +295,9 @@ export function useSession(): SessionController {
   useEffect(() => { void reloadList().catch(() => undefined); }, [messages.length, reloadList]);
 
   const select = useCallback((id: string | null) => {
+    restoreSelection.current = false;
     setSelected(id);
+    try { if (id) desktopStorage.setItem("alpha-last-session", id); else desktopStorage.removeItem("alpha-last-session"); } catch (cause) { setError(String(cause)); }
     setUiRequest(null);
   }, []);
 
@@ -311,7 +330,7 @@ export function useSession(): SessionController {
     finally { setBusy(false); }
   }, [reloadList, select]);
 
-  const startFromHome = useCallback(async (input: { text: string; cwd: string; model: string; thinking: string; image?: AttachedImage }) => {
+  const startFromHome = useCallback(async (input: { text: string; cwd: string; model: string; thinking: string; image?: AttachedImage | AttachedImage[] }) => {
     const text = input.text.trim();
     if (!text || !input.model || sending.current) return false;
     sending.current = true;
@@ -328,13 +347,16 @@ export function useSession(): SessionController {
       await sessionRequest(result.session.id, "command", { type: "set_model", provider, modelId: modelId.join("/") });
       if (input.thinking !== "auto") await sessionRequest(result.session.id, "command", { type: "set_thinking_level", level: input.thinking });
       await reloadList();
-      await sessionRequest(result.session.id, "command", { type: "prompt", message: text, ...(input.image ? { images: [{ type: "image", data: input.image.data, mimeType: input.image.mimeType }] } : {}) });
+      const plan = desktopCommand(text);
+      if (plan?.id === "plan") await sessionRequest(result.session.id, "host/plan", { action: "resume" });
+      const message = plan?.id === "plan" ? plan.args : text;
+      if (message) await sessionRequest(result.session.id, "command", { type: "prompt", message, ...(input.image ? { images: nativeImages(input.image) } : {}) });
       select(result.session.id);
       return true;
     } catch (cause) {
       if (created) {
         startupError.current = { id: created, message: String(cause) };
-        writeDraft(created, readDraft("home", localStorage), localStorage);
+        writeDraft(created, readDraft("home", desktopStorage), desktopStorage);
         select(created);
       }
       setError(String(cause)); return false;
@@ -353,12 +375,16 @@ export function useSession(): SessionController {
     } catch (cause) { setError(String(cause)); return false; }
   }, [loadSelected]);
 
-  const send = useCallback(async (text: string, image?: AttachedImage) => {
+  const send = useCallback(async (text: string, image?: AttachedImage | AttachedImage[], mode?: "steer" | "follow_up") => {
     const message = text.trim() || (image ? "请分析这张图片。" : "");
     if (!message || !selectedRef.current || sending.current) return false;
     sending.current = true;
-    const images = image ? [{ type: "image", data: image.data, mimeType: image.mimeType }] : undefined;
-    try { return await command({ type: state?.isStreaming ? "steer" : "prompt", message, ...(images ? { images } : {}) }); }
+    const images = image ? nativeImages(image) : undefined;
+    try {
+      const local = desktopCommand(message);
+      if (local) return await invokeDesktopCommand(local.id, local.args, image);
+      return await command({ type: mode === "follow_up" ? "follow_up" : state?.isStreaming ? "steer" : "prompt", message, ...(images ? { images } : {}) });
+    }
     finally { sending.current = false; }
   }, [command, state?.isStreaming]);
 
@@ -398,7 +424,7 @@ export function useSession(): SessionController {
     models, files, pendingCalls, toolTiming, liveNotes, widgets, tianshuStatus, logs,
     uiRequest, uiValue, setUiValue, respond, externalUrl, setExternalUrl,
     terminalActive, terminalOutput, terminal, command, send, refresh, reloadList,
-    busy, error, setError,
+    busy, error, setError, planRevision,
   };
 }
 

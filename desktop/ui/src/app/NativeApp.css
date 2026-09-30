@@ -284,6 +284,20 @@
   .native-tianshu-status { display: none; }
   .native-header-actions .native-workspace-actions span { display: none; }
 }
+.native-plan-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 20px; border-bottom: 1px solid var(--border-subtle); font-size: 12px; }
+.native-modal:has(.native-plan-editor) { width: min(960px, 94vw); max-height: 90vh; overflow: auto; }
+.native-plan-editor textarea { width: 100%; box-sizing: border-box; padding: 12px; font: 13px/1.7 var(--font-mono); resize: vertical; }
+.native-plan-editor label { display: block; padding: 8px 0; }
+.native-modal > .native-plan-editor, .native-modal > .native-history-list { display: block; }
+.native-plan-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.native-command-results { display: grid; max-height: 50vh; overflow: auto; gap: 4px; margin-top: 10px; }
+.native-command-results button { display: flex; justify-content: space-between; gap: 12px; text-align: left; padding: 8px 10px; }
+.native-command-results small { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-command-results [aria-selected="true"] { background: var(--bg-active); }
+.native-completions { max-height: 200px; }
+.native-history-list { max-height: 55vh; overflow: auto; margin-top: 12px; }
+.native-history-row { display: flex; gap: 6px; margin: 4px 0; }
+.native-history-row button:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left; }
 @media (max-width: 760px) {
   .native-workbench { --native-sidebar-width: var(--sidebar-rail); }
   .native-workbench:not(.native-sidebar-collapsed) > .native-sidebar { position: fixed; z-index: 15; inset: 0 auto 0 0; width: var(--sidebar-width); box-shadow: var(--shadow-pop); }

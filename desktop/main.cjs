@@ -9,6 +9,7 @@ const root = path.resolve(__dirname, "..");
 // Scripts may pin it via ALPHA_SERVER_TOKEN (dev/automation); otherwise it is random per run.
 const serverToken = process.env.ALPHA_SERVER_TOKEN || require("node:crypto").randomBytes(32).toString("hex");
 const workspaceRoot = path.resolve(process.env.ALPHA_WORKSPACE_ROOT || root);
+const desktopState = require("./state-storage.cjs").stateStorage(workspaceRoot);
 const userData = path.join(workspaceRoot, ".alpha", "electron-profile");
 mkdirSync(userData, { recursive: true });
 app.setName("Alpha");
@@ -404,10 +405,19 @@ app.whenReady().then(async () => {
       await electronShell.openExternal(value);
       return true;
     });
+    ipcMain.handle("alpha:open-editor", async (event, targetPath) => {
+      if (event.sender !== shell.webContents || typeof targetPath !== "string" || !path.isAbsolute(targetPath)) return "Invalid editor path";
+      try { realpathSync(targetPath); } catch { return "File is unavailable"; }
+      return new Promise(resolve => {
+        const editor = spawn(process.env.VISUAL || process.env.EDITOR || "notepad.exe", [targetPath], { windowsHide: false });
+        editor.once("spawn", () => resolve("")); editor.once("error", error => resolve(error.message));
+      });
+    });
     ipcMain.handle("alpha:save-text", async (event, filename, content) => {
       if (event.sender !== shell.webContents || typeof filename !== "string" || typeof content !== "string" || content.length > 5_000_000) return false;
       const safeName = filename.replace(/[<>:"/\\|?*]/g, "_").slice(0, 100) || "alpha-report.md";
-      const choice = await dialog.showSaveDialog(window, { defaultPath: safeName, filters: [{ name: "Markdown", extensions: ["md"] }] });
+      const extension = path.extname(safeName).slice(1) || "md";
+      const choice = await dialog.showSaveDialog(window, { defaultPath: safeName, filters: [{ name: extension === "html" ? "HTML" : "Markdown", extensions: [extension] }] });
       if (choice.canceled || !choice.filePath) return false;
       writeFileSync(choice.filePath, content, "utf8");
       return true;
@@ -423,6 +433,11 @@ app.whenReady().then(async () => {
       if (event.sender === shell.webContents && !window.isFocused()) window.flashFrame(true);
     });
     // ── 浏览器面板 IPC（契约详见 desktop/preload.cjs 顶部注释）────────────────────────────────────
+    ipcMain.on("alpha:storage", (event, operation, key, value) => {
+      if (event.sender !== shell.webContents || !["getItem", "setItem", "removeItem"].includes(operation)) { event.returnValue = { error: "Invalid desktop storage request" }; return; }
+      try { event.returnValue = { value: desktopState[operation](key, value) }; }
+      catch (error) { event.returnValue = { error: error.message }; }
+    });
     ipcMain.handle("alpha:server-token", event => {
       if (event.sender !== shell.webContents) return null;
       return serverToken;

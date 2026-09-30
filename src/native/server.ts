@@ -14,6 +14,8 @@ import { ScheduleStore, Scheduler, type Schedule, type ScheduleDeliver } from ".
 import { projectReview } from "./project-review";
 import { projectFilePreview, projectFileContent } from "./project-file";
 import type { ExtensionCatalog, HostMethod } from "./host-types";
+import { loadSessionFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
+import { resolveLocalRoot, resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 
 interface SessionRecord {
   id: string;
@@ -24,7 +26,10 @@ interface SessionRecord {
   legacyTaskId?: string;
   /** The OMP session id captured from get_state; sessions resume explicitly via --resume. */
   ompSessionId?: string;
+  /** Native branches share the original directory without moving their files. */
+  sessionDirId?: string;
   archived?: boolean;
+  tags?: string[];
 }
 
 const appRoot = resolve(import.meta.dir, "../..");
@@ -44,7 +49,7 @@ const updates = new OmpUpdateMonitor(installedVersion, dataRoot);
 const configuration = new NativeConfiguration();
 let saveQueue = Promise.resolve();
 let hostQueue: Promise<unknown> = Promise.resolve();
-const activity = new Map<string, { status: string; notice?: string; uiRequest?: Record<string, unknown> }>();
+const activity = new Map<string, { status: string; notice?: string; uiRequest?: Record<string, unknown>; planReviewStop?: boolean }>();
 
 /** OMP process lifecycle: at most MAX_PROCESSES alive, idle ones reclaimed after IDLE_STOP_MS. */
 const MAX_PROCESSES = 4;
@@ -133,6 +138,16 @@ function saveRecords(): Promise<void> {
   return saveQueue;
 }
 
+function syncIdentity(item: SessionRecord, id: unknown, title?: unknown): void {
+  if (typeof id !== "string" || !/^[0-9a-f-]{36}$/.test(id) || item.ompSessionId === id) return;
+  if (item.ompSessionId) {
+    const old = { ...item, id: randomUUID(), sessionDirId: item.sessionDirId ?? item.id };
+    records.set(old.id, old);
+  }
+  item.ompSessionId = id;
+  if (typeof title === "string" && title.trim()) item.title = title.trim().slice(0, 120);
+  item.updatedAt = new Date().toISOString(); void saveRecords();
+}
 function json(data: unknown, status = 200): Response {
   return Response.json(data, { status, headers: { "cache-control": "no-store" } });
 }
@@ -162,12 +177,15 @@ function record(id: string): SessionRecord {
 function emit(id: string, frame: unknown): void {
   const event = frame as Record<string, unknown>;
   const state = activity.get(id) ?? { status: "空闲" };
+  if (event.type === "alpha_plan_stop") state.planReviewStop = event.interrupting === true;
+  if (event.type === "alpha_plan" && event.phase === "review") state.status = "待审阅";
   if (event.type === "agent_start" || event.type === "tool_execution_start") state.status = "工作中";
   if (event.type === "host_command_start") state.status = "工作中";
   if (event.type === "host_command_end") state.status = event.error ? "失败" : "完成";
   if (event.type === "prompt_result") {
     const error = event.error as { message?: string } | undefined;
-    state.status = event.status === "error" ? "失败" : event.status === "aborted" ? "已中止" : event.sessionSettled === true ? "完成" : "工作中";
+    state.status = event.status === "error" ? "失败" : event.status === "aborted" ? state.planReviewStop ? "待审阅" : "已中止" : event.sessionSettled === true ? "完成" : "工作中";
+    delete state.planReviewStop;
     state.notice = error?.message;
   }
   if (event.type === "session_settled" && state.status === "工作中") state.status = "完成";
@@ -198,12 +216,14 @@ async function openHost(id: string): Promise<RpcProcess> {
   touch(id);
   const pending = (async () => {
     if (!(await stat(item.cwd)).isDirectory()) throw new Error(`Project directory unavailable: ${item.cwd}`);
-    const dir = join(nativeRoot, "sessions", id);
+    const dir = join(nativeRoot, "sessions", item.sessionDirId ?? id);
     await mkdir(dir, { recursive: true });
     const ompSessionId = await persistedSessionId(dir, item.ompSessionId);
+    if (!ompSessionId) delete item.ompSessionId;
     const plan = await buildLaunch({ appRoot, cwd: item.cwd, sessionDir: dir, sessionId: id, dataRoot, mode: "rpc", ...(ompSessionId ? { ompSessionId } : {}) });
     const child = new RpcProcess({ cwd: item.cwd, argv: plan.argv, env: plan.env });
     child.on("frame", frame => {
+      if (frame.type === "alpha_plan" || frame.type === "session_info_update") syncIdentity(item, frame.sessionId, frame.title);
       if (frame.type === "session_info_update" && typeof frame.title === "string" && frame.title.trim()) {
         item.title = frame.title.trim().slice(0, 120);
         void saveRecords();
@@ -354,19 +374,43 @@ const server = Bun.serve({
         return json(updates.status());
       }
       if (url.pathname === "/api/native/sessions") {
-        if (request.method === "GET") return json({ sessions: [...records.values()].map(item => ({ ...item, ...(activity.get(item.id) ?? { status: "未打开" }) })).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) });
+        if (request.method === "GET") {
+          const query = url.searchParams.get("search")?.trim().toLowerCase();
+          let sessions = [...records.values()]; const errors: Array<{ id: string; error: string }> = [];
+          if (query) {
+            const found: SessionRecord[] = [];
+            for (const item of sessions) {
+              if (`${item.title} ${item.cwd} ${item.tags?.join(" ")}`.toLowerCase().includes(query)) { found.push(item); continue; }
+              if (!item.ompSessionId) continue;
+              try {
+                const directory = join(nativeRoot, "sessions", item.sessionDirId ?? item.id);
+                const file = (await readdir(directory)).find(name => name.endsWith(`_${item.ompSessionId}.jsonl`));
+                if (!file) continue;
+                const loaded = await loadSessionFile(join(directory, file));
+                if (loaded.entries.some(entry => entry.type === "message" && JSON.stringify(entry.message).toLowerCase().includes(query))) found.push(item);
+                if (loaded.malformedRecords || loaded.invalidHeader) errors.push({ id: item.id, error: "Native session contains malformed records" });
+              } catch (error) { errors.push({ id: item.id, error: String(error) }); }
+            }
+            sessions = found;
+          }
+          return json({ sessions: sessions.map(item => ({ ...item, ...(activity.get(item.id) ?? { status: "未打开" }) })).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), errors });
+        }
         if (request.method === "POST") return json({ session: await createSession(await body(request)) }, 201);
       }
       const meta = /^\/api\/native\/sessions\/([0-9a-f-]{36})$/.exec(url.pathname);
       if (meta && request.method === "POST") {
         const item = record(meta[1]);
         const input = await body(request);
+        if (input.tags !== undefined && (!Array.isArray(input.tags) || input.tags.length > 20 || input.tags.some(tag => typeof tag !== "string" || tag.length > 40))) throw new Error("Invalid session tags");
+        if (typeof input.title === "string" && (!input.title.trim() || input.title.trim().length > 120)) throw new Error("会话名称需要 1–120 个字符");
         if (typeof input.archived === "boolean") item.archived = input.archived;
         if (typeof input.title === "string") {
-          if (!input.title.trim() || input.title.trim().length > 120) throw new Error("会话名称需要 1–120 个字符");
           const child = await host(item.id);
           await child.command({ type: "set_session_name", name: input.title.trim() });
           item.title = input.title.trim();
+        }
+        if (input.tags !== undefined) {
+          item.tags = [...new Set((input.tags as string[]).map(tag => tag.trim()).filter(Boolean))];
         }
         item.updatedAt = new Date().toISOString();
         await saveRecords();
@@ -378,7 +422,15 @@ const server = Bun.serve({
         return json({ paused: input.paused === true });
       }
       if (url.pathname === "/api/native/legacy" && request.method === "GET") return json({ tasks: await legacyList() });
-      const controls = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/host\/(catalog|extension|mode|plan|tree|navigate|usage|reload)$/.exec(url.pathname);
+      const exported = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/export$/.exec(url.pathname);
+      if (exported && request.method === "POST") {
+        const item = record(exported[1]), child = await host(item.id);
+        const directory = join(nativeRoot, "exports"); await mkdir(directory, { recursive: true });
+        const path = join(directory, `${item.id}.html`);
+        await child.command({ type: "export_html", outputPath: path });
+        return json({ name: `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.html`, content: await readFile(path, "utf8") });
+      }
+      const controls = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/host\/(catalog|extension|mode|plan|tree|navigate|usage|reload|session)$/.exec(url.pathname);
       if (controls) {
         const [, id, method] = controls;
         record(id);
@@ -393,11 +445,16 @@ const server = Bun.serve({
           const result = await child.hostCommand(method as HostMethod);
           return json(method === "catalog" ? { ...result as ExtensionCatalog, pendingReload: pendingReloads.has(id) } : result);
         }
-        if (request.method === "POST" && ["extension", "plan", "navigate"].includes(method)) {
+        if (request.method === "POST" && ["extension", "plan", "navigate", "session"].includes(method)) {
           const input = await body(request);
           const execute = async () => {
             child = await host(id);
-            const result = await child.hostCommand(method as HostMethod, input) as { pendingReload?: boolean };
+            const result = await child.hostCommand(method as HostMethod, input, method === "plan" ? 300_000 : 90_000) as { pendingReload?: boolean };
+            if (method === "session" && input.action === "branch") {
+              const state = await child.command({ type: "get_state" });
+              if ("data" in state) { const current = state.data as { sessionId: string; sessionName?: string }; syncIdentity(record(id), current.sessionId, current.sessionName); }
+              await saveRecords();
+            }
             if (method === "extension" && result.pendingReload) {
               extensionRevision++;
               for (const target of processes.keys()) if (input.scope !== "project" || input.kind === "plugin" || record(target).cwd === record(id).cwd) pendingReloads.add(target);
@@ -423,7 +480,7 @@ const server = Bun.serve({
         if (!action && request.method === "GET") return json({ active: terminals.has(id), output: terminals.get(id)?.output ?? "" });
         if (action === "start" && request.method === "POST") {
           if (terminals.has(id)) throw new Error("Alpha 终端已经打开");
-          const sessionDir = join(nativeRoot, "sessions", id);
+          const sessionDir = join(nativeRoot, "sessions", item.sessionDirId ?? id);
           await mkdir(sessionDir, { recursive: true });
           const ompSessionId = await persistedSessionId(sessionDir, item.ompSessionId);
           const running = processes.get(id);
@@ -498,11 +555,20 @@ const server = Bun.serve({
         const [, id, action] = match;
         record(id);
         if (action === "file" && request.method === "GET") {
-          const path = url.searchParams.get("path");
+          let path = url.searchParams.get("path"), root = record(id).cwd;
           if (!path) throw new Error("缺少文件路径");
+          if (path.startsWith("local://")) {
+            const item = record(id), directory = join(nativeRoot, "sessions", item.sessionDirId ?? item.id);
+            const file = item.ompSessionId && (await readdir(directory)).find(name => name.endsWith(`_${item.ompSessionId}.jsonl`));
+            if (!file) throw new Error("Native session artifact directory unavailable");
+            // SessionManager uses the journal path without .jsonl as its artifact directory.
+            // The native local resolver retains Windows short-root and traversal behavior.
+            const options = { getArtifactsDir: () => join(directory, file.slice(0, -6)), getSessionId: () => item.ompSessionId! };
+            root = resolveLocalRoot(options); path = resolveLocalUrlToPath(path, options);
+          }
           return url.searchParams.has("raw")
-            ? await projectFileContent(record(id).cwd, path, request, url.searchParams.has("preview"))
-            : json(await projectFilePreview(record(id).cwd, path));
+            ? await projectFileContent(root, path, request, url.searchParams.has("preview"))
+            : json(await projectFilePreview(root, path));
         }
         if (action === "review" && request.method === "GET") return json(await projectReview(record(id).cwd));
         if (action === "open" && request.method === "POST") {
@@ -560,6 +626,10 @@ const server = Bun.serve({
             throw error;
           }
           const item = record(id);
+          if (["new_session", "branch", "switch_session"].includes(input.type)) {
+            const current = await process.command({ type: "get_state" });
+            if ("data" in current) { const state = current.data as { sessionId?: string; sessionName?: string }; syncIdentity(item, state.sessionId, state.sessionName); }
+          }
           item.updatedAt = new Date().toISOString();
           if (input.type === "set_session_name" && typeof input.name === "string") item.title = input.name.trim().slice(0, 120);
           void saveRecords();

@@ -25,7 +25,7 @@ function FilePreview({ id, path, onBack }: { id: string; path: string; onBack():
     return () => { cancelled = true; };
   }, [id, path, refresh]);
   const open = async () => {
-    const cause = await window.alpha?.openFolder?.(path);
+    const cause = await window.alpha?.openFolder?.(file?.path ?? path);
     if (cause) setError(cause);
   };
   return <div className="native-file-preview">

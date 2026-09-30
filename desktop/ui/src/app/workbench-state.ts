@@ -1,9 +1,9 @@
 import type { NativeMessage, SessionItem } from "./native-api";
 import type { AttachedImage } from "./useSession";
 
-export interface ComposerDraft { text: string; paths: string[]; image?: AttachedImage; model?: string; thinking?: string; cwd?: string }
+export interface ComposerDraft { text: string; paths: string[]; image?: AttachedImage; images?: AttachedImage[]; model?: string; thinking?: string; cwd?: string }
 type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
-// Files and image bytes remain in this renderer; only text, local paths and choices survive a restart.
+// The desktop storage namespace persists drafts and bounded image attachments on disk.
 const drafts = new Map<string, ComposerDraft>();
 const versions = new Map<string, number>();
 const listeners = new Map<string, Set<(draft: ComposerDraft) => void>>();
@@ -22,7 +22,10 @@ export function readDraft(scope: string, storage: DraftStorage): ComposerDraft {
   try {
     const saved = JSON.parse(storage.getItem(draftKey(scope)) ?? "null");
     if (saved && typeof saved.text === "string" && Array.isArray(saved.paths)) {
-      return { text: saved.text, paths: saved.paths.filter((path: unknown) => typeof path === "string"), model: typeof saved.model === "string" ? saved.model : undefined, thinking: typeof saved.thinking === "string" ? saved.thinking : undefined, cwd: typeof saved.cwd === "string" ? saved.cwd : undefined };
+      const validImage = (image: AttachedImage) => image && typeof image.data === "string" && image.data.length <= 5_400_000 && /^[A-Za-z0-9+/]*={0,2}$/.test(image.data) && /^image\/(png|jpeg|webp|gif)$/.test(image.mimeType) && typeof image.name === "string";
+      const image = validImage(saved.image) ? saved.image : undefined;
+      const images = Array.isArray(saved.images) && saved.images.length <= 8 && saved.images.every(validImage) && saved.images.reduce((size: number, item: AttachedImage) => size + item.data.length, 0) <= 6_000_000 ? saved.images : undefined;
+      return { text: saved.text, paths: saved.paths.filter((path: unknown) => typeof path === "string"), model: typeof saved.model === "string" ? saved.model : undefined, thinking: typeof saved.thinking === "string" ? saved.thinking : undefined, cwd: typeof saved.cwd === "string" ? saved.cwd : undefined, ...(image ? { image } : {}), ...(images ? { images } : {}) };
     }
     if (scope === "home") return { text: storage.getItem("alpha-new-task-draft") ?? "", paths: [] };
   } catch { /* A malformed draft must not prevent opening the workbench. */ }
@@ -34,8 +37,7 @@ export function writeDraft(scope: string, draft: ComposerDraft, storage: DraftSt
   versions.set(scope, draftVersion(scope) + 1);
   listeners.get(scope)?.forEach(listener => listener(draft));
   try {
-    const { image: _image, ...saved } = draft;
-    storage.setItem(draftKey(scope), JSON.stringify(saved));
+    storage.setItem(draftKey(scope), JSON.stringify(draft));
     if (scope === "home") storage.removeItem("alpha-new-task-draft");
     return true;
   } catch { return false; }
@@ -43,11 +45,11 @@ export function writeDraft(scope: string, draft: ComposerDraft, storage: DraftSt
 
 export function clearSentDraft(scope: string, version: number, storage: DraftStorage): boolean | null {
   if (draftVersion(scope) !== version) return null;
-  return writeDraft(scope, { ...readDraft(scope, storage), text: "", paths: [], image: undefined }, storage);
+  return writeDraft(scope, { ...readDraft(scope, storage), text: "", paths: [], image: undefined, images: undefined }, storage);
 }
 
 export function promptText(draft: ComposerDraft): string {
-  const text = draft.text.trim() || (draft.image ? "请分析这张图片。" : draft.paths.length ? "请读取附件" : "");
+  const text = draft.text.trim() || (draft.image || draft.images?.length ? "请分析这张图片。" : draft.paths.length ? "请读取附件" : "");
   return draft.paths.length ? `${text}\n\n用户选择的本机附件（请用 read 读取；修改前先检查文件支持范围）：\n${draft.paths.map(path => `- ${JSON.stringify(path)}`).join("\n")}` : text;
 }
 

@@ -15,6 +15,7 @@ import { NativeMcpOAuth } from "./mcp-oauth";
 import { loadCapability, type Skill as DiscoveredSkill } from "@oh-my-pi/pi-coding-agent/discovery";
 import { skillCapability } from "@oh-my-pi/pi-coding-agent/capability/skill";
 import type { ExtensionCatalog, ExtensionRow, HostMethod } from "./host-types";
+import { NativePlanHost } from "./plan-host";
 
 export function redact(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redact);
@@ -34,15 +35,33 @@ const contained = (root: string, path: string) => { const part = relative(root, 
 
 export class NativeHostControl {
   private oauth = new NativeMcpOAuth();
-  constructor(readonly runtime: CreateAgentSessionResult) {}
+  readonly plan: NativePlanHost;
+  constructor(readonly runtime: CreateAgentSessionResult, emit: (frame: Record<string, unknown>) => void = () => {}) { this.plan = new NativePlanHost(runtime.session, emit); }
   private get session() { return this.runtime.session; }
   private get cwd() { return this.session.sessionManager.getCwd(); }
   async request(method: HostMethod, input: Record<string, unknown> = {}): Promise<unknown> {
     if (method === "catalog") return this.catalog();
-    if (method === "mode") return this.session.getPlanModeState();
+    if (method === "mode") return this.plan.view();
+    if (method === "plan") return this.plan.request(input);
     if (method === "tree") return this.session.sessionManager.getTree();
     if (method === "usage") return { usage: this.session.getContextUsage(), stats: this.session.getSessionStats() };
-    if (method === "navigate") { if (!isRpcSessionSettled(this.session)) throw new Error("Wait for the session to settle"); await this.session.navigateTree(text(input, "entryId")); return { ok: true }; }
+    if (method === "navigate") {
+      if (!isRpcSessionSettled(this.session)) throw new Error("Wait for the session to settle");
+      const result = await this.session.navigateTree(text(input, "entryId"), { summarize: input.summarize === true });
+      if (!result.cancelled) await this.plan.restore();
+      return result;
+    }
+    if (method === "session") {
+      if (input.action === "queues") return this.session.getQueuedMessages();
+      if (input.action === "clear-queue") return this.session.clearQueue();
+      if (input.action === "branch") {
+        if (!isRpcSessionSettled(this.session)) throw new Error("Wait for the session to settle");
+        return this.session.branch(text(input, "entryId"));
+      }
+      if (input.action === "label") { this.session.sessionManager.appendLabelChange(text(input, "entryId"), typeof input.label === "string" ? input.label.trim() || undefined : undefined); await this.session.sessionManager.flush(); return { ok: true }; }
+      if (input.action === "role") { this.session.settings.setModelRole(text(input, "role"), text(input, "model")); await this.session.settings.flush(); return { ok: true }; }
+      throw new Error("Unsupported session action");
+    }
     if (method !== "extension") throw new Error("Unknown host method");
     const result = await this.extension(input);
     return { result, pendingReload: !["read", "references", "doctor", "reconnect", "refresh", "resource", "oauth", "oauth-status", "oauth-code", "oauth-cancel"].includes(String(input.action)) };
