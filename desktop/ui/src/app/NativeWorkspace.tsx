@@ -4,11 +4,12 @@
  */
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { ClipboardCheck, FileText, FolderOpen, Globe2, PanelRightClose, Terminal } from "lucide-react";
+import { ClipboardCheck, FolderOpen, Globe2, PanelRightClose, Terminal } from "lucide-react";
 import type { BrowserHostStatus, BrowserTabInfo } from "../api/types";
 import type { SessionController } from "./useSession";
 import { nativeApi, sessionRequest, toolPayload } from "./native-api";
 import { NativeTerminal } from "./NativeTerminal";
+import { NativeFiles } from "./NativeFiles";
 
 /** 截屏画面自适应样式：样式表没有对应图片规则，其余复用现有类。 */
 const FRAME_STYLE: CSSProperties = { maxWidth: "100%", maxHeight: "100%", border: "1px solid var(--border)", background: "white" };
@@ -173,34 +174,6 @@ function BrowserPanel({ visible }: { visible: boolean }) {
   </div>;
 }
 
-function FilesPanel({ session }: { session: SessionController }) {
-  const [path, setPath] = useState("");
-  const [directory, setDirectory] = useState<{ path: string; relative: string; files: Array<{ name: string; path: string; type: string; size?: number }> } | null>(null);
-  useEffect(() => { setPath(""); setDirectory(null); }, [session.selected]);
-  useEffect(() => {
-    if (!session.selected) return;
-    let cancelled = false;
-    void sessionRequest<NonNullable<typeof directory>>(session.selected, `files?path=${encodeURIComponent(path || ".")}`).then(result => { if (!cancelled) setDirectory(result); }, cause => { if (!cancelled) session.setError(String(cause)); });
-    return () => { cancelled = true; };
-  }, [session.selected, path, session.files]);
-  const open = async (path: string) => {
-    if (!window.alpha?.openFolder) { session.setError("请在 Alpha 桌面版打开本机文件"); return; }
-    const error = await window.alpha.openFolder(path); if (error) session.setError(error);
-  };
-  if (!session.selected) return <div className="native-panel"><p className="native-muted">选择会话后，可以浏览项目文件。</p></div>;
-  return <div className="native-panel">
-    <h3>项目文件</h3>
-    <p className="native-muted">{directory?.path ?? session.current?.cwd}</p>
-    <button onClick={() => setPath("")}>项目根目录</button>
-    <button disabled={!directory?.relative} onClick={() => setPath(`${directory!.relative}/..`)}>上一级</button>
-    {directory?.files.map(file => <div className="native-file" key={file.path}>
-      {file.type === "directory" ? <FolderOpen size={14} /> : <FileText size={14} />}
-      <button onClick={() => file.type === "directory" ? setPath(file.path) : void open(file.path)}>{file.name}</button>
-      <small>{file.type === "directory" ? "目录" : `${Math.round((file.size ?? 0) / 1024)} KB`}</small>
-    </div>)}
-  </div>;
-}
-
 export function NativeWorkspace({ session, diagnostics, tab, setTab, onClose }: { session: SessionController; diagnostics: boolean; tab: WorkspaceTab; setTab(tab: WorkspaceTab): void; onClose(): void }) {
   useEffect(() => { if (!diagnostics && tab === "logs") setTab("browser"); }, [diagnostics, tab]);
   const tabs: Array<{ id: WorkspaceTab; label: string; Icon: typeof Globe2 }> = [
@@ -218,7 +191,7 @@ export function NativeWorkspace({ session, diagnostics, tab, setTab, onClose }: 
     {tab === "review" && <ReviewPanel session={session} />}
     {tab === "terminal" && <TerminalPanel session={session} />}
     {tab === "browser" && <BrowserPanel visible />}
-    {tab === "files" && <FilesPanel session={session} />}
+    <NativeFiles key={session.selected} session={session} visible={tab === "files"} />
     {tab === "logs" && <div className="native-panel">
       <h3>运行日志</h3>
       {session.logs.length ? session.logs.map((log, index) => <p className="native-log" key={index}><time>{log.at}</time> {log.text}</p>) : <p className="native-muted">还没有运行事件。</p>}

@@ -12,6 +12,7 @@ import { officeRuntimeStatus } from "./capabilities/office/office-runtime";
 import { ComfyClient } from "./capabilities/comfyui/comfy-client";
 import { ScheduleStore, Scheduler, type Schedule, type ScheduleDeliver } from "./scheduler";
 import { projectReview } from "./project-review";
+import { projectFilePreview, projectFileContent } from "./project-file";
 
 interface SessionRecord {
   id: string;
@@ -448,10 +449,17 @@ const server = Bun.serve({
         await writeFile(file, JSON.stringify(entries, null, 2), "utf8");
         return json({ revoked: true });
       }
-      const match = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/(state|messages|models|files|review|events|command|ui-response|open)$/.exec(url.pathname);
+      const match = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/(state|messages|models|files|file|review|events|command|ui-response|open)$/.exec(url.pathname);
       if (match) {
         const [, id, action] = match;
         record(id);
+        if (action === "file" && request.method === "GET") {
+          const path = url.searchParams.get("path");
+          if (!path) throw new Error("缺少文件路径");
+          return url.searchParams.has("raw")
+            ? await projectFileContent(record(id).cwd, path, request, url.searchParams.has("preview"))
+            : json(await projectFilePreview(record(id).cwd, path));
+        }
         if (action === "review" && request.method === "GET") return json(await projectReview(record(id).cwd));
         if (action === "open" && request.method === "POST") {
           await host(id);

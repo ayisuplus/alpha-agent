@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { ClipboardCheck, Globe2, Terminal, X } from "lucide-react";
+import { ClipboardCheck, FolderOpen, Globe2, Terminal, X } from "lucide-react";
 import { loadConfiguration, request, type NativeCatalog, type NativeConfig, type UpdateStatus } from "./native-api";
 import { NativeDialogs } from "./NativeDialogs";
 import { NativeHome } from "./NativeHome";
@@ -137,7 +137,7 @@ export function NativeApp() {
     </main>
     {showWorkspace && <NativeWorkspace session={session} diagnostics={diagnostics} tab={workspaceTab} setTab={setWorkspaceTab} onClose={() => setWorkspaceVisible(false)} />}
     <nav className="native-workspace-rail" aria-label="右侧工作区入口">
-      {[{ id: "review" as const, label: "审查", Icon: ClipboardCheck }, { id: "terminal" as const, label: "终端", Icon: Terminal }, { id: "browser" as const, label: "浏览器", Icon: Globe2 }].map(({ id, label, Icon }) =>
+      {[{ id: "review" as const, label: "审查", Icon: ClipboardCheck }, { id: "terminal" as const, label: "终端", Icon: Terminal }, { id: "browser" as const, label: "浏览器", Icon: Globe2 }, { id: "files" as const, label: "文件", Icon: FolderOpen }].map(({ id, label, Icon }) =>
         <button key={id} onClick={() => openWorkspace(id)} aria-label={`打开${label}栏`} title={label} aria-controls="native-workspace" aria-expanded={showWorkspace && workspaceTab === id}><Icon size={18} /><span>{label}</span></button>)}
     </nav>
     {displayError && <div className="native-error" role="alert">{displayError}<button onClick={() => { session.setError(""); setError(""); }}>关闭</button></div>}

@@ -779,6 +779,19 @@ export async function officePdf(ctx: OfficeContext, params: PdfParams, signal?: 
   return { summary, artifacts };
 }
 
+/** Read-only desktop preview: reuse the converter without creating project outputs. */
+export async function officeDocumentPdf(path: string, signal?: AbortSignal): Promise<Uint8Array> {
+  return withTempDir(async dir => {
+    const inputDir = join(dir, "input");
+    await mkdir(inputDir);
+    const input = join(inputDir, basename(path));
+    await copyFile(path, input);
+    const pdf = await sofficeConvert(input, "pdf", join(dir, "preview"), signal);
+    if ((await stat(pdf)).size > 50 * 1024 * 1024) throw new OfficeError("预览 PDF 超过 50 MB，请在系统应用中打开文档");
+    return new Uint8Array(await readFile(pdf));
+  });
+}
+
 export async function officePreview(ctx: OfficeContext, path: string, pages?: number[], signal?: AbortSignal): Promise<OfficeResult> {
   const input = await resolveInput(ctx.projectRoot, path, "文档");
   const ext = requireExt(input, PREVIEWABLE, "文档");

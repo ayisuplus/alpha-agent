@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -32,6 +32,18 @@ test("local interface rejects missing tokens and foreign hosts", async () => {
     expect((await call({ headers: { "x-alpha-token": "wrong-token" } })).status).toBe(403);
     expect((await call({ headers: { "x-alpha-token": "boundary-test-token" } })).status).toBe(200);
     expect((await call({ headers: { "x-alpha-token": "boundary-test-token" } }, "sessions?token=boundary-test-token")).status).toBe(200);
+
+    await writeFile(join(root, "preview.txt"), "authenticated file preview");
+    const created = await call({ method: "POST", headers: { "x-alpha-token": "boundary-test-token", "content-type": "application/json" }, body: JSON.stringify({ cwd: root }) });
+    const { session } = await created.json() as { session: { id: string } };
+    const filePath = `sessions/${session.id}/file?path=preview.txt`;
+    expect((await call(undefined, filePath)).status).toBe(403);
+    expect((await call(undefined, `${filePath}&raw=1`)).status).toBe(403);
+    const file = await call({ headers: { "x-alpha-token": "boundary-test-token" } }, filePath);
+    expect(await file.json()).toMatchObject({ kind: "text", text: "authenticated file preview" });
+    expect(await (await call(undefined, `${filePath}&raw=1&token=boundary-test-token`)).text()).toBe("authenticated file preview");
+    expect((await call({ headers: { "x-alpha-token": "boundary-test-token" } }, `sessions/${session.id}/file?path=..`)).status).toBe(400);
+    expect((await call({ headers: { "x-alpha-token": "boundary-test-token" } }, `sessions/${session.id}/file`)).status).toBe(400);
 
     // Host cannot be overridden through fetch (forbidden header); assert it over a raw socket.
     const rawRequest = (hostHeader: string) => {
