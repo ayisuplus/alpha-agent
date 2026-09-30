@@ -172,6 +172,7 @@ export function useSession(): SessionController {
           if (type === "terminal_error") setError(String(frame.error ?? "Alpha 终端启动失败"));
           if (type === "extension_ui_request") handleUiFrame(frame, {
             onDialog(request) { setUiValue(request.prefill ?? ""); setUiRequest(request); },
+            onCancel(targetId) { setUiRequest(current => current && (!targetId || current.id === targetId) ? null : current); },
             onUrl(value) { setExternalUrl(value); },
             onNotify(message) { setLogs(items => [...items.slice(-149), { at, text: message }]); },
             onStatus(key, text) { if (key === "tianshu") setTianshuStatus(text ?? null); },
@@ -339,9 +340,10 @@ export function useSession(): SessionController {
   };
 }
 
-/** extension_ui_request 帧分流：对话框 / 打开链接 / 通知 / 状态段 / 部件字符串行 / 标题。 */
-function handleUiFrame(frame: Record<string, unknown>, sinks: {
+/** extension_ui_request 帧分流：对话框 / 对话框取消 / 打开链接 / 通知 / 状态段 / 部件字符串行 / 标题。 */
+export function handleUiFrame(frame: Record<string, unknown>, sinks: {
   onDialog(request: UiRequest): void;
+  onCancel(targetId?: string): void;
   onUrl(value: string): void;
   onNotify(message: string): void;
   onStatus(key: string, text: string | undefined): void;
@@ -353,6 +355,8 @@ function handleUiFrame(frame: Record<string, unknown>, sinks: {
     sinks.onDialog(frame as unknown as UiRequest);
     return;
   }
+  // 中止（如用户停止本轮）时内核会取消挂起的对话框；不清理会留下点了没反应的弹窗。
+  if (method === "cancel") { sinks.onCancel(typeof frame.targetId === "string" ? frame.targetId : undefined); return; }
   if (method === "open_url") sinks.onUrl(String(frame.launchUrl ?? frame.url ?? ""));
   else if (method === "notify") sinks.onNotify(String(frame.message ?? "Alpha 通知"));
   else if (method === "setStatus") sinks.onStatus(String(frame.statusKey ?? ""), typeof frame.statusText === "string" ? frame.statusText : undefined);

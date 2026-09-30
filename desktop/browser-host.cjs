@@ -29,9 +29,13 @@ const root = path.resolve(__dirname, "..");
 const workspaceRoot = path.resolve(process.env.ALPHA_WORKSPACE_ROOT || root);
 const profile = path.join(workspaceRoot, ".alpha", "browser-profile");
 mkdirSync(profile, { recursive: true });
+// 可选 --cdp-port <n>：主进程为整个工作台生命周期固定端口，重启宿主后 OMP 的 browser.cdpUrl 不失效。
+const cdpPortIndex = process.argv.indexOf("--cdp-port");
+const cdpPortArg = cdpPortIndex >= 0 ? process.argv[cdpPortIndex + 1] : null;
+const cdpPort = cdpPortArg && /^\d+$/.test(cdpPortArg) ? cdpPortArg : "0";
 app.setName("AlphaBrowserHost");
 app.setPath("userData", profile);
-app.commandLine.appendSwitch("remote-debugging-port", "0");
+app.commandLine.appendSwitch("remote-debugging-port", cdpPort);
 // 后台视图继续出帧：接管前窗口隐藏、截屏流订阅时页面在后台，都不能停帧。
 app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 

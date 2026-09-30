@@ -92,6 +92,12 @@ function BrowserPanel({ visible }: { visible: boolean }) {
     else setNote(result?.error ?? "无法交还浏览器窗口");
   };
 
+  const restartHost = async () => {
+    setNote("正在重启浏览器宿主…");
+    const result = await window.alpha?.browserHostRestart?.().catch(() => ({ ok: false, reason: "重启失败" }));
+    setNote(result?.ok ? "浏览器宿主已重启。" : result?.reason ?? "需要 Alpha 桌面版");
+  };
+
   return <div className="native-browser">
     <div className="native-browser-tabs">
       {tabs.map(tab => <button key={tab.targetId} className={target === tab.targetId ? "active" : ""} onClick={() => setTarget(tab.targetId)} title={`${tab.title}\n${tab.url}`}>{tab.title || tab.url || "页面"}</button>)}
@@ -101,7 +107,10 @@ function BrowserPanel({ visible }: { visible: boolean }) {
     </div>
     <div className="native-browser-slot" ref={slot}>
       {!host ? <p className="native-muted">正在连接浏览器宿主…</p>
-        : !host.available ? <p className="native-muted">当前为不可见模式{host.reason ? `（${host.reason}）` : ""}。智能体的无头浏览器照常工作。</p>
+        : !host.available ? <div className="native-muted">
+          <p>当前为不可见模式{host.reason ? `（${host.reason}）` : ""}。智能体的无头浏览器照常工作。</p>
+          <button onClick={() => void restartHost()}>重启浏览器宿主</button>
+        </div>
         : !target ? <p className="native-muted">智能体打开网页后，这里实时显示页面画面（只读）。“接管”后可登录、过验证码，“交还”后智能体继续使用同一登录状态。</p>
         : frame ? <img alt="页面实时画面" src={frame} style={FRAME_STYLE} />
         : <p className="native-muted">{frameError || "正在等待页面画面…"}</p>}

@@ -94,6 +94,11 @@ function CapabilityPage({ sessionId }: { sessionId: string | null }) {
     </Field>
     <Field label="浏览器宿主" description="独立的浏览器宿主进程，只承载智能体页面；不可用时回退无头浏览器。">
       <span className="native-muted">{host ? host.available ? `可用（127.0.0.1:${host.port}）` : `当前为不可见模式${host.reason ? `（${host.reason}）` : ""}` : "未检测"}</span>
+      <button disabled={busy} onClick={check}>检测</button>
+      <button disabled={busy} onClick={() => {
+        setBusy(true);
+        void window.alpha?.browserHostRestart?.().then(check, () => setBusy(false));
+      }}>重启宿主</button>
     </Field>
     <Field label="ComfyUI" description="本机图片、配音与视频生成服务；服务由你自己保持运行。">
       <span className="native-muted">{comfyLine}</span>

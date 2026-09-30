@@ -129,8 +129,23 @@ async function openOnDesktop(path: string, setError: (value: string) => void): P
   if (error) setError(error);
 }
 
+async function revealOnDesktop(path: string, setError: (value: string) => void): Promise<void> {
+  if (window.alpha?.revealItem) {
+    const error = await window.alpha.revealItem(path);
+    if (error) setError(error);
+    return;
+  }
+  await openOnDesktop(parentDir(path), setError);
+}
+
+/** 产物路径是项目相对路径；按会话项目目录拼成绝对路径再交给桌面桥。 */
+export function absoluteArtifactPath(path: string, cwd: string | undefined): string {
+  if (!cwd || path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) return path;
+  return `${cwd.replace(/[\\/]+$/, "")}${path.startsWith("/") ? "" : "\\"}${path.replace(/^[\\/]+/, "")}`;
+}
+
 /** C5 产物卡片：缩略图（edit 带前后对比）、打开、在文件夹中显示。 */
-function ArtifactCard({ payload, images, setError }: { payload: ToolPayload; images: string[]; setError(value: string): void }) {
+function ArtifactCard({ payload, images, setError, cwd }: { payload: ToolPayload; images: string[]; setError(value: string): void; cwd?: string }) {
   let cursor = 0;
   const rows = payload.artifacts?.map(artifact => {
     if (artifact.before) return { artifact, after: images[cursor++] ?? null, before: images[cursor++] ?? null };
@@ -142,8 +157,8 @@ function ArtifactCard({ payload, images, setError }: { payload: ToolPayload; ima
     {rows.map(({ artifact, after, before }) => <div className="task-result" key={artifact.path}>
       <div className="task-result-file">
         <strong>{artifact.path.split(/[\\/]/).at(-1) ?? artifact.path}</strong>
-        <a onClick={() => void openOnDesktop(artifact.path, setError)}>打开</a>
-        <a onClick={() => void openOnDesktop(parentDir(artifact.path), setError)}>在文件夹中显示</a>
+        <a onClick={() => void openOnDesktop(absoluteArtifactPath(artifact.path, cwd), setError)}>打开</a>
+        <a onClick={() => void revealOnDesktop(absoluteArtifactPath(artifact.path, cwd), setError)}>在文件夹中显示</a>
       </div>
       <p className="native-muted">{artifact.kind} · {artifact.path} · sha256 {artifact.sha256.slice(0, 12)}…</p>
       {before && after && <details open><summary>前后对比</summary><div className="office-preview-grid">
@@ -156,7 +171,7 @@ function ArtifactCard({ payload, images, setError }: { payload: ToolPayload; ima
   </section>;
 }
 
-function ToolRow({ item, setError }: { item: ToolItem; setError(value: string): void }) {
+function ToolRow({ item, setError, cwd }: { item: ToolItem; setError(value: string): void; cwd?: string }) {
   return <article className="native-message">
     <details className="native-tool-call">
       <summary>
@@ -168,7 +183,7 @@ function ToolRow({ item, setError }: { item: ToolItem; setError(value: string): 
       {item.resultText && <pre>{item.resultText}</pre>}
       {item.images.map(src => <img alt="工具结果附图" key={src} src={src} style={THUMB_STYLE} />)}
     </details>
-    {item.payload && <ArtifactCard payload={item.payload} images={item.images} setError={setError} />}
+    {item.payload && <ArtifactCard payload={item.payload} images={item.images} setError={setError} cwd={cwd} />}
   </article>;
 }
 
@@ -183,10 +198,10 @@ function TianshuMessage({ item }: { item: Extract<ThreadItem, { kind: "tianshu" 
   </article>;
 }
 
-function ThreadBody({ items, setError }: { items: ThreadItem[]; setError(value: string): void }) {
+function ThreadBody({ items, setError, cwd }: { items: ThreadItem[]; setError(value: string): void; cwd?: string }) {
   return <div className="native-thread">
     {items.length ? items.map(item => {
-      if (item.kind === "tool") return <ToolRow key={item.key} item={item} setError={setError} />;
+      if (item.kind === "tool") return <ToolRow key={item.key} item={item} setError={setError} cwd={cwd} />;
       if (item.kind === "tianshu") return <TianshuMessage key={item.key} item={item} />;
       if (item.kind === "note") return <p className="native-log" key={item.key}>{item.text}</p>;
       return <article key={item.key} className={`native-message ${item.kind}`}>
@@ -291,7 +306,7 @@ export function NativeThread({ session, sessionInfo, onOpenSettings }: { session
     {session.terminalActive
       ? <NativeTerminal id={sessionInfo.id} output={session.terminalOutput} />
       : <>
-        <ThreadBody items={items} setError={session.setError} />
+        <ThreadBody items={items} setError={session.setError} cwd={session.current?.cwd} />
         <Composer session={session} onOpenSettings={onOpenSettings} />
       </>}
   </>;

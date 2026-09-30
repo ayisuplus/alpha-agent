@@ -437,12 +437,14 @@ declare global {
     alpha?: {
       serverToken?(): Promise<string>;
       openFolder?(path: string): Promise<string>;
+      revealItem?(path: string): Promise<string>;
       openExternal?(url: string): Promise<boolean>;
       saveText?(filename: string, content: string): Promise<boolean>;
       notify?(title: string, body: string, taskId: string): void;
       attention?(): void;
       onOpenTask?(callback: (taskId: string) => void): () => void;
       browserHostStatus?(): Promise<BrowserHostStatus>;
+      browserHostRestart?(): Promise<{ ok: boolean; reason?: string }>;
       browserTabs?(): Promise<{ available: boolean; tabs: BrowserTabInfo[]; error?: string }>;
       browserScreencast?(request: { action: "start" | "stop"; targetId: string; maxDimension?: number }): Promise<{ ok: boolean; error?: string }>;
       browserTakeover?(request: { rect: { x: number; y: number; width: number; height: number }; targetId?: string }): Promise<{ ok: boolean; error?: string }>;

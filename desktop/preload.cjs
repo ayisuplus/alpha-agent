@@ -29,7 +29,7 @@
 //     宿主启动/退出时推送，与 browserHostStatus() 同形状。
 //
 // 其余保留接口：
-//   openFolder(path) / openExternal(url) / saveText(filename, content) → invoke
+//   openFolder(path) / revealItem(path) / openExternal(url) / saveText(filename, content) → invoke
 //   notify(title, body, taskId) / attention() → send（无返回）
 //   onOpenTask(callback) → 事件 alpha:open-task，返回退订函数
 // ══════════════════════════════════════════════════════════════════════════════════════════════
@@ -48,6 +48,9 @@ contextBridge.exposeInMainWorld("alpha", {
   openFolder(path) {
     return ipcRenderer.invoke("alpha:open-folder", path);
   },
+  revealItem(path) {
+    return ipcRenderer.invoke("alpha:reveal-item", path);
+  },
   openExternal(url) {
     return ipcRenderer.invoke("alpha:open-external", url);
   },
@@ -65,6 +68,9 @@ contextBridge.exposeInMainWorld("alpha", {
   },
   browserHostStatus() {
     return ipcRenderer.invoke("alpha:browser-host-status");
+  },
+  browserHostRestart() {
+    return ipcRenderer.invoke("alpha:browser-host-restart");
   },
   browserTabs() {
     return ipcRenderer.invoke("alpha:browser-tabs");

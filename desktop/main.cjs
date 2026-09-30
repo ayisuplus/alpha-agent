@@ -1,12 +1,13 @@
 const { app, BaseWindow, dialog, ipcMain, Menu, Notification, screen, shell: electronShell, WebContentsView } = require("electron");
 const { spawn } = require("node:child_process");
 const { mkdirSync, readFileSync, realpathSync, writeFileSync } = require("node:fs");
-const { connect } = require("node:net");
+const { connect, createServer } = require("node:net");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 // Per-run token for the local sidecar API; the renderer receives it only through the preload bridge.
-const serverToken = require("node:crypto").randomBytes(32).toString("hex");
+// Scripts may pin it via ALPHA_SERVER_TOKEN (dev/automation); otherwise it is random per run.
+const serverToken = process.env.ALPHA_SERVER_TOKEN || require("node:crypto").randomBytes(32).toString("hex");
 const workspaceRoot = path.resolve(process.env.ALPHA_WORKSPACE_ROOT || root);
 const userData = path.join(workspaceRoot, ".alpha", "electron-profile");
 mkdirSync(userData, { recursive: true });
@@ -15,6 +16,8 @@ app.setPath("userData", userData);
 const primary = app.requestSingleInstanceLock();
 
 let sidecar;
+let sidecarPort = null;
+let hostCdpPort = null;
 let window;
 let shell;
 
@@ -40,14 +43,28 @@ function publishHostStatus(reason) {
   shell?.webContents.send("alpha:browser-host-status-changed", hostStatus);
 }
 
-function startBrowserHost() {
+function pickFreePort() {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const port = server.address().port;
+      server.close(() => resolve(port));
+    });
+  });
+}
+
+async function startBrowserHost() {
+  // CDP 端口在整个工作台生命周期内保持稳定：重启宿主后 OMP 侧已生成的 browser.cdpUrl 依然有效。
+  hostCdpPort ??= await pickFreePort();
   return new Promise(resolve => {
-    host = spawn(electronExecutable(), [path.join(__dirname, "browser-host.cjs")], {
+    const child = spawn(electronExecutable(), [path.join(__dirname, "browser-host.cjs"), "--cdp-port", String(hostCdpPort)], {
       cwd: root,
       env: { ...process.env, ALPHA_WORKSPACE_ROOT: workspaceRoot },
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    host = child;
     let buffer = "";
     let settled = false;
     const finish = url => {
@@ -57,7 +74,7 @@ function startBrowserHost() {
       resolve(url);
     };
     const timeout = setTimeout(() => finish(null), 30_000);
-    host.stdout.on("data", chunk => {
+    child.stdout.on("data", chunk => {
       buffer += chunk.toString();
       for (;;) {
         const newline = buffer.indexOf("\n");
@@ -76,9 +93,11 @@ function startBrowserHost() {
         } else if (line) console.log(line);
       }
     });
-    host.stderr.on("data", chunk => console.error(chunk.toString()));
-    host.once("error", () => finish(null));
-    host.once("exit", () => {
+    child.stderr.on("data", chunk => console.error(chunk.toString()));
+    child.once("error", () => finish(null));
+    child.once("exit", () => {
+      // 只有当前宿主退出才清状态：重启流程里旧进程的退出不覆盖新宿主。
+      if (host !== child) return;
       hostCdpUrl = null;
       for (const targetId of [...screencasts.keys()]) stopScreencast(targetId);
       publishHostStatus("浏览器宿主已退出");
@@ -249,6 +268,44 @@ function saveWindowState() {
   } catch (error) { console.error("ALPHA_WINDOW_STATE_FAILED", error); }
 }
 
+// 打开/揭示文件的边界：工作区树 + 所有会话项目目录（产物按约定写在会话项目里）。
+// 会话目录以 sidecar 为权威来源，短缓存避免每次点击都问。
+let boundaryRootsCache = null;
+let boundaryRootsAt = 0;
+async function workspaceBoundaryRoots() {
+  if (boundaryRootsCache && Date.now() - boundaryRootsAt < 10_000) return boundaryRootsCache;
+  const roots = [workspaceRoot];
+  try {
+    const response = await fetch(`http://127.0.0.1:${sidecarPort}/api/native/sessions`, { headers: { "x-alpha-token": serverToken } });
+    const data = await response.json();
+    for (const session of data.sessions ?? []) if (session && typeof session.cwd === "string") roots.push(session.cwd);
+  } catch { /* sidecar 不可达时退回工作区根 */ }
+  boundaryRootsCache = roots.map(root => { try { return realpathSync(root); } catch { return root; } });
+  boundaryRootsAt = Date.now();
+  return boundaryRootsCache;
+}
+
+async function insideWorkspaceBoundary(target) {
+  for (const root of await workspaceBoundaryRoots()) {
+    if (target === root) return true;
+    const relative = path.relative(root, target);
+    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) return true;
+  }
+  return false;
+}
+
+// 产物按约定写在会话项目内，工具返回的是项目相对路径；相对路径依次用工作区/会话项目根解析。
+async function resolveUserPath(targetPath) {
+  try { return realpathSync(targetPath); } catch { /* 相对路径继续按根解析 */ }
+  for (const root of await workspaceBoundaryRoots()) {
+    try {
+      const joined = realpathSync(path.resolve(root, targetPath));
+      if (joined === root || joined.startsWith(root + path.sep)) return joined;
+    } catch { /* 该根下不存在，试下一个 */ }
+  }
+  return null;
+}
+
 function installMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { role: "editMenu", label: "编辑" },
@@ -272,6 +329,7 @@ app.whenReady().then(async () => {
     // “当前为不可见模式”，OMP 回退自己的默认浏览器。
     await startBrowserHost();
     const port = await startSidecar();
+    sidecarPort = port;
     installMenu();
     const saved = savedWindowState();
     window = new BaseWindow({ width: 1460, height: 900, ...(saved ? { x: saved.x, y: saved.y, width: saved.width, height: saved.height } : {}), minWidth: 1080, minHeight: 620, title: "Alpha", backgroundColor: "#faf9f6", autoHideMenuBar: true });
@@ -298,17 +356,39 @@ app.whenReady().then(async () => {
     });
     shell.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     void shell.webContents.setVisualZoomLevelLimits(1, 1);
-    ipcMain.handle("alpha:open-folder", async (event, directory) => {
-      if (event.sender !== shell.webContents || typeof directory !== "string") return "不允许打开这个目录";
+    ipcMain.handle("alpha:open-folder", async (event, targetPath) => {
+      if (event.sender !== shell.webContents || typeof targetPath !== "string") return "不允许打开这个路径";
       try {
-        const target = realpathSync(directory);
-        const workspace = realpathSync(workspaceRoot);
-        const data = realpathSync(path.join(workspaceRoot, ".alpha"));
-        const products = realpathSync(path.join(workspaceRoot, "products"));
-        const relative = path.relative(products, target);
-        if (target !== workspace && target !== data && (relative.startsWith("..") || path.isAbsolute(relative))) return "目录不在 Alpha 工作区内";
+        const target = await resolveUserPath(targetPath);
+        if (!target || !(await insideWorkspaceBoundary(target))) return "路径不在 Alpha 工作区或会话项目内";
         return await electronShell.openPath(target);
-      } catch { return "目录不存在"; }
+      } catch { return "路径不存在"; }
+    });
+    ipcMain.handle("alpha:reveal-item", async (event, targetPath) => {
+      if (event.sender !== shell.webContents || typeof targetPath !== "string") return "不允许打开这个路径";
+      try {
+        const target = await resolveUserPath(targetPath);
+        if (!target || !(await insideWorkspaceBoundary(target))) return "路径不在 Alpha 工作区或会话项目内";
+        electronShell.showItemInFolder(target);
+        return "";
+      } catch { return "路径不存在"; }
+    });
+    let hostRestarting = false;
+    ipcMain.handle("alpha:browser-host-restart", async event => {
+      if (event.sender !== shell.webContents) return { ok: false, reason: "未授权的调用方" };
+      if (hostRestarting) return { ok: false, reason: "浏览器宿主正在重启，请稍候" };
+      hostRestarting = true;
+      try {
+        try { hostControl?.destroy(); } catch { /* 旧控制连接随宿主一起结束 */ }
+        host?.kill();
+        for (const targetId of [...screencasts.keys()]) stopScreencast(targetId);
+        const url = await startBrowserHost();
+        return url ? { ok: true } : { ok: false, reason: "浏览器宿主未能启动" };
+      } catch (error) {
+        return { ok: false, reason: String(error) };
+      } finally {
+        hostRestarting = false;
+      }
     });
     ipcMain.handle("alpha:open-external", async (event, value) => {
       if (event.sender !== shell.webContents || typeof value !== "string") return false;
