@@ -63,6 +63,7 @@ export interface NativeMessage {
   timestamp?: number;
   duration?: number;
   retryRecovery?: RetryRecoveryNote;
+  stopReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
   errorMessage?: string;
 }
 

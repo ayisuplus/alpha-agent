@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 
 const appRoot = resolve(import.meta.dir, "..");
-const evidence = join(appRoot, "artifacts", "workbench-polish-2026-09-30");
+const evidence = resolve(process.argv[2] ?? join(appRoot, "artifacts", "workbench-polish-2026-09-30"));
 await mkdir(evidence, { recursive: true });
 const workspace = await mkdtemp(join(evidence, "preview-"));
 const agentDir = join(workspace, "omp");

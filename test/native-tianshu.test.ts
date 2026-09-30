@@ -89,7 +89,8 @@ function stubPi() {
   const renderers = new Map<string, unknown>();
   const pi = {
     on(name: string, handler: (event: unknown, ctx: unknown) => unknown) {
-      handlers.set(name, handler);
+      const previous = handlers.get(name);
+      handlers.set(name, previous ? (event, ctx) => Promise.all([previous(event, ctx), handler(event, ctx)]) : handler);
     },
     sendMessage(payload: Record<string, unknown>, options?: Record<string, unknown>) {
       sent.push({ payload, options: options ?? {} });
@@ -113,6 +114,28 @@ function fire(handlers: Map<string, (event: unknown, ctx: unknown) => unknown>, 
   expect(handler).toBeDefined();
   handler?.(event, ctx);
 }
+
+test("Alpha terminal theme applies only when the launcher offers it", async () => {
+  const previous = process.env.ALPHA_TERMINAL_THEME;
+  const themes: string[] = [];
+  const { pi, handlers } = stubPi();
+  const { ctx } = makeCtx();
+  const terminalCtx = { ...ctx, ui: { ...ctx.ui, setTheme: async (name: string) => { themes.push(name); return { success: true }; } } };
+  try {
+    tianshuEvidenceLayer(pi);
+    delete process.env.ALPHA_TERMINAL_THEME;
+    await handlers.get("session_start")?.({}, terminalCtx);
+    expect(themes).toEqual([]);
+    process.env.ALPHA_TERMINAL_THEME = "1";
+    await handlers.get("session_start")?.({}, terminalCtx);
+    expect(themes).toEqual(["alpha-sky"]);
+    await handlers.get("session_start")?.({}, { ...terminalCtx, agent: { kind: "subagent" } });
+    expect(themes).toEqual(["alpha-sky"]);
+  } finally {
+    if (previous === undefined) delete process.env.ALPHA_TERMINAL_THEME;
+    else process.env.ALPHA_TERMINAL_THEME = previous;
+  }
+});
 
 describe("天枢证据层 · 变更分类", () => {
   test("写 .md 不产生验证债，写 .ts 产生", () => {
@@ -262,7 +285,7 @@ describe("天枢证据层 · 投递参数", () => {
     expect(details.timeline.some(line => line.includes("src/foo.ts"))).toBe(true);
     expect(String(payload.content)).not.toContain("src/foo.ts");
     // 状态栏同步更新
-    expect(statuses.some(status => status.key === "tianshu" && (status.text ?? "").includes("天枢"))).toBe(true);
+    expect(statuses.some(status => status.key === "tianshu" && (status.text ?? "").includes("运行检查"))).toBe(true);
   });
 
   test("流式进行中用 aside；子代理事件忽略；shadow 只记不发", () => {
@@ -350,7 +373,7 @@ describe("天枢证据层 · 投递参数", () => {
     await handler?.("", ctx);
     expect(sent).toHaveLength(1);
     const { payload, options } = sent[0]!;
-    expect(String(payload.content)).toContain("天枢证据帧");
+    expect(String(payload.content)).toContain("运行证据帧");
     expect(String(payload.content)).toContain("src/foo.ts");
     expect(options).toEqual({ triggerTurn: false });
   });
@@ -422,14 +445,14 @@ describe("天枢证据层 · 重复失败", () => {
 describe("天枢证据层 · 状态与面板", () => {
   test("状态栏按信号优先级出文案，上下文占用始终显示", () => {
     const debt = fold(emptyState(), writeOk("src/foo.ts"), { type: "context-usage", at: 2, percent: 80 });
-    expect(statusText(debt, buildFrame(debt).signals)).toBe("天枢 · 改后未验证 · 上下文 80%");
+    expect(statusText(debt, buildFrame(debt).signals)).toBe("运行检查 · 改后未验证 · 上下文 80%");
     const clean = fold(emptyState(), { type: "context-usage", at: 1, percent: 42 });
-    expect(statusText(clean, buildFrame(clean).signals)).toBe("天枢 ✓ · 上下文 42%");
+    expect(statusText(clean, buildFrame(clean).signals)).toBe("运行检查 ✓ · 上下文 42%");
     expect(buildFrame(clean).quality.context).toBe("measured");
     const claimed = fold(emptyState(), writeOk("src/foo.ts"), claim("全绿。"));
-    expect(statusText(claimed, buildFrame(claimed).signals)).toBe("天枢 · 宣称待证");
+    expect(statusText(claimed, buildFrame(claimed).signals)).toBe("运行检查 · 宣称待证");
     const failing = fold(emptyState(), bashFail("bun test", "s1"), bashFail("bun test", "s1", 2));
-    expect(statusText(failing, buildFrame(failing).signals)).toBe("天枢 · 重复失败");
+    expect(statusText(failing, buildFrame(failing).signals)).toBe("运行检查 · 重复失败");
   });
 
   test("证据帧与消息渲染器：竖条样式、测量质量", () => {

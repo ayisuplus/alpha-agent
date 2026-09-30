@@ -1,13 +1,10 @@
 /** 首页：问候、工作目录、任务描述与模型选择（方案 8.2：界面只出现 Alpha 一个产品名）。 */
 
 import { useState } from "react";
-import { Greeting } from "../components/Greeting";
-import { Halftone } from "../components/Halftone";
 import { NativeComposer } from "./NativeComposer";
 import { readDraft, writeDraft } from "./workbench-state";
 import { modelPreference, type NativeCatalog, type NativeConfig } from "./native-api";
 import type { SessionController } from "./useSession";
-import "../components/NewTask.css";
 
 export function NativeHome({ session, catalog, config, projectPath, setProjectPath, onOpenSettings }: {
   session: SessionController;
@@ -22,8 +19,8 @@ export function NativeHome({ session, catalog, config, projectPath, setProjectPa
   const defaultPreference = modelPreference(catalog?.models ?? [], config?.modelRoles.default ?? "");
   const chosenModel = model || defaultPreference.selector || catalog?.models.find(item => item.available)?.selector || "";
   const chosenThinking = thinking || (!model && defaultPreference.thinking) || String(config?.settings.find(item => item.id === "defaultThinkingLevel")?.value ?? "auto");
-  return <div className="new-task native-home" data-testid="new-task">
-    <div className="new-task-hero"><Halftone className="new-task-halftone" /><Greeting lines={["你好，我是 Alpha", "想让我替你完成什么？"]} /></div>
+  return <div className="native-home" data-testid="new-task">
+    <div className="native-home-hero"><span className="native-home-wordmark">Alpha</span><h1>今天，想完成什么？</h1><p>从一个想法开始，把事情交给 Alpha。</p></div>
     <NativeComposer home session={session} models={catalog?.models ?? []} model={chosenModel} thinking={chosenThinking}
       onModel={value => { setModel(value); writeDraft("home", { ...readDraft("home", localStorage), model: value }, localStorage); }}
       onThinking={value => { setThinking(value); writeDraft("home", { ...readDraft("home", localStorage), thinking: value }, localStorage); }}

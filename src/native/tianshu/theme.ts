@@ -14,18 +14,18 @@ const STATUS_PRIORITY: readonly SignalKey[] = [
 ];
 
 const STATUS_TEXT: Readonly<Record<string, string>> = {
-  "repeat-failure": "天枢 · 重复失败",
-  "claim-mismatch": "天枢 · 宣称待证",
-  "verification-debt": "天枢 · 改后未验证",
-  "model-fallback": "天枢 · 模型降级",
+  "repeat-failure": "运行检查 · 重复失败",
+  "claim-mismatch": "运行检查 · 宣称待证",
+  "verification-debt": "运行检查 · 改后未验证",
+  "model-fallback": "运行检查 · 模型降级",
 };
 
 /**
- * `天枢 ✓` / `天枢 · 改后未验证` / `天枢 · 宣称待证` / `天枢 · 重复失败`
+ * `运行检查 ✓` / `运行检查 · 改后未验证` / `运行检查 · 宣称待证` / `运行检查 · 重复失败`
  * (…), with measured context usage always appended.
  */
 export function statusText(state: TianshuState, signals: readonly SignalRecord[]): string {
-  let text = "天枢 ✓";
+  let text = "运行检查 ✓";
   for (const key of STATUS_PRIORITY) {
     const hit = signals.find(signal => signal.key === key);
     if (hit !== undefined) {
@@ -33,7 +33,7 @@ export function statusText(state: TianshuState, signals: readonly SignalRecord[]
       break;
     }
   }
-  return state.contextPercent === null ? text : `${text} · 上下文 ${state.contextPercent}%`;
+  return state.contextPercent === null ? text : `${text} · 上下文 ${Number(state.contextPercent.toFixed(1))}%`;
 }
 
 // ── 8.1 终端差异化：Alpha 页眉/标题措辞与 /alpha 概况正文（纯加法）──
@@ -67,13 +67,13 @@ const THINKING_LABEL: Readonly<Record<string, string>> = {
 };
 
 /**
- * `α Alpha · 天枢 | <模型> · 思考<强度> | <项目目录> | <会话名>` — one header row;
+ * `Alpha | <模型> · 思考<强度> | <项目目录> | <会话名>` — one header row;
  * the model/cwd/session segments appear only when known.
  */
 export function alphaHeaderLine(info: AlphaChromeInfo): string {
   const model = info.model ?? "模型未定";
   const thinking = info.thinkingLevel === undefined ? undefined : THINKING_LABEL[info.thinkingLevel] ?? info.thinkingLevel;
-  const segments = ["α Alpha · 天枢", thinking === undefined ? model : `${model} · 思考${thinking}`];
+  const segments = ["Alpha", thinking === undefined ? model : `${model} · 思考${thinking}`];
   if (info.cwd !== undefined && info.cwd.length > 0) segments.push(info.cwd);
   if (info.sessionName !== undefined && info.sessionName.length > 0) segments.push(info.sessionName);
   return segments.join(" | ");

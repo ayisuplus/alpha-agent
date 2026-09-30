@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, FolderOpen, MoreHorizontal, Paperclip, X } from "lucide-react";
+import { ArrowUp, CircleStop, FolderOpen, MoreHorizontal, Paperclip, X } from "lucide-react";
 import { NativeModelPicker } from "./NativeModelPicker";
 import { sessionRequest, type NativeModel } from "./native-api";
 import type { SessionController } from "./useSession";
@@ -72,7 +72,7 @@ export function NativeComposer({ session, models, model, thinking, onModel, onTh
   return <div className={`native-compose ${home ? "native-home-composer" : ""}`}
     onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }}
     onDrop={event => { event.preventDefault(); void attach(event.dataTransfer.files[0]); }}>
-    {session.widgets.map(block => block.lines.map((line, index) => <div className="native-tool-call" key={`${block.key}:${index}`}>{line}</div>))}
+    {session.widgets.filter(block => block.key !== "alpha-header").map(block => block.lines.map((line, index) => <div className="native-tool-call" key={`${block.key}:${index}`}>{line}</div>))}
     {(draft.image || draft.paths.length > 0) && <div className="native-attachments" aria-label="已添加材料">
       {draft.image && <span><img src={`data:${draft.image.mimeType};base64,${draft.image.data}`} alt="已添加图片" />{draft.image.name}<button aria-label="移除图片" onClick={() => update({ ...draft, image: undefined })}><X size={14} /></button></span>}
       {draft.paths.map(path => <span key={path} title={path}>{path.split(/[\\/]/).at(-1)}<button aria-label={`移除 ${path.split(/[\\/]/).at(-1)}`} onClick={() => update({ ...draft, paths: draft.paths.filter(item => item !== path) })}><X size={14} /></button></span>)}
@@ -87,7 +87,10 @@ export function NativeComposer({ session, models, model, thinking, onModel, onTh
       <button className="native-icon-button" aria-label="添加材料" title={window.alpha?.choosePaths ? "添加文件" : "添加图片"} onClick={() => void pickFiles()}><Paperclip size={17} /></button>
       <input hidden ref={fileInput} type="file" accept="image/*" aria-label="选择图片" onChange={event => { void attach(event.target.files?.[0]); event.target.value = ""; }} />
       <NativeModelPicker models={models} value={model} onChange={onModel} thinking={thinking} onThinkingChange={onThinking} onOpenSettings={onOpenSettings} disabled={sending} allowAuto={!!home} />
-      {home && <label className="native-home-directory" title={projectPath || "Alpha 工作区"}><FolderOpen size={15} /><input aria-label="工作目录" value={projectPath} onChange={event => setProjectPath?.(event.target.value)} placeholder="Alpha 工作区" /></label>}
+      {home && <div className="native-home-directory" title={projectPath || "Alpha 工作区"}>
+        {window.alpha?.choosePaths ? <button className="native-icon-button" aria-label="选择工作目录" title="选择文件夹" onClick={() => void window.alpha!.choosePaths!("directory").then(paths => { if (paths[0]) setProjectPath?.(paths[0]); }, cause => session.setError(String(cause)))}><FolderOpen size={16} /></button> : <FolderOpen size={16} />}
+        <input aria-label="工作目录" value={projectPath} onChange={event => setProjectPath?.(event.target.value)} placeholder="Alpha 工作区" />
+      </div>}
       {!home && <details className="native-more"><summary aria-label="更多输入操作" title="更多操作"><MoreHorizontal size={18} /></summary><div onClick={event => event.currentTarget.parentElement?.removeAttribute("open")}>
         <button onClick={onOpenSettings}>模型与账号设置</button>
         <button onClick={() => void session.command({ type: "compact" })}>压缩上下文</button>
@@ -97,6 +100,7 @@ export function NativeComposer({ session, models, model, thinking, onModel, onTh
         }}>命令与技能</button>
       </div></details>}
       <span className="native-send-hint">Ctrl + Enter</span>
+      {session.state?.isStreaming && <button className="native-stop" aria-label="停止生成" title="停止生成" onClick={() => void session.command({ type: "abort" })}><CircleStop size={17} /></button>}
       <button className="native-primary" disabled={!ready} onClick={() => void send()} aria-label={home ? "开始任务" : "发送"}>{home && (sending ? "正在启动…" : "开始任务")}<ArrowUp size={17} /></button>
     </div>
     {commands && <div className="native-command-list"><input aria-label="搜索命令与技能" placeholder="搜索命令与技能…" value={commandSearch} onChange={event => setCommandSearch(event.target.value)} />

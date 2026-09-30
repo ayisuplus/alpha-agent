@@ -4,32 +4,33 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { ITheme } from "@xterm/xterm";
 import { sessionRequest } from "./native-api";
+import sky from "../../../../presets/terminal-themes/alpha-sky.json";
 
 /**
- * 墨·深 (alpha-ink) xterm palette: the 16 ANSI slots mirror presets/terminal-themes/alpha-ink.json
+ * Alpha xterm palette: the 16 ANSI slots read presets/terminal-themes/alpha-sky.json
  * so a 16-color-only TUI still reads as Alpha (no truecolor dependency). Each slot takes its value
- * from the theme's vars; bright slots are the lightened variant of the same hue.
+ * from the theme's vars, including bright slots.
  */
-const ALPHA_INK: ITheme = {
-  background: "#25231f", // colors.export.pageBg
-  foreground: "#fcfaf8", // colors.text
-  cursor: "#fcfaf8",
-  black: "#1f1d19", // colors.statusLineBg
-  red: "#c96a5c", // vars.red
-  green: "#8fb394", // vars.green
-  yellow: "#c9a24b", // vars.yellow
-  blue: "#8aa1b8", // vars.blue
-  magenta: "#d8c9a8", // vars.yellow 族的亮档 (colors.mdCode)
-  cyan: "#7fa6b3", // vars.cyan
-  white: "#ebe5dc", // vars.accent
-  brightBlack: "#6f6a61", // vars.dimGray
-  brightRed: "#d98a7c",
-  brightGreen: "#a7c4ab",
-  brightYellow: "#d9b871",
-  brightBlue: "#a4b9cd",
-  brightMagenta: "#e8d9bd",
-  brightCyan: "#9fc0cb",
-  brightWhite: "#fcfaf8", // colors.text
+const ALPHA_SKY: ITheme = {
+  background: sky.export.pageBg,
+  foreground: sky.colors.text,
+  cursor: sky.vars.cyan,
+  black: sky.colors.statusLineBg,
+  red: sky.vars.red,
+  green: sky.vars.green,
+  yellow: sky.vars.yellow,
+  blue: sky.vars.blue,
+  magenta: sky.colors.mdCode,
+  cyan: sky.vars.cyan,
+  white: sky.vars.accent,
+  brightBlack: sky.vars.gray,
+  brightRed: sky.vars.red,
+  brightGreen: sky.vars.green,
+  brightYellow: sky.vars.yellow,
+  brightBlue: sky.vars.blue,
+  brightMagenta: sky.colors.mdCode,
+  brightCyan: sky.vars.cyan,
+  brightWhite: sky.colors.text,
 };
 
 /** Native OMP TUI in the same session; the server suspends RPC while this owns it. */
@@ -39,8 +40,9 @@ export function NativeTerminal({ id, output, onError }: { id: string; output: st
   const written = useRef("");
   useEffect(() => {
     if (!element.current) return;
-    const post = (action: string, data: unknown) => sessionRequest(id, `terminal/${action}`, data).catch(cause => onError(String(cause)));
-    const xterm = new Terminal({ fontFamily: "Cascadia Code, Consolas, monospace", fontSize: 13, theme: ALPHA_INK });
+    let active = true;
+    const post = (action: string, data: unknown) => sessionRequest(id, `terminal/${action}`, data).catch(cause => { if (active) onError(String(cause)); });
+    const xterm = new Terminal({ fontFamily: "Cascadia Code, Consolas, monospace", fontSize: 13, theme: ALPHA_SKY });
     const fit = new FitAddon();
     xterm.loadAddon(fit);
     xterm.open(element.current);
@@ -53,7 +55,7 @@ export function NativeTerminal({ id, output, onError }: { id: string; output: st
     });
     resize.observe(element.current);
     xterm.focus();
-    return () => { input.dispose(); resize.disconnect(); xterm.dispose(); terminal.current = null; written.current = ""; };
+    return () => { active = false; input.dispose(); resize.disconnect(); xterm.dispose(); terminal.current = null; written.current = ""; };
   }, [id, onError]);
   useEffect(() => {
     if (!terminal.current) return;

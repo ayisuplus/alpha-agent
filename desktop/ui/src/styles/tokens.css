@@ -1,102 +1,82 @@
-/*
- * Paper and ink: warm off-white surfaces, near-black text and actions, and a quiet sage accent taken from the
- * halftone botanicals. Colour is kept for meaning (status, selection); structure comes from spacing and hairlines.
- */
+/* Alpha: neutral surfaces; sky blue is reserved for interaction. */
 :root {
   color-scheme: light;
+  --bg-app: light-dark(#FFFFFF, #191F28);
+  --bg-sidebar: light-dark(#F1F5F9, #171D26);
+  --bg-surface: light-dark(#FFFFFF, #232B36);
+  --bg-elevated: light-dark(#F7F8FA, #2B3441);
+  --bg-hover: light-dark(#E9EDF2, #2F3947);
+  --bg-active: light-dark(#E2E8F0, #303B49);
+  --bg-inset: light-dark(#F4F6F8, #1F2937);
+  --bg-highlight: light-dark(#BAE6FD, #28526B);
 
-  --bg-app: light-dark(#fcfaf8, #1d1c1a);
-  --bg-sidebar: light-dark(#f6f2ec, #24221f);
-  --bg-surface: light-dark(#ffffff, #292723);
-  --bg-elevated: light-dark(#faf7f3, #302d28);
-  --bg-hover: light-dark(#f1ece5, #36322d);
-  --bg-active: light-dark(#ece6dd, #403c35);
-  --bg-inset: light-dark(#f7f3ee, #211f1c);
-  /* Warm sand, used behind names and labels the way a highlighter marks a line. */
-  --bg-highlight: light-dark(#ebe5dc, #484237);
+  --border-subtle: light-dark(rgb(31 41 55 / 8%), rgb(241 245 249 / 8%));
+  --border: light-dark(rgb(31 41 55 / 16%), rgb(241 245 249 / 16%));
+  --border-strong: light-dark(#94A3B8, #64748B);
+  --text: light-dark(#1F2937, #F1F5F9);
+  --text-secondary: light-dark(#4B5563, #CBD5E1);
+  --text-muted: light-dark(#616C7A, #A7B0BE);
+  --text-faint: light-dark(#64748B, #94A3B8);
 
-  --border-subtle: light-dark(#f0ebe5, #35312c);
-  --border: light-dark(#e6dfd5, #464139);
-  --border-strong: light-dark(#cfc6b9, #686052);
+  --accent: light-dark(#0369A1, #38BDF8);
+  --accent-strong: light-dark(#075985, #7DD3FC);
+  --accent-deep: light-dark(#0C4A6E, #BAE6FD);
+  --accent-bg: light-dark(#EDF6FB, #223747);
+  --accent-border: light-dark(#38BDF8, #38BDF8);
+  --accent-soft: #38BDF8;
+  --accent-soft-hover: #7DD3FC;
+  --accent-soft-border: #0EA5E9;
+  --on-accent: light-dark(#FFFFFF, #1F2937);
+  --on-accent-soft: #1F2937;
+  --ink: var(--text);
+  --accent-gold: light-dark(#92400E, #FCD34D);
+  --accent-warm: var(--bg-hover);
+  --halftone: #94A3B8;
 
-  --text: light-dark(#1a1a1a, #eee9e0);
-  --text-secondary: light-dark(#3f3b36, #d2cabe);
-  --text-muted: light-dark(#6e685f, #b1a89a);
-  --text-faint: light-dark(#736b61, #a79d8f);
+  --success: light-dark(#166534, #86EFAC);
+  --success-bg: light-dark(#F0FDF4, #17372A);
+  --success-border: light-dark(#BBF7D0, #3A6950);
+  --warning: light-dark(#92400E, #FCD34D);
+  --warning-bg: light-dark(#FFFBEB, #3B3220);
+  --warning-border: light-dark(#FDE68A, #786433);
+  --danger: light-dark(#B91C1C, #FCA5A5);
+  --danger-bg: light-dark(#FEF2F2, #3B252C);
+  --danger-border: light-dark(#FECACA, #80505B);
+  --user-bubble-bg: light-dark(#F1F3F6, #252E3A);
+  --user-bubble-border: var(--border-subtle);
+  --diff-add-bg: var(--success-bg);
+  --diff-add-gutter: light-dark(#DCFCE7, #24553B);
+  --diff-del-bg: var(--danger-bg);
+  --diff-del-gutter: light-dark(#FEE2E2, #613641);
 
-  /* Sage: links, running and selected states. */
-  --accent: light-dark(#4b6a52, #abc39e);
-  --accent-strong: light-dark(#3d5a44, #bfd0b5);
-  --accent-deep: light-dark(#2f4735, #c4d8bf);
-  --accent-bg: light-dark(#eef2ea, #2b3629);
-  --accent-border: light-dark(#c5d3bf, #53634a);
-  /* Primary actions are ink pills. */
-  --accent-soft: light-dark(#1a1a1a, #eee9e0);
-  --accent-soft-hover: light-dark(#3a3733, #d2cabe);
-  --accent-soft-border: light-dark(#1a1a1a, #eee9e0);
-  --accent-gold: light-dark(#8a6a45, #d0ad75);
-  --accent-warm: light-dark(#ebe5dc, #403c35);
-  /* Foregrounds: --on-accent sits on the sage --accent, --on-accent-soft on the ink primary. */
-  --on-accent: light-dark(#ffffff, #1d1c1a);
-  --on-accent-soft: light-dark(#ffffff, #1d1c1a);
-  --ink: light-dark(#1a1a1a, #eee9e0);
-  --halftone: #b4c3a6;
-
-  --success: light-dark(#3f6b47, #a8c69c);
-  --success-bg: light-dark(#eef3ea, #2b3629);
-  --success-border: light-dark(#c3d4bd, #53634a);
-  --warning: light-dark(#8a6418, #dfbd76);
-  --warning-bg: light-dark(#fbf3e3, #3b3020);
-  --warning-border: light-dark(#e8d3a3, #746038);
-  --danger: light-dark(#a3443c, #e5a59b);
-  --danger-bg: light-dark(#fbefeb, #3e2926);
-  --danger-border: light-dark(#e9bdb4, #7c5048);
-
-  /* Warm paper, not the warning palette: the person's own words should read as calm, not flagged. */
-  --user-bubble-bg: light-dark(#f3eee6, #322e28);
-  --user-bubble-border: light-dark(#e9e1d5, #494237);
-
-  --diff-add-bg: light-dark(#edf5ec, #293727);
-  --diff-add-gutter: #dcebd9;
-  --diff-del-bg: light-dark(#fbefeb, #3d2926);
-  --diff-del-gutter: #f4ddd6;
-
-  /* Body text in the system UI face, greetings in a Kai face, numbers and code in a monospace face. */
-  --font-sans: Inter, "PingFang SC", MiSans, "HarmonyOS Sans SC", "Noto Sans SC", "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
-  /* Georgia sits before the Kai faces so Latin letters get a serif rather than a Kai face's full-width Latin. */
-  --font-display: "LXGW WenKai", "LXGW WenKai TC", "LXGW WenKai Screen", "霞鹜文楷", Georgia, KaiTi, STKaiti, "Kaiti SC", serif;
-  --font-mono: "Geist Mono", "JetBrains Mono", "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
-
-  --text-xs: 12px;
+  --font-sans: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-display: var(--font-sans);
+  --font-mono: "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+  --text-xs: 13px;
   --text-sm: 13px;
   --text-md: 15px;
   --text-lg: 17px;
   --text-xl: 21px;
-
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
-
-  --radius-sm: 6px;
-  --radius: 8px;
+  --radius-sm: 8px;
+  --radius: 10px;
   --radius-lg: 12px;
   --radius-xl: 16px;
   --radius-pill: 999px;
-
-  --shadow-card: 0 1px 2px rgb(60 45 30 / 4%), 0 6px 20px rgb(60 45 30 / 5%);
-  --shadow-pop: 0 14px 36px rgb(60 45 30 / 12%);
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 3%), 0 8px 32px rgb(15 23 42 / 6%);
+  --shadow-pop: 0 4px 12px rgb(15 23 42 / 8%), 0 20px 48px rgb(15 23 42 / 12%);
   --shadow-lg: var(--shadow-pop);
-  --focus-ring: 0 0 0 2px var(--bg-app), 0 0 0 3.5px var(--accent);
-
-  --sidebar-width: 256px;
+  --focus-ring: 0 0 0 2px var(--bg-app), 0 0 0 4px var(--accent);
+  --sidebar-width: 248px;
   --sidebar-rail: 56px;
   --thread-min: 420px;
-  --preview-min: 360px;
+  --preview-min: 320px;
   --splitter: 6px;
 }
-
 :root[data-alpha-theme="dark"] { color-scheme: dark; }
 @media (prefers-color-scheme: dark) { :root[data-alpha-theme="system"] { color-scheme: dark; } }

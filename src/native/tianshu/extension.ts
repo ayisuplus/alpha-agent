@@ -277,7 +277,11 @@ function registerAlphaChrome(pi: ExtensionAPI): void {
     }
   }
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
+    if (process.env.ALPHA_TERMINAL_THEME === "1" && ctx.agent.kind === "main") {
+      const result = await ctx.ui.setTheme("alpha-sky");
+      if (!result.success) ctx.ui.notify(`无法载入 Alpha 终端主题：${result.error ?? "未知原因"}`, "warning");
+    }
     refreshChrome(ctx);
   });
   pi.on("session_switch", (_event, ctx) => {

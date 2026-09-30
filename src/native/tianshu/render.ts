@@ -26,17 +26,17 @@ function evidenceDetails(state: TianshuState, label: string): unknown {
 
 const REMINDER_BY_SIGNAL: Readonly<Record<string, (state: TianshuState) => string>> = {
   "repeat-failure": state =>
-    `【天枢】同类工具错误连续出现（同一错误签名 ${state.failure?.count ?? 2} 次）。建议先检查原因，再决定是否换方法；由你判断。`,
+    `【检查建议】同类工具错误连续出现（同一错误签名 ${state.failure?.count ?? 2} 次）。建议先检查原因，再决定是否换方法；由你判断。`,
   "verification-debt": () =>
-    "【天枢】改了代码文件，还没有看到这之后完成的验证（测试/类型检查/lint）。建议验证受影响的行为；由你判断。",
+    "【检查建议】改了代码文件，还没有看到这之后完成的验证（测试/类型检查/lint）。建议验证受影响的行为；由你判断。",
   "claim-mismatch": state =>
     [
-      "【天枢】宣称与证据对账（提醒，不拦截）：",
+      "【检查建议】宣称与证据对账（提醒，不拦截）：",
       ...state.claimIssues.map(issue => issue.line),
       "由你判断。",
     ].join("\n"),
   "todo-verification-gap": () =>
-    "【天枢】待办已全部完成，但仍有未验证的代码改动。建议补上验证再收尾；由你判断。",
+    "【检查建议】待办已全部完成，但仍有未验证的代码改动。建议补上验证再收尾；由你判断。",
 };
 
 export function renderReminder(signal: SignalRecord, state: TianshuState): MessagePayload {
@@ -44,7 +44,7 @@ export function renderReminder(signal: SignalRecord, state: TianshuState): Messa
   const content =
     render !== undefined
       ? render(state)
-      : "【天枢】有一条新的观察记录，请查看 /tianshu；由你判断。";
+      : "【检查建议】有一条新的观察记录，请查看 /tianshu；由你判断。";
   return { content, details: evidenceDetails(state, signal.key) };
 }
 
@@ -67,14 +67,14 @@ export function renderReanchor(state: TianshuState): MessagePayload {
   const sections = reanchorSections(state);
   const content =
     sections.length > 0
-      ? `【天枢】上下文压缩后重锚，请核对以下事实；由你判断。\n${sections.map(section => `- ${section}`).join("\n")}`
-      : "【天枢】上下文压缩后重锚：当前没有记录的目标、待办、验证债或宣称问题。";
+      ? `【检查建议】上下文压缩后重锚，请核对以下事实；由你判断。\n${sections.map(section => `- ${section}`).join("\n")}`
+      : "【检查建议】上下文压缩后重锚：当前没有记录的目标、待办、验证债或宣称问题。";
   return { content, details: evidenceDetails(state, "compact-reanchor") };
 }
 
 /** `/tianshu` panel: facts, signals, evidence sources, measurement quality. */
 export function renderPanel(frame: EvidenceFrame): string {
-  const lines: string[] = ["天枢证据帧"];
+  const lines: string[] = ["运行证据帧"];
   lines.push("事实", `  轮次 ${frame.facts.turn} · 事件 ${frame.facts.events}`);
   lines.push(
     `  最后变异 ${frame.facts.lastMutation === null ? "无" : `seq ${frame.facts.lastMutation.seq} ${frame.facts.lastMutation.target}`}`,
@@ -120,7 +120,7 @@ function textOf(content: unknown): string {
 export function renderMessageLines(content: unknown, details: unknown, expanded: boolean): string[] {
   const text = textOf(content);
   const lines = text.split("\n").filter(line => line.length > 0);
-  const framed = lines.map((line, index) => (index === 0 && !line.includes("天枢") ? `▌ 天枢 · ${line}` : `▌ ${line}`));
+  const framed = lines.map((line, index) => (index === 0 && !line.includes("运行检查") ? `▌ 运行检查 · ${line}` : `▌ ${line}`));
   if (!expanded || typeof details !== "object" || details === null) return framed;
   const timeline = (details as { timeline?: unknown }).timeline;
   if (!Array.isArray(timeline)) return framed;

@@ -10,7 +10,7 @@ import type { SessionController } from "./useSession";
 import { nativeApi, sessionRequest, toolPayload } from "./native-api";
 import { NativeTerminal } from "./NativeTerminal";
 import { NativeFiles } from "./NativeFiles";
-import { diffFiles } from "./workbench-state";
+import { diffFiles, evidenceLabel } from "./workbench-state";
 
 /** 截屏画面自适应样式：样式表没有对应图片规则，其余复用现有类。 */
 const FRAME_STYLE: CSSProperties = { maxWidth: "100%", maxHeight: "100%", border: "1px solid var(--border)", background: "white" };
@@ -34,7 +34,7 @@ function ReviewPanel({ session, onOpenFile }: { session: SessionController; onOp
   const artifacts = session.messages.filter(message => message.role === "toolResult").flatMap(message => toolPayload(message)?.artifacts ?? []);
   return <div className="native-panel">
     <h3>任务审查</h3><p>{session.current.title}</p><p className="native-muted">{session.current.cwd}</p>
-    {session.tianshuStatus && <p className="native-muted">天枢：{session.tianshuStatus}</p>}
+    {session.tianshuStatus && <p className="native-muted">{evidenceLabel(session.tianshuStatus)}</p>}
     <h4>项目改动 <button onClick={() => setRefresh(value => value + 1)}>刷新改动</button></h4>
     <p className="native-muted">当前项目整体 Git 改动；未跟踪文件只列路径。</p>
     {error ? <p role="alert">{error}</p> : !review ? <p className="native-muted">正在读取…</p> : !review.available ? <p className="native-muted">{review.reason}</p> : <>
@@ -181,6 +181,8 @@ function BrowserPanel({ visible }: { visible: boolean }) {
 }
 
 export function NativeWorkspace({ session, diagnostics, tab, setTab, onClose, previewPath, onPreviewPath, onOpenFile, onResize }: { session: SessionController; diagnostics: boolean; tab: WorkspaceTab; setTab(tab: WorkspaceTab): void; onClose(): void; previewPath: string | null; onPreviewPath(path: string | null): void; onOpenFile(path: string): void; onResize(width: number): void }) {
+  const panel = useRef<HTMLElement>(null);
+  useEffect(() => { panel.current?.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.focus(); }, []);
   useEffect(() => { if (!diagnostics && tab === "logs") setTab("browser"); }, [diagnostics, tab]);
   const tabs: Array<{ id: WorkspaceTab; label: string; Icon: typeof Globe2 }> = [
     { id: "review", label: "审查", Icon: ClipboardCheck },
@@ -189,14 +191,14 @@ export function NativeWorkspace({ session, diagnostics, tab, setTab, onClose, pr
     { id: "files", label: "文件", Icon: FolderOpen },
     ...(diagnostics ? [{ id: "logs" as const, label: "日志", Icon: Terminal }] : []),
   ];
-  return <aside id="native-workspace" aria-label="右侧工作区" className={`native-workspace ${tab === "browser" ? "browser-open" : ""}`}>
+  return <aside ref={panel} id="native-workspace" aria-label="右侧工作区" className={`native-workspace ${tab === "browser" ? "browser-open" : ""}`}>
     <div className="native-workspace-resizer" role="separator" aria-label="调整右栏宽度" aria-orientation="vertical" tabIndex={0}
       onKeyDown={event => { if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); onResize((event.currentTarget.parentElement?.getBoundingClientRect().width ?? 380) + (event.key === "ArrowLeft" ? 24 : -24)); } }}
       onPointerDown={event => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); }}
-      onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) onResize(window.innerWidth - 56 - event.clientX); }}
+      onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) onResize(window.innerWidth - event.clientX); }}
       onPointerUp={event => event.currentTarget.releasePointerCapture(event.pointerId)} />
     <div className="native-tabs" role="tablist" aria-label="工作区视图">
-      {tabs.map(({ id, label, Icon }) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}><Icon size={15} /> {label}</button>)}
+      {tabs.map(({ id, label, Icon }) => <button key={id} role="tab" aria-label={label} title={label} aria-selected={tab === id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}><Icon size={15} /><span>{label}</span></button>)}
       <button className="native-workspace-close" aria-label="收起右侧栏" title="收起右侧栏" onClick={onClose}><PanelRightClose size={17} /></button>
     </div>
     {tab === "review" && <ReviewPanel session={session} onOpenFile={onOpenFile} />}

@@ -3,22 +3,22 @@
  * - 工具调用 = 可折叠行（工具名、参数摘要、成功/失败、耗时），由消息流 toolCall/toolResult 组装；
  * - 产物 = 卡片（C5：缩略图/前后对比、打开、在文件夹中显示）；alpha_office 与媒体工具把预览 PNG
  *   以 ImageContent 附在工具结果里，卡片按顺序映射到 preview/before；
- * - `alpha-tianshu` 自定义消息以天枢样式显示（专属竖条 + ▌ 行），与普通消息区分；
+ * - `alpha-tianshu` 自定义消息显示为折叠的检查建议，原始证据可展开；
  * - 自动压缩/自动重试各一行说明；`setWidget` 字符串行显示在输入框上方；
- * - 顶栏显示天枢状态段（SSE 转发的 setStatus，statusKey="tianshu"）。
+ * - 顶栏显示运行检查状态（SSE 转发的 setStatus，statusKey="tianshu"）。
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowDown, Check, CircleStop, Copy, MoreHorizontal, RotateCcw, Terminal } from "lucide-react";
+import { ArrowDown, Check, Copy, MoreHorizontal, RotateCcw } from "lucide-react";
 import {
   contentImages, plain, toolPayload, request,
   type NativeMessage, type NativeModel, type SessionItem, type ToolPayload,
 } from "./native-api";
 import type { PendingCall, SessionController } from "./useSession";
 import { NativeComposer } from "./NativeComposer";
-import { atBottom, toolLabel, toolTarget, withLiveMessage } from "./workbench-state";
+import { atBottom, evidenceLabel, toolLabel, toolTarget, withLiveMessage } from "./workbench-state";
 import "./Thread.css";
 
 /** 新元素（缩略图/画面）自适应样式：现有样式表没有对应图片规则，其余全部复用现有类。 */
@@ -44,6 +44,23 @@ type ThreadItem =
   | { kind: "tianshu"; key: string; lines: string[]; timeline: string[] }
   | { kind: "note"; key: string; text: string };
 
+/** Only adjacent completed successes collapse together; failures and artifacts remain visible. */
+export function groupThreadItems(items: ThreadItem[]): Array<ThreadItem | { kind: "toolGroup"; key: string; tools: ToolItem[] }> {
+  const rows: Array<ThreadItem | { kind: "toolGroup"; key: string; tools: ToolItem[] }> = [];
+  let successes: ToolItem[] = [];
+  const flush = () => {
+    if (successes.length > 1) rows.push({ kind: "toolGroup", key: `group:${successes[0].key}`, tools: successes });
+    else rows.push(...successes);
+    successes = [];
+  };
+  for (const item of items) {
+    if (item.kind === "tool" && item.ok && !item.running) successes.push(item);
+    else { flush(); rows.push(item); }
+  }
+  flush();
+  return rows;
+}
+
 /** 消息流 + 进行中的工具调用 + 计时 → 对话条目。 */
 export function buildItems(messages: NativeMessage[], pending: PendingCall[], timing: Record<string, number>, liveNotes: Array<{ id: string; text: string }>): ThreadItem[] {
   const items: ThreadItem[] = [];
@@ -57,7 +74,7 @@ export function buildItems(messages: NativeMessage[], pending: PendingCall[], ti
     if (message.role === "assistant") {
       const parts = Array.isArray(message.content) ? message.content : [];
       const text = plain(message);
-      if (message.errorMessage) items.push({ kind: "note", key: `${key}:error`, text: `执行失败：${message.errorMessage}` });
+      if (message.errorMessage) items.push({ kind: "note", key: `${key}:error`, text: message.stopReason === "aborted" ? "已停止生成" : `执行失败：${message.errorMessage}` });
       const recovery = message.retryRecovery;
       if (recovery) {
         items.push({
@@ -156,7 +173,7 @@ function ArtifactCard({ payload, images, setError, cwd, onOpenFile }: { payload:
     return { artifact, after: null, before: null };
   }) ?? [];
   return <section className="task-results" aria-label="产物">
-    {payload.summary && <h2>{payload.summary}</h2>}
+    <h2>生成结果</h2>
     {rows.map(({ artifact, after, before }) => <div className="task-result" key={artifact.path}>
       <div className="task-result-file">
         <strong>{artifact.path.split(/[\\/]/).at(-1) ?? artifact.path}</strong>
@@ -164,7 +181,7 @@ function ArtifactCard({ payload, images, setError, cwd, onOpenFile }: { payload:
         {window.alpha?.openFolder && <button onClick={() => void openOnDesktop(absoluteArtifactPath(artifact.path, cwd), setError)}>系统打开</button>}
         {window.alpha && <button onClick={() => void revealOnDesktop(absoluteArtifactPath(artifact.path, cwd), setError)}>在文件夹中显示</button>}
       </div>
-      <p className="native-muted">{artifact.kind}</p><details className="native-artifact-details"><summary>文件信息</summary><p className="native-muted">{artifact.path}<br />sha256 {artifact.sha256}</p></details>
+      <p className="native-muted">{artifact.kind}</p><details className="native-artifact-details"><summary>文件信息</summary>{payload.summary && <p className="native-muted">{payload.summary}</p>}<p className="native-muted">{artifact.path}<br />sha256 {artifact.sha256}</p></details>
       {before && after && <details open><summary>前后对比</summary><div className="office-preview-grid">
         <div className="office-pdf-preview"><strong>修改前</strong><img alt="修改前预览" src={before} style={THUMB_STYLE} /></div>
         <div className="office-pdf-preview"><strong>修改后</strong><img alt="修改后预览" src={after} style={THUMB_STYLE} /></div>
@@ -175,9 +192,9 @@ function ArtifactCard({ payload, images, setError, cwd, onOpenFile }: { payload:
   </section>;
 }
 
-function ToolRow({ item, setError, cwd, onOpenFile }: { item: ToolItem; setError(value: string): void; cwd?: string; onOpenFile(path: string): void }) {
+function ToolRow({ item, setError, cwd, onOpenFile, showArtifacts = true }: { item: ToolItem; setError(value: string): void; cwd?: string; onOpenFile(path: string): void; showArtifacts?: boolean }) {
   return <article className="native-message">
-    <details className="native-tool-call">
+    <details className={`native-tool-call ${!item.ok ? "failed" : ""}`} open={!item.running && !item.ok}>
       <summary>
         <span className={`native-status-dot ${item.running ? "running" : item.ok ? "success" : "danger"}`} />
         <strong>{toolLabel(item.toolName, item.running, item.ok)}</strong>
@@ -189,22 +206,21 @@ function ToolRow({ item, setError, cwd, onOpenFile }: { item: ToolItem; setError
       {item.resultText && <pre>{item.resultText}</pre>}
       {item.images.map(src => <img alt="工具结果附图" key={src} src={src} style={THUMB_STYLE} />)}
     </details>
-    {item.payload && <ArtifactCard payload={item.payload} images={item.images} setError={setError} cwd={cwd} onOpenFile={onOpenFile} />}
+    {showArtifacts && item.payload && <ArtifactCard payload={item.payload} images={item.images} setError={setError} cwd={cwd} onOpenFile={onOpenFile} />}
   </article>;
 }
 
-/** 天枢样式：专属竖条（native-message toolResult 的左边线）+ ▌ 行，与普通消息区分。 */
+/** 历史与当前检查建议共用展示规则，原始记录保持可追溯。 */
 function TianshuMessage({ item }: { item: Extract<ThreadItem, { kind: "tianshu" }> }) {
-  const [expanded, setExpanded] = useState(false);
-  const lines = [...item.lines, ...(expanded ? item.timeline.map(entry => `  ${entry}`) : [])];
-  return <article className="native-message toolResult">
-    <div className="native-role">天枢</div>
-    <div className="native-markdown">{lines.map((line, index) => <p key={index}>▌ {line.replace(/^▌\s*/, "")}</p>)}</div>
-    {!!item.timeline.length && <button onClick={() => setExpanded(open => !open)}>{expanded ? "收起证据" : "展开证据"}</button>}
+  return <article className="native-message native-check">
+    <details><summary>检查建议<span>{evidenceLabel(item.lines[0] ?? "查看运行证据")}</span></summary>
+      <div className="native-markdown">{item.lines.map((line, index) => <p key={index}>{evidenceLabel(line)}</p>)}</div>
+      <details><summary>原始记录与证据</summary><pre>{[...item.lines, ...item.timeline].join("\n")}</pre></details>
+    </details>
   </article>;
 }
 
-function ThreadBody({ items, setError, cwd, id, settled, onOpenFile }: { items: ThreadItem[]; setError(value: string): void; cwd?: string; id: string; settled: boolean; onOpenFile(path: string): void }) {
+function ThreadBody({ items, setError, cwd, id, settled, loading, onOpenFile }: { items: ThreadItem[]; setError(value: string): void; cwd?: string; id: string; settled: boolean; loading: boolean; onOpenFile(path: string): void }) {
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
@@ -258,7 +274,13 @@ function ThreadBody({ items, setError, cwd, id, settled, onOpenFile }: { items: 
     else if (resumeOnScroll.current) { pinned.current = true; resumeOnScroll.current = false; }
     setHasNew(!pinned.current); save();
   }}><div ref={content}>
-    {items.length ? items.map(item => {
+    {items.length ? groupThreadItems(items).map(item => {
+      if (item.kind === "toolGroup") return <article className="native-message native-tool-group" key={item.key}>
+        <details><summary><span className="native-status-dot success" /><strong>已完成 {item.tools.length} 项操作</strong><span>查看过程</span></summary>
+          {item.tools.map(tool => <ToolRow key={tool.key} item={tool} setError={setError} cwd={cwd} onOpenFile={onOpenFile} showArtifacts={false} />)}
+        </details>
+        {item.tools.filter(tool => tool.payload).map(tool => <ArtifactCard key={tool.key} payload={tool.payload!} images={tool.images} setError={setError} cwd={cwd} onOpenFile={onOpenFile} />)}
+      </article>;
       if (item.kind === "tool") return <ToolRow key={item.key} item={item} setError={setError} cwd={cwd} onOpenFile={onOpenFile} />;
       if (item.kind === "tianshu") return <TianshuMessage key={item.key} item={item} />;
       if (item.kind === "note") return <p className="native-log" key={item.key}>{item.text}</p>;
@@ -271,13 +293,13 @@ function ThreadBody({ items, setError, cwd, id, settled, onOpenFile }: { items: 
           {item.images.map(src => <img alt="消息附图" key={src} src={src} style={THUMB_STYLE} />)}
         </div>
       </article>;
-    }) : <div className="native-welcome"><div className="native-glyph">α</div><h1>从这里开始</h1><p>告诉 Alpha 你想完成什么。</p></div>}
+    }) : loading ? <div className="native-welcome" role="status"><p>正在读取会话记录…</p></div> : <div className="native-welcome"><span className="native-home-wordmark">Alpha</span><h1>从这里开始</h1><p>告诉 Alpha 你想完成什么。</p></div>}
     {settled && tools.length > 0 && <p className="native-turn-summary">本轮工具执行：{tools.filter(item => !item.running && item.ok).length} 项成功 · {tools.filter(item => !item.running && !item.ok).length} 项失败 · {tools.filter(item => item.running).length} 项待确认</p>}
   </div></div>{hasNew && <button className="native-jump" onClick={jump}><ArrowDown size={15} />回到最新</button>}</div>;
 }
 
-/** 会话视图：顶栏（天枢状态段）+ 进程提示 + 对话流 + 输入框（setWidget 行在输入框上方）。 */
-export function NativeThread({ session, sessionInfo, models, onOpenFile, onOpenSettings, onOpenTerminal }: { session: SessionController; sessionInfo: SessionItem; models: NativeModel[]; onOpenFile(path: string): void; onOpenSettings(): void; onOpenTerminal(): void }) {
+/** 会话视图：顶栏 + 进程提示 + 对话流 + 输入框。 */
+export function NativeThread({ session, sessionInfo, models, onOpenFile, onOpenSettings, workspaceActions }: { session: SessionController; sessionInfo: SessionItem; models: NativeModel[]; onOpenFile(path: string): void; onOpenSettings(): void; workspaceActions: ReactNode }) {
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(sessionInfo.title);
   useEffect(() => { setName(sessionInfo.title); setRenaming(false); }, [sessionInfo.id]);
@@ -298,22 +320,20 @@ export function NativeThread({ session, sessionInfo, models, onOpenFile, onOpenS
     [session.messages, session.liveMessage, session.pendingCalls, session.toolTiming, session.liveNotes],
   );
   const state = session.state;
+  const loading = !state && !session.terminalActive && !session.hostNotice;
   return <>
     <header className="native-header">
-      <div><strong>{sessionInfo.title}</strong><small>{sessionInfo.cwd}</small></div>
+      <div><strong>{sessionInfo.title}</strong><small title={sessionInfo.cwd}>{sessionInfo.cwd.split(/[\\/]/).filter(Boolean).at(-1)}</small></div>
       <div className="native-header-actions">
         <details className="native-more"><summary aria-label="会话操作" title="会话操作"><MoreHorizontal size={18} /></summary><div onClick={event => event.currentTarget.parentElement?.removeAttribute("open")}>
           <button onClick={() => { setName(sessionInfo.title); setRenaming(value => !value); }}>重命名</button>
           <button onClick={() => void edit({ archived: !sessionInfo.archived })}>{sessionInfo.archived ? "恢复会话" : "归档"}</button>
           <button onClick={() => void exportMessages().catch(cause => session.setError(String(cause)))}>导出</button>
         </div></details>
-        {session.tianshuStatus && <span className="native-status native-tianshu-status" title={session.tianshuStatus}>{session.tianshuStatus.replace(/(\d+\.\d+)%/g, (_, percent: string) => `${Number(percent).toFixed(1)}%`)}</span>}
-        <span className={`native-status ${state?.isStreaming ? "running" : ""}`}>{session.uiRequest ? "等待输入" : state?.isStreaming ? "运行中" : state?.hasPendingAsyncWork ? "后台任务" : state?.isSettled ? "本轮结束" : "就绪"}</span>
-        <button title="刷新" onClick={() => session.refresh()}><RotateCcw size={16} /></button>
-        {session.terminalActive
-          ? <button title="关闭 Alpha 终端" onClick={() => void session.terminal("stop")}><CircleStop size={17} /></button>
-          : <button title="打开终端栏" aria-label="打开终端栏" onClick={onOpenTerminal}><Terminal size={17} /></button>}
-        {state?.isStreaming && <button title="停止" onClick={() => void session.command({ type: "abort" })}><CircleStop size={17} /></button>}
+        {session.tianshuStatus && <span className="native-tianshu-status" title={evidenceLabel(session.tianshuStatus)}>{evidenceLabel(session.tianshuStatus).replace(/(\d+\.\d+)%/g, (_, percent: string) => `${Number(percent).toFixed(1)}%`)}</span>}
+        <span className={`native-status ${state?.isStreaming ? "running" : ""}`}>{session.terminalActive ? "终端运行中" : loading ? "正在打开" : session.hostNotice ? "会话未打开" : session.uiRequest ? "等待输入" : state?.isStreaming ? "运行中" : state?.hasPendingAsyncWork ? "后台任务" : state?.isSettled ? "本轮结束" : "就绪"}</span>
+        <button title="刷新" aria-label="刷新会话" onClick={() => session.refresh()}><RotateCcw size={16} /></button>
+        {workspaceActions}
       </div>
     </header>
     {renaming && <form className="native-compose-tools" onSubmit={event => { event.preventDefault(); void edit({ title: name }); }}><input aria-label="会话名称" value={name} maxLength={120} onChange={event => setName(event.target.value)} /><button disabled={!name.trim()}>保存名称</button><button type="button" onClick={() => setRenaming(false)}>取消</button></form>}
@@ -322,8 +342,8 @@ export function NativeThread({ session, sessionInfo, models, onOpenFile, onOpenS
       <span>{session.hostNotice}</span>
       <button onClick={() => session.reopen()}>重新打开会话</button>
     </div>}
-    <ThreadBody key={`thread:${sessionInfo.id}`} id={sessionInfo.id} items={items} setError={session.setError} cwd={session.current?.cwd} settled={!!state?.isSettled} onOpenFile={onOpenFile} />
-    {session.terminalActive ? <div className="native-update-banner" role="status"><span>Alpha 终端正在使用这个会话。关闭终端后可继续对话。</span><button onClick={onOpenTerminal}>查看终端</button><button onClick={() => void session.terminal("stop")}>关闭终端</button></div>
+    <ThreadBody key={`thread:${sessionInfo.id}`} id={sessionInfo.id} items={items} setError={session.setError} cwd={session.current?.cwd} settled={!!state?.isSettled} loading={loading} onOpenFile={onOpenFile} />
+    {session.terminalActive ? <div className="native-update-banner" role="status"><span>Alpha 终端正在使用这个会话。关闭终端后可继续对话。</span><button onClick={() => void session.terminal("stop")}>关闭终端</button></div>
       : <NativeComposer key={`composer:${sessionInfo.id}`} session={session} models={models} model={state?.model ? `${state.model.provider}/${state.model.id}` : ""} thinking={state?.thinkingLevel ?? "off"}
         onModel={selector => { const [provider, ...rest] = selector.split("/"); void session.command({ type: "set_model", provider, modelId: rest.join("/") }); }}
         onThinking={level => void session.command({ type: "set_thinking_level", level })} onOpenSettings={onOpenSettings} />}

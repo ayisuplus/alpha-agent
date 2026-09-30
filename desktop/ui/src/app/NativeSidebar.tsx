@@ -1,7 +1,7 @@
 /** 左栏：品牌、新会话、会话列表、默认折叠的旧版任务、设置入口（方案 8.2 身份文案）。 */
 
 import { useEffect, useState } from "react";
-import { Bot, ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen, Pin, Plus, Settings, Sparkles, Timer, Wrench } from "lucide-react";
+import { ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen, Pin, Plus, Settings, Sparkles, Timer } from "lucide-react";
 import type { LegacyTask, SessionItem } from "./native-api";
 import { groupSessions } from "./workbench-state";
 
@@ -10,7 +10,7 @@ function savedList(key: string): string[] {
   catch { return []; }
 }
 
-export function NativeSidebar({ collapsed, onToggle, sessions, legacy, selected, busy, onSelect, onNew, onNewElsewhere, onContinueLegacy, onOpenSettings }: {
+export function NativeSidebar({ collapsed, onToggle, sessions, legacy, selected, busy, onSelect, onNew, onContinueLegacy, onOpenSettings }: {
   collapsed: boolean;
   onToggle(): void;
   sessions: SessionItem[];
@@ -19,7 +19,6 @@ export function NativeSidebar({ collapsed, onToggle, sessions, legacy, selected,
   busy: boolean;
   onSelect(id: string): void;
   onNew(): void;
-  onNewElsewhere(): void;
   onContinueLegacy(task: LegacyTask): void;
   onOpenSettings(section?: string): void;
 }) {
@@ -43,17 +42,12 @@ export function NativeSidebar({ collapsed, onToggle, sessions, legacy, selected,
   useEffect(() => { localStorage.setItem("alpha-seen-sessions", JSON.stringify(seen)); }, [seen]);
   const shown = sessions.filter(item => !!item.archived === archived && `${item.title} ${item.cwd}`.toLowerCase().includes(search.toLowerCase()));
   return <aside className="native-sidebar" id="native-sidebar" aria-label="侧边栏">
-    <div className="native-brand"><span className="native-mark">α</span><span className="native-brand-label"><strong>Alpha</strong><small>Alpha · 天枢</small></span>
+    <div className="native-brand"><span className="native-brand-label"><strong>Alpha</strong></span>
       <button className="native-sidebar-toggle" onClick={onToggle} aria-label={collapsed ? "展开侧边栏" : "收起侧边栏"} title={collapsed ? "展开侧边栏" : "收起侧边栏"} aria-expanded={!collapsed} aria-controls="native-sidebar">
         {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
       </button>
     </div>
     <button className="native-new" onClick={onNew} disabled={busy} aria-label="新会话" title="新会话"><Plus size={16} /><span className="native-sidebar-label">新会话</span></button>
-    <button className="native-project-choice" onClick={onNewElsewhere}>在其他目录开始</button>
-    <nav className="native-sidebar-links" aria-label="功能入口">
-      {[{ id: "model", label: "模型与账号", Icon: Bot }, { id: "skills", label: "技能", Icon: Sparkles }, { id: "schedules", label: "定时任务", Icon: Timer }, { id: "capabilities", label: "本机能力", Icon: Wrench }].map(({ id, label, Icon }) =>
-        <button key={id} onClick={() => onOpenSettings(id)} aria-label={label} title={label}><Icon size={15} /><span className="native-sidebar-label">{label}</span></button>)}
-    </nav>
     <input className="native-session-search" aria-label="搜索会话" placeholder="搜索会话或项目…" value={search} onChange={event => setSearch(event.target.value)} />
     <div className="native-list-title">会话</div>
     <button className="native-project-choice" onClick={() => setArchived(value => !value)}>{archived ? "返回会话" : "查看归档"}</button>
@@ -80,6 +74,9 @@ export function NativeSidebar({ collapsed, onToggle, sessions, legacy, selected,
         <span title={item.objective}>{item.title}</span>
         <button onClick={() => onContinueLegacy(item)} disabled={busy}>继续这个任务</button>
       </div>)}</div>}
-    <button className="native-settings-entry" onClick={() => onOpenSettings()} aria-label="设置" title="设置"><Settings size={17} /><span className="native-sidebar-label">设置</span><kbd>Ctrl ,</kbd></button>
+    <div className="native-sidebar-footer"><nav className="native-sidebar-links" aria-label="功能入口">
+      {[{ id: "skills", label: "技能", Icon: Sparkles }, { id: "schedules", label: "定时任务", Icon: Timer }].map(({ id, label, Icon }) =>
+        <button key={id} onClick={() => onOpenSettings(id)} aria-label={label} title={label}><Icon size={17} /><span className="native-sidebar-label">{label}</span></button>)}
+    </nav><button className="native-settings-entry" onClick={() => onOpenSettings()} aria-label="设置" title="设置"><Settings size={17} /><span className="native-sidebar-label">设置</span><kbd>Ctrl ,</kbd></button></div>
   </aside>;
 }

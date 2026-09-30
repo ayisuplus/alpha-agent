@@ -84,6 +84,11 @@ export function toolTarget(args: unknown): string {
   return [fields.path, fields.file_path, fields.name, fields.query, fields.command, fields.cmd, fields.url].find(value => typeof value === "string") as string ?? "";
 }
 
+/** Display only: never rewrite messages, tool records, or third-party content. */
+export function evidenceLabel(text: string): string {
+  return text.replace(/^▌\s*/, "").replace(/^【(?:天枢|检查建议)】\s*/, "").replace(/^天枢(?=\s|$)/, "运行检查");
+}
+
 export function errorHelp(message: string): { title: string; hint: string; section?: string } {
   if (/模型.*不支持图片/.test(message)) return { title: "当前模型不支持图片", hint: "请选择标有“支持图片”的模型后再发送，图片仍保留。" };
   if (/请选择不超过.*图片|无法读取图片/.test(message)) return { title: "图片无法添加", hint: message };

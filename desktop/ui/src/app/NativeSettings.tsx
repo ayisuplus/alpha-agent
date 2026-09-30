@@ -1,7 +1,7 @@
 /**
  * 设置（方案 8.2）：模型与账号、运行与工具（内核原生设置）、本机能力（状态/检测/浏览器授权）、
  * 技能（只读 30 个 Alpha Skill）、界面、关于（Alpha 版本、OMP 版本与许可、天枢来源与许可）。
- * OMP 产品名只出现在“关于”页与更新横幅。
+ * OMP 来源与版本只出现在“关于”页。
  */
 
 import { useEffect, useState } from "react";
@@ -245,7 +245,7 @@ function AboutPage({ update, onCheckUpdate }: { update: UpdateStatus | null; onC
   </section>;
 }
 
-export function NativeSettings({ config, catalog, onConfig, reload, onClose, fontSize, setFontSize, workspaceVisible, setWorkspaceVisible, diagnostics, setDiagnostics, update, onCheckUpdate, sessionId, initialSection = "model", onOpenSession, onUseSkill, theme, setTheme }: {
+export function NativeSettings({ config, catalog, onConfig, reload, onClose, fontSize, setFontSize, diagnostics, setDiagnostics, update, onCheckUpdate, sessionId, initialSection = "model", onOpenSession, onUseSkill, theme, setTheme }: {
   initialSection?: string;
   onOpenSession?(id: string): void;
   onUseSkill(name: string): void;
@@ -258,8 +258,6 @@ export function NativeSettings({ config, catalog, onConfig, reload, onClose, fon
   onClose(): void;
   fontSize: number;
   setFontSize(value: number): void;
-  workspaceVisible: boolean;
-  setWorkspaceVisible(value: boolean): void;
   diagnostics: boolean;
   setDiagnostics(value: boolean): void;
   update: UpdateStatus | null;
@@ -299,7 +297,7 @@ export function NativeSettings({ config, catalog, onConfig, reload, onClose, fon
     { id: "about", title: "关于", Icon: Info },
   ];
   return <div className="settings-view native-settings" data-testid="settings-view">
-    <header className="settings-header"><h1>设置</h1><span className="settings-header-hint">模型与配置直接使用内核的原生存储</span><button aria-label="关闭设置" onClick={onClose}><X size={18} /></button></header>
+    <header className="settings-header"><h1>设置</h1><span className="settings-header-hint">让 Alpha 适合你的工作方式</span><button aria-label="关闭设置" onClick={onClose}><X size={18} /></button></header>
     <div className="settings-layout">
       <nav className="settings-nav" aria-label="设置分组">{navigation.map(({ id, title, Icon }) =>
         <button key={id} aria-current={section === id ? "page" : undefined} onClick={() => { setSection(id); setFilter(""); }}><Icon size={15} />{title}</button>)}</nav>
@@ -318,13 +316,11 @@ export function NativeSettings({ config, catalog, onConfig, reload, onClose, fon
                 {[12, 13, 14, 15, 16].map(size => <option key={size} value={size}>{size}px</option>)}
               </select>
             </Field>
-            <Field label="右侧工作区" description="显示或收起右栏（浏览器、文件、日志）。">
-              <Toggle label="显示右侧工作区" checked={workspaceVisible} onChange={setWorkspaceVisible} />
-            </Field>
+            <p className="settings-note">文件、浏览器、审查与终端可从会话顶栏打开，用完即可收起。</p>
             <Field label="诊断日志" description="右栏的“日志”页签只用于诊断，默认隐藏。">
               <Toggle label="显示诊断日志" checked={diagnostics} onChange={setDiagnostics} />
             </Field>
-            <Field label="快捷键" description="Ctrl+Enter 发送 · Shift+Enter 换行 · Ctrl+N 新会话 · Ctrl+, 设置 · Ctrl+Shift+F 文件 · Esc 关闭当前弹窗或设置。"><span>模型选择菜单支持方向键和 Enter。</span></Field>
+            <Field label="快捷键" description="Ctrl+Enter 发送 · Shift+Enter 换行 · Ctrl+N 新会话 · Ctrl+, 设置 · Ctrl+Shift+F 文件 · Esc 关闭弹窗、设置或工作区。"><span>模型选择菜单支持方向键和 Enter。</span></Field>
           </section>
           : !config || !catalog ? <p>正在读取配置…</p>
           : section === "model" ? <section>

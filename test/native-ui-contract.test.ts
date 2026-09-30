@@ -27,6 +27,14 @@ describe("artifact paths resolve against the session project", () => {
     expect(items.some(item => "text" in item && item.text.includes("HTTP 401"))).toBe(true);
     expect(items.some(item => item.kind === "assistant" && item.text === "正在处理")).toBe(true);
   });
+  test("user aborts retain partial text without being labeled as failures", () => {
+    const message = { role: "assistant", content: "已生成的内容", stopReason: "aborted" as const, errorMessage: "Interrupted by user" };
+    const items = buildItems([message], [], {}, []);
+    expect(items.some(item => item.kind === "note" && item.text === "已停止生成")).toBe(true);
+    expect(items.some(item => "text" in item && item.text.includes("执行失败"))).toBe(false);
+    expect(items.some(item => item.kind === "assistant" && item.text === "已生成的内容")).toBe(true);
+    expect(message.errorMessage).toBe("Interrupted by user");
+  });
   test("relative tool outputs become project-absolute, user paths pass through", () => {
     expect(absoluteArtifactPath("outputs\\media\\a.png", "E:\\proj")).toBe("E:\\proj\\outputs\\media\\a.png");
     expect(absoluteArtifactPath("outputs/report.docx", "E:/proj/")).toBe("E:/proj\\outputs/report.docx");

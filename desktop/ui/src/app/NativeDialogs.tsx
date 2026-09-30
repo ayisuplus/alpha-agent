@@ -1,4 +1,4 @@
-/** 弹窗（方案 8.2：弹窗里的产品名统一为 Alpha）：在其他目录开始、打开网页、扩展交互请求。 */
+/** 打开网页与扩展交互请求。工作目录由首页输入区选择。 */
 
 import type { SessionController } from "./useSession";
 import { NativeModal } from "./NativeModal";
@@ -12,16 +12,9 @@ function safeExternalUrl(value: string): boolean {
   }
 }
 
-export function NativeDialogs({ session, projectDialog, closeProjectDialog, projectPath, setProjectPath }: {
+export function NativeDialogs({ session }: {
   session: SessionController;
-  projectDialog: boolean;
-  closeProjectDialog(): void;
-  projectPath: string;
-  setProjectPath(value: string): void;
 }) {
-  const create = async () => {
-    if (await session.create(projectPath.trim())) { setProjectPath(""); closeProjectDialog(); }
-  };
   const openExternal = () => {
     const url = session.externalUrl;
     if (!safeExternalUrl(url)) { session.setError("Alpha 提供的链接协议不受支持。"); return; }
@@ -43,10 +36,5 @@ export function NativeDialogs({ session, projectDialog, closeProjectDialog, proj
     <p className="native-muted">{session.externalUrl}</p>
     <div><button onClick={() => session.setExternalUrl("")}>稍后</button><button className="native-primary" onClick={openExternal}>在系统浏览器打开</button></div>
   </NativeModal>;
-  return projectDialog ? <NativeModal title="在其他目录开始" onCancel={closeProjectDialog}>
-      {window.alpha?.choosePaths && <button onClick={() => void window.alpha!.choosePaths!("directory").then(paths => { if (paths[0]) setProjectPath(paths[0]); }, cause => session.setError(String(cause)))}>选择文件夹</button>}
-      <p>输入本机已有的项目目录，Alpha 将直接在其中工作。</p>
-      <input className="native-path-input" value={projectPath} onChange={event => setProjectPath(event.target.value)} placeholder="例如 E:\projects\my-project" />
-      <div><button onClick={closeProjectDialog}>取消</button><button className="native-primary" disabled={!projectPath.trim() || session.busy} onClick={() => void create()}>创建会话</button></div>
-  </NativeModal> : null;
+  return null;
 }
