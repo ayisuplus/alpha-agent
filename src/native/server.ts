@@ -16,6 +16,12 @@ import { projectFilePreview, projectFileContent } from "./project-file";
 import type { ExtensionCatalog, HostMethod } from "./host-types";
 import { loadSessionFile } from "@oh-my-pi/pi-coding-agent/session/session-loader";
 import { resolveLocalRoot, resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
+import { ProjectSnapshots } from "./project-snapshots";
+import { ProjectShells } from "./project-shells";
+import { Projects } from "./projects";
+import { projectSearch } from "./project-search";
+import { requireGit } from "@oh-my-pi/pi-natives/vcs";
+import { getConfigRootDir } from "@oh-my-pi/pi-utils";
 
 interface SessionRecord {
   id: string;
@@ -47,6 +53,11 @@ const encoder = new TextEncoder();
 const installedVersion = (JSON.parse(await readFile(join(appRoot, "package.json"), "utf8")) as { dependencies: Record<string, string> }).dependencies["@oh-my-pi/pi-coding-agent"];
 const updates = new OmpUpdateMonitor(installedVersion, dataRoot);
 const configuration = new NativeConfiguration();
+const projects = new Projects(dataRoot);
+const snapshots = new ProjectSnapshots(dataRoot, [getConfigRootDir(), configuration.agentDir]);
+const shells = new ProjectShells(appRoot, dataRoot, (cwd, frame) => { for (const item of records.values()) if (item.cwd === cwd) emit(item.id, frame); });
+const admissions = new Set<string>();
+const taskQueues = new Map<string, Promise<unknown>>();
 let saveQueue = Promise.resolve();
 let hostQueue: Promise<unknown> = Promise.resolve();
 const activity = new Map<string, { status: string; notice?: string; uiRequest?: Record<string, unknown>; planReviewStop?: boolean }>();
@@ -88,6 +99,23 @@ async function reclaimable(child: RpcProcess): Promise<boolean> {
   return !child.hasPendingWork && !!state && typeof state === "object" && "isSettled" in state && state.isSettled === true &&
     !("hasPendingAsyncWork" in state && state.hasPendingAsyncWork);
 }
+async function settleSnapshot(id: string, child: RpcProcess, outcome?: string) {
+  if (admissions.has(id) || !await reclaimable(child)) return;
+  await snapshots.finish(record(id).cwd, id, outcome ?? activity.get(id)?.status ?? "settled");
+  emit(id, { type: "alpha_snapshot" });
+}
+async function admittedTask<T>(id: string, child: RpcProcess, execute: () => Promise<T>): Promise<T> {
+  const operation = (taskQueues.get(id) ?? Promise.resolve()).then(async () => {
+    admissions.add(id);
+    try { await snapshots.begin(record(id).cwd, id); return await execute(); }
+    finally { admissions.delete(id); await settleSnapshot(id, child).catch(error => emit(id, { type: "host_error", error: `Snapshot: ${String(error)}` })); }
+  });
+  taskQueues.set(id, operation.catch(() => undefined)); return operation;
+}
+async function projectIdle(cwd: string) {
+  if (shells.busy(cwd) || [...terminals.keys()].some(id => record(id).cwd === cwd)) throw new Error("请先关闭该项目的终端");
+  for (const [id, pending] of processes) if (record(id).cwd === cwd && (admissions.has(id) || !await reclaimable(await pending))) throw new Error("请等待该项目的所有任务真正结束");
+}
 
 async function reapIdleProcesses(): Promise<void> {
   const now = Date.now();
@@ -112,7 +140,7 @@ async function deliverSchedule(schedule: Schedule): ReturnType<ScheduleDeliver> 
   const child = await host(item.id);
   await schedules.beginRun(schedule.id, new Date(), item.id);
   if (!await reclaimable(child)) throw new Error(`目标会话「${item.title}」正在工作，本次跳过`);
-  const receipt = await child.promptAndWait(schedule.prompt);
+  const receipt = await admittedTask(item.id, child, () => child.promptAndWait(schedule.prompt));
   if (receipt.status !== "completed") {
     const error = receipt.error as { message?: string } | undefined;
     return receipt.status === "aborted" ? { result: "任务已中止", status: "aborted" } : { result: `失败：${error?.message ?? "原生会话执行失败"}`, status: "failed" };
@@ -128,6 +156,7 @@ await writeFile(join(nativeRoot, "browser-control.json"), JSON.stringify({ pause
 await mkdir(sessionCwd, { recursive: true });
 const saved = await readFile(indexPath, "utf8").then(text => JSON.parse(text), () => ({ sessions: [] })).catch(() => ({ sessions: [] }));
 for (const item of Array.isArray(saved.sessions) ? saved.sessions : []) if (typeof item?.id === "string" && /^[0-9a-f-]{36}$/.test(item.id)) records.set(item.id, item);
+for (const cwd of new Set([...records.values()].map(item => item.cwd))) await projects.remember(cwd).catch(() => undefined);
 
 function saveRecords(): Promise<void> {
   saveQueue = saveQueue.then(async () => {
@@ -229,8 +258,12 @@ async function openHost(id: string): Promise<RpcProcess> {
         void saveRecords();
       }
       emit(id, frame);
+      if (frame.type === "session_settled" || frame.type === "prompt_result") void settleSnapshot(id, child).catch(error => emit(id, { type: "host_error", error: `Snapshot: ${String(error)}` }));
     });
-    child.on("exit", error => { if (processes.delete(id) && !terminals.has(id)) emit(id, { type: "host_exit", error: error.message }); });
+    child.on("exit", error => {
+      if (processes.delete(id) && !terminals.has(id)) emit(id, { type: "host_exit", error: error.message });
+      void snapshots.finish(item.cwd, id, "interrupted").catch(error => emit(id, { type: "host_error", error: `Snapshot: ${String(error)}` }));
+    });
     child.on("protocol_error", error => emit(id, { type: "host_error", error: String(error) }));
     await child.ready;
     await child.command({ type: "negotiate_protocol", protocolVersion: 2 });
@@ -254,38 +287,39 @@ async function openHost(id: string): Promise<RpcProcess> {
   catch (error) { processes.delete(id); throw error; }
 }
 /** Terminal sessions own their OMP process; recover the OMP session id from the session file header. */
-async function captureTerminalSession(id: string, sessionDir: string): Promise<void> {
-  for (let attempt = 0; attempt < 60; attempt++) {
+async function captureTerminalSession(id: string, sessionDir: string, since: number, once = false): Promise<void> {
+  do {
     const { promise: tick, resolve: wake } = Promise.withResolvers<void>();
     setTimeout(wake, 1_000);
     await tick;
     const item = records.get(id);
-    if (!item || item.ompSessionId) return;
+    if (!item) return;
     const files = await readdir(sessionDir).catch(() => [] as string[]);
-    for (const name of files) {
-      if (!name.endsWith(".jsonl")) continue;
-      const head = await readFile(join(sessionDir, name), "utf8").then(text => text.slice(0, 4_000).split(/\r?\n/)[0], () => "");
-      let header: { type?: string; id?: string; title?: string };
-      try { header = JSON.parse(head); } catch { continue; }
-      if (header.type === "session" && typeof header.id === "string" && header.id) {
-        item.ompSessionId = header.id;
-        if (typeof header.title === "string" && header.title.trim()) item.title = header.title.trim().slice(0, 120);
+    const journals = await Promise.all(files.filter(name => name.endsWith(".jsonl")).map(async name => ({ name, time: (await stat(join(sessionDir, name))).mtimeMs })));
+    for (const { name, time } of journals.sort((a, b) => b.time - a.time)) {
+      if (time < since) continue;
+      const loaded = await loadSessionFile(join(sessionDir, name)).catch(() => null), header = loaded?.entries[0];
+      if (header?.type === "session" && typeof header.id === "string" && header.id) {
+        const title = loaded?.titleSlot?.title ?? header.title;
+        syncIdentity(item, header.id, title);
+        if (typeof title === "string" && title.trim()) item.title = title.trim().slice(0, 120);
         item.updatedAt = new Date().toISOString();
         void saveRecords();
-        return;
+        break;
       }
     }
-  }
+  } while (!once && terminals.has(id));
 }
 
 async function createSession(input: { cwd?: unknown; title?: unknown; legacyTaskId?: string }): Promise<SessionRecord> {
-  const cwd = resolve(typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : sessionCwd);
+  const cwd = await realpath(resolve(typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : sessionCwd));
   if (!(await stat(cwd)).isDirectory()) throw new Error("Project directory does not exist");
   const now = new Date().toISOString();
   const item: SessionRecord = { id: randomUUID(), cwd, title: typeof input.title === "string" && input.title.trim() ? input.title.trim().slice(0, 120) : basename(cwd),
     createdAt: now, updatedAt: now, ...(input.legacyTaskId ? { legacyTaskId: input.legacyTaskId } : {}) };
   records.set(item.id, item);
   await saveRecords();
+  await projects.remember(cwd);
   return item;
 }
 async function legacy(id: string): Promise<Record<string, unknown>> {
@@ -330,6 +364,29 @@ const server = Bun.serve({
     if (url.pathname.startsWith("/api") && !authorized(request, url)) return json({ error: "Forbidden" }, 403);
     try {
       if (url.pathname === "/api/native/configuration" && request.method === "GET") return json(await configuration.read());
+      if (url.pathname === "/api/native/projects") {
+        if (request.method === "GET") return json({ projects: await projects.list() });
+        if (request.method === "POST") {
+          const input = await body(request);
+          if (input.action === "add" && typeof input.cwd === "string") return json({ project: await projects.remember(input.cwd) });
+          if (input.action === "remove") {
+            const project = (await projects.list()).find(item => item.id === input.id); if (!project) throw new Error("Project not found");
+            if (project.managed) {
+              if (!project.source || project.source === project.cwd || await realpath(project.cwd) !== project.cwd) throw new Error("Managed worktree identity changed; removal stopped");
+              await projectIdle(project.cwd);
+              const repository = requireGit(project.source), worktrees = await repository.worktrees();
+              if (!worktrees.some(item => resolve(item.path).toLowerCase() === project.cwd.toLowerCase()) || repository.info().repoRoot.toLowerCase() === project.cwd.toLowerCase()) throw new Error("Managed worktree no longer matches its source repository");
+              const review = await projectReview(project.cwd);
+              if (!review.available || review.status.trim()) throw new Error("工作树有暂存、未暂存或未跟踪改动，已停止清理");
+              for (const [id] of processes) if (record(id).cwd === project.cwd) await stopProcess(id, "正在移除工作树");
+              if ((await projectReview(project.cwd)).status.trim()) throw new Error("工作树发生后续变动，已停止清理");
+              await repository.worktreeRemove(project.cwd, false);
+            }
+            await projects.remove(project.id); return json({ removed: true });
+          }
+          throw new Error("Unsupported project operation");
+        }
+      }
       if (url.pathname === "/api/native/models" && request.method === "GET") return json(await configuration.catalog());
       if (url.pathname === "/api/native/settings" && request.method === "POST") return json(await configuration.update(await body(request)));
       if (url.pathname === "/api/native/credentials" && request.method === "POST") {
@@ -430,7 +487,7 @@ const server = Bun.serve({
         await child.command({ type: "export_html", outputPath: path });
         return json({ name: `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.html`, content: await readFile(path, "utf8") });
       }
-      const controls = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/host\/(catalog|extension|mode|plan|tree|navigate|usage|reload|session)$/.exec(url.pathname);
+      const controls = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/host\/(catalog|extension|mode|plan|tree|navigate|usage|reload|session|worktree)$/.exec(url.pathname);
       if (controls) {
         const [, id, method] = controls;
         record(id);
@@ -445,11 +502,13 @@ const server = Bun.serve({
           const result = await child.hostCommand(method as HostMethod);
           return json(method === "catalog" ? { ...result as ExtensionCatalog, pendingReload: pendingReloads.has(id) } : result);
         }
-        if (request.method === "POST" && ["extension", "plan", "navigate", "session"].includes(method)) {
+        if (request.method === "POST" && ["extension", "plan", "navigate", "session", "worktree"].includes(method)) {
           const input = await body(request);
           const execute = async () => {
             child = await host(id);
-            const result = await child.hostCommand(method as HostMethod, input, method === "plan" ? 300_000 : 90_000) as { pendingReload?: boolean };
+            const perform = () => child.hostCommand(method as HostMethod, input, method === "plan" ? 300_000 : 90_000);
+            const result = await (method === "plan" && input.action === "approve" ? admittedTask(id, child, perform) : perform()) as { pendingReload?: boolean; path?: string; branch?: string };
+            if (method === "worktree" && input.action === "create" && result.path) await projects.remember(result.path, { source: record(id).cwd, branch: result.branch, managed: true });
             if (method === "session" && input.action === "branch") {
               const state = await child.command({ type: "get_state" });
               if ("data" in state) { const current = state.data as { sessionId: string; sessionName?: string }; syncIdentity(record(id), current.sessionId, current.sessionName); }
@@ -472,6 +531,22 @@ const server = Bun.serve({
           return await operation;
         }
         throw new Error("Unsupported host operation");
+      }
+      const projectControl = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/(search|snapshots|shells)(?:\/([0-9a-f-]{36})\/(input|resize|close))?$/.exec(url.pathname);
+      if (projectControl) {
+        const [, id, action, shellId, shellAction] = projectControl, cwd = record(id).cwd;
+        if (action === "search" && request.method === "GET") return json(await projectSearch(cwd, url.searchParams.get("q") ?? "", url.searchParams.get("content") === "1", request.signal));
+        if (action === "shells") {
+          if (request.method === "GET" && !shellId) return json({ shells: shells.list(cwd) });
+          if (request.method === "POST") { const input = await body(request); return json(shellId ? shells.request(cwd, shellId, shellAction, input) : await shells.create(cwd, typeof input.name === "string" ? input.name : undefined)); }
+        }
+        if (action === "snapshots") {
+          if (request.method === "GET") return json(await snapshots.list(cwd));
+          const input = await body(request); if (typeof input.id !== "string") throw new Error("Snapshot ID required");
+          if (input.action === "preview") return json(await snapshots.preview(cwd, input.id, input.redo === true));
+          if (input.action === "restore") { await projectIdle(cwd); return json(await snapshots.restore(cwd, input.id, input.redo === true)); }
+        }
+        throw new Error("Unsupported project operation");
       }
       const terminalMatch = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/terminal(?:\/(start|input|resize|stop))?$/.exec(url.pathname);
       if (terminalMatch) {
@@ -499,18 +574,23 @@ const server = Bun.serve({
           const cols = Math.max(40, Math.min(240, Number(input.cols) || 100));
           const rows = Math.max(12, Math.min(100, Number(input.rows) || 30));
           const pty = new PtySession();
+          await snapshots.begin(item.cwd, id);
           const terminal = { pty, output: "" };
           terminals.set(id, terminal);
           const plan = await buildLaunch({ appRoot, cwd: item.cwd, sessionDir, sessionId: id, dataRoot, agentDir: configuration.agentDir,
             mode: "terminal", terminalTheme: await configuration.themeUnset(), ...(ompSessionId ? { ompSessionId } : {}) });
-          void captureTerminalSession(id, sessionDir);
+          const started = Date.now();
+          void captureTerminalSession(id, sessionDir, started).catch(error => emit(id, { type: "host_error", error: String(error) }));
+          const finishTerminal = async (exitCode?: number) => {
+            await captureTerminalSession(id, sessionDir, started, true).catch(error => emit(id, { type: "host_error", error: String(error) }));
+            await snapshots.finish(item.cwd, id, "terminal-exit").catch(error => emit(id, { type: "host_error", error: `Snapshot: ${String(error)}` }));
+            terminals.delete(id); emit(id, { type: "terminal_exit", exitCode });
+            void host(id).catch(error => emit(id, { type: "host_error", error: String(error) }));
+          };
           void pty.startArgv({ application: process.execPath, args: plan.argv, cwd: item.cwd, env: plan.env, cols, rows }, (error, chunk) => {
             if (error) emit(id, { type: "terminal_error", error: error.message });
             if (chunk) { terminal.output = (terminal.output + chunk).slice(-100_000); emit(id, { type: "terminal_chunk", chunk }); }
-          }).then(result => emit(id, { type: "terminal_exit", exitCode: result.exitCode })).catch(error => emit(id, { type: "terminal_error", error: String(error) })).finally(() => {
-            terminals.delete(id);
-            void host(id).catch(error => emit(id, { type: "host_error", error: String(error) }));
-          });
+          }).then(result => finishTerminal(result.exitCode), async error => { emit(id, { type: "terminal_error", error: String(error) }); await finishTerminal(); });
           emit(id, { type: "terminal_start" });
           return json({ active: true });
         }
@@ -619,10 +699,11 @@ const server = Bun.serve({
           if (work) emit(id, { type: "host_command_start" });
           let response;
           try {
-            response = await process.command(input as unknown as RpcCommand, work ? 300_000 : 30_000);
-            if (work && !process.hasPendingWork) emit(id, { type: "host_command_end" });
+            const execute = () => process.command(input as unknown as RpcCommand, work ? 300_000 : 30_000);
+            response = await (["prompt", "steer", "follow_up", "abort_and_prompt", "bash", "handoff"].includes(input.type) ? admittedTask(id, process, execute) : execute());
+            if (work && await reclaimable(process)) emit(id, { type: "host_command_end" });
           } catch (error) {
-            if (work && !process.hasPendingWork) emit(id, { type: "host_command_end", error: String(error) });
+            if (work && await reclaimable(process)) emit(id, { type: "host_command_end", error: String(error) });
             throw error;
           }
           const item = record(id);
@@ -657,6 +738,7 @@ scheduler.start();
 process.on("SIGINT", () => {
   scheduler.stop();
   for (const terminal of terminals.values()) terminal.pty.kill();
+  shells.stop();
   for (const pending of processes.values()) void pending.then(child => child.stop(), () => undefined);
   server.stop(true);
 });

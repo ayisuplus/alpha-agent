@@ -4,6 +4,7 @@ export const desktopCommands = [
   { id: "palette", name: "commands", description: "命令面板", key: "Ctrl+K" },
   { id: "new", name: "new", description: "新会话", key: "Ctrl+N" },
   { id: "settings", name: "settings", description: "设置", key: "Ctrl+," },
+  { id: "projects", name: "projects", description: "项目与工作树" },
   { id: "files", name: "files", description: "项目文件", key: "Ctrl+Shift+F" },
   { id: "review", name: "review", description: "改动审查" },
   { id: "terminal", name: "terminal", description: "项目终端" },

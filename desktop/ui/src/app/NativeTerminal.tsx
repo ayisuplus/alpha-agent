@@ -34,14 +34,14 @@ const ALPHA_SKY: ITheme = {
 };
 
 /** Native OMP TUI in the same session; the server suspends RPC while this owns it. */
-export function NativeTerminal({ id, output, onError }: { id: string; output: string; onError(value: string): void }) {
+export function NativeTerminal({ id, output, onError, channel = "terminal" }: { id: string; output: string; onError(value: string): void; channel?: string }) {
   const element = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | null>(null);
   const written = useRef("");
   useEffect(() => {
     if (!element.current) return;
     let active = true;
-    const post = (action: string, data: unknown) => sessionRequest(id, `terminal/${action}`, data).catch(cause => { if (active) onError(String(cause)); });
+    const post = (action: string, data: unknown) => sessionRequest(id, `${channel}/${action}`, data).catch(cause => { if (active) onError(String(cause)); });
     const xterm = new Terminal({ fontFamily: "Cascadia Code, Consolas, monospace", fontSize: 13, theme: ALPHA_SKY });
     const fit = new FitAddon();
     xterm.loadAddon(fit);
@@ -56,7 +56,7 @@ export function NativeTerminal({ id, output, onError }: { id: string; output: st
     resize.observe(element.current);
     xterm.focus();
     return () => { active = false; input.dispose(); resize.disconnect(); xterm.dispose(); terminal.current = null; written.current = ""; };
-  }, [id, onError]);
+  }, [id, onError, channel]);
   useEffect(() => {
     if (!terminal.current) return;
     if (output.startsWith(written.current)) terminal.current.write(output.slice(written.current.length));

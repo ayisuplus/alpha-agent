@@ -44,7 +44,7 @@ export function NativePlan({ session }: { session: SessionController }) {
   };
   const review = plan?.phase === "review";
   const saveDraft = (body: string, annotations: Record<string, string>) => { try { desktopStorage.setItem(draftKey, JSON.stringify({ path: plan?.planFilePath, content: body, previous, feedback: annotations })); } catch (cause) { session.setError(String(cause)); } };
-  const dismiss = async () => { if (content !== previous && !await run("edit")) return; await run("dismiss"); };
+  const dismiss = async () => { if (!await run("edit")) return; await run("dismiss"); };
   return <div className="native-plan-bar">
     <button disabled={busy || !session.opened} onClick={() => void run("toggle", { content: undefined })}>{plan?.phase === "active" || review ? "暂停计划" : plan?.phase === "paused" ? "退出计划" : "进入计划"}</button>
     {plan?.phase === "paused" && <button disabled={busy} onClick={() => void run("resume")}>继续原计划</button>}

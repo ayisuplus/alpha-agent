@@ -298,6 +298,27 @@
 .native-history-list { max-height: 55vh; overflow: auto; margin-top: 12px; }
 .native-history-row { display: flex; gap: 6px; margin: 4px 0; }
 .native-history-row button:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.native-file-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+.native-file-tabs span { display: inline-flex; max-width: 100%; border-bottom: 1px solid var(--border-subtle); }
+.native-file-tabs button { min-width: 0; padding: 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-file-tabs [aria-pressed="true"] { background: var(--bg-active); }
+.native-file-search, .native-line-reference { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0; }
+.native-file-search > input { min-width: 120px; flex: 1; }
+.native-file-search label { display: flex; align-items: center; gap: 4px; }
+.native-line-reference label { font-size: var(--ui-caption); }
+.native-line-reference input { width: 68px; margin-left: 4px; }
+.native-numbered-lines > div { display: flex; gap: 8px; align-items: baseline; }
+.native-numbered-lines > div.selected { background: var(--bg-active); }
+.native-numbered-lines button { flex: 0 0 40px; text-align: right; color: var(--text-muted); padding: 0; min-height: 24px; font: inherit; }
+.native-numbered-lines code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.native-modal > .native-project-item { display: block; text-align: left; padding: 12px 0; border-bottom: 1px solid var(--border-subtle); }
+.native-project-item :is(strong, small) { display: block; overflow-wrap: anywhere; }
+.native-modal > label { display: block; margin: 12px 0; }
+.native-modal > label input { display: block; width: 100%; }
+.native-snapshot { display: flex; flex-direction: column; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid var(--border-subtle); font-size: var(--ui-caption); }
+.native-snapshot small { color: var(--text-muted); }
+.native-diff-line-comment { min-height: 0; padding: 0 6px; border-right: 1px solid var(--border-subtle); margin-right: 8px; color: var(--text-muted); font: inherit; }
+.native-session-terminal > summary { padding: 16px; cursor: pointer; }
 @media (max-width: 760px) {
   .native-workbench { --native-sidebar-width: var(--sidebar-rail); }
   .native-workbench:not(.native-sidebar-collapsed) > .native-sidebar { position: fixed; z-index: 15; inset: 0 auto 0 0; width: var(--sidebar-width); box-shadow: var(--shadow-pop); }

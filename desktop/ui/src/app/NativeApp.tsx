@@ -16,6 +16,7 @@ import { NativeWorkspace, type WorkspaceTab } from "./NativeWorkspace";
 import { nativeImages, useSession } from "./useSession";
 import { NativeCommands } from "./NativeCommands";
 import { NativeSessionTools } from "./NativeSessionTools";
+import { NativeProjects } from "./NativeProjects";
 import { invokeDesktopCommand, shortcutCommand, type DesktopCommandEvent } from "./desktop-commands";
 import "./NativeApp.css";
 import { errorHelp, readDraft } from "./workbench-state";
@@ -24,6 +25,7 @@ export function NativeApp() {
   const session = useSession();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(false);
   const [sessionTools, setSessionTools] = useState<"history" | "progress" | null>(null);
   const [settingsSection, setSettingsSection] = useState("model");
   const openSettings = (section = "model") => { setSettingsSection(section); setSettingsOpen(true); };
@@ -101,6 +103,7 @@ export function NativeApp() {
         if (id === "palette") setPaletteOpen(true);
         else if (id === "new") selectSession(null);
         else if (id === "settings") openSettings();
+        else if (id === "projects") setProjectsOpen(true);
         else if (["skills", "mcp", "plugins"].includes(id)) openSettings(id);
         else if (["files", "review", "terminal"].includes(id)) { if (id === "files" && args) openFile(args); else openWorkspace(id as WorkspaceTab); }
         else {
@@ -215,6 +218,7 @@ export function NativeApp() {
       <button onClick={() => { session.setError(""); setError(""); }}>关闭</button></div>}
     <NativeDialogs session={session} />
     {paletteOpen && <NativeCommands session={session} onClose={() => setPaletteOpen(false)} />}
+    {projectsOpen && <NativeProjects session={session} onClose={() => setProjectsOpen(false)} />}
     {sessionTools && session.selected && session.opened && <NativeSessionTools key={session.selected} session={session} initial={sessionTools} onClose={() => setSessionTools(null)} />}
   </div>;
 }

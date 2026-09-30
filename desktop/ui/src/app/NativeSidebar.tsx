@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen, Pin, Plus, Settings, Sparkles, Timer } from "lucide-react";
 import { nativeApi, type LegacyTask, type SessionItem } from "./native-api";
 import { groupSessions } from "./workbench-state";
+import { invokeDesktopCommand } from "./desktop-commands";
 
 function savedList(key: string): string[] {
   try { const value = JSON.parse(desktopStorage.getItem(key) ?? "[]"); return Array.isArray(value) ? value.filter(item => typeof item === "string") : []; }
@@ -85,6 +86,7 @@ export function NativeSidebar({ collapsed, onToggle, sessions, legacy, selected,
         <button onClick={() => onContinueLegacy(item)} disabled={busy}>继续这个任务</button>
       </div>)}</div>}
     <div className="native-sidebar-footer"><nav className="native-sidebar-links" aria-label="功能入口">
+      <button onClick={() => void invokeDesktopCommand("projects")} title="项目与工作树" aria-label="项目与工作树"><span className="native-sidebar-label">项目</span></button>
       {[{ id: "skills", label: "技能", Icon: Sparkles }, { id: "schedules", label: "定时任务", Icon: Timer }].map(({ id, label, Icon }) =>
         <button key={id} onClick={() => onOpenSettings(id)} aria-label={label} title={label}><Icon size={17} /><span className="native-sidebar-label">{label}</span></button>)}
     </nav><button className="native-settings-entry" onClick={() => onOpenSettings()} aria-label="设置" title="设置"><Settings size={17} /><span className="native-sidebar-label">设置</span><kbd>Ctrl ,</kbd></button></div>

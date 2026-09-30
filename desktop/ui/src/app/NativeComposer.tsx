@@ -24,6 +24,7 @@ export function NativeComposer({ session, models, model, thinking, onModel, onTh
   const fileInput = useRef<HTMLInputElement>(null);
   const inFlight = useRef(false);
   const latest = useRef(draft);
+  const referenceQuery = /(?:^|\s)@([^\s]*)$/.exec(draft.text)?.[1] ?? null;
   latest.current = draft;
   const update = (value: ComposerDraft) => {
     value = { ...value, model, thinking, ...(home ? { cwd: projectPath } : {}) };
@@ -50,10 +51,16 @@ export function NativeComposer({ session, models, model, thinking, onModel, onTh
     void sessionRequest<{ files: typeof files }>(session.selected, "files").then(result => { if (!cancelled) setFiles(result.files); }, () => undefined);
     return () => { cancelled = true; };
   }, [session.selected, session.opened]);
+  useEffect(() => {
+    if (!referenceQuery || !session.selected || !session.opened) return;
+    let cancelled = false;
+    const timer = setTimeout(() => void sessionRequest<{ matches: Array<{ path: string; isDirectory: boolean }> }>(session.selected!, `search?q=${encodeURIComponent(referenceQuery)}`).then(result => { if (!cancelled) setFiles(result.matches.filter(item => !item.isDirectory).map(item => ({ name: item.path.split(/[\\/]/).at(-1)!, path: item.path, type: "file" }))); }, cause => { if (!cancelled) session.setError(String(cause)); }), 200);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [referenceQuery, session.selected, session.opened]);
   const images = draft.images ?? (draft.image ? [draft.image] : []);
   const slash = /^\/([^\s]*)$/.exec(draft.text), reference = /(?:^|\s)@([^\s]*)$/.exec(draft.text);
   const completions = slash ? [...desktopCommands, ...commands.filter(item => !desktopCommands.some(command => command.name === item.name))].filter(item => item.name.toLowerCase().includes(slash[1].toLowerCase())).map(item => ({ label: `/${item.name}`, value: `/${item.name} `, description: item.description }))
-    : reference ? files.filter(item => item.type === "file" && item.name.toLowerCase().includes(reference[1].toLowerCase())).map(item => ({ label: item.name, value: `${draft.text.slice(0, draft.text.length - reference[1].length - 1)}@${JSON.stringify(item.path)} `, description: item.path })) : [];
+    : reference ? files.filter(item => item.type === "file").map(item => ({ label: item.name, value: `${draft.text.slice(0, draft.text.length - reference[1].length - 1)}@${JSON.stringify(item.path)} `, description: item.path })) : [];
   useEffect(() => { setCompletionIndex(0); }, [draft.text]);
   const complete = (index: number) => { if (completions[index]) update({ ...draft, text: completions[index].value }); input.current?.focus(); };
   const chosen = models.find(item => item.selector === model);

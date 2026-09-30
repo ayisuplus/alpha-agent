@@ -16,6 +16,8 @@ import { loadCapability, type Skill as DiscoveredSkill } from "@oh-my-pi/pi-codi
 import { skillCapability } from "@oh-my-pi/pi-coding-agent/capability/skill";
 import type { ExtensionCatalog, ExtensionRow, HostMethod } from "./host-types";
 import { NativePlanHost } from "./plan-host";
+import { createSessionWorktree } from "@oh-my-pi/pi-coding-agent/session/session-worktree";
+import { requireGit } from "@oh-my-pi/pi-natives/vcs";
 
 export function redact(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redact);
@@ -45,6 +47,14 @@ export class NativeHostControl {
     if (method === "plan") return this.plan.request(input);
     if (method === "tree") return this.session.sessionManager.getTree();
     if (method === "usage") return { usage: this.session.getContextUsage(), stats: this.session.getSessionStats() };
+    if (method === "worktree") {
+      if (input.action === "list") return requireGit(this.cwd).worktrees();
+      if (input.action === "create") {
+        if (!isRpcSessionSettled(this.session)) throw new Error("Wait for the session to settle");
+        return createSessionWorktree(this.cwd, this.session.settings, text(input, "branch"));
+      }
+      throw new Error("Unsupported worktree operation");
+    }
     if (method === "navigate") {
       if (!isRpcSessionSettled(this.session)) throw new Error("Wait for the session to settle");
       const result = await this.session.navigateTree(text(input, "entryId"), { summarize: input.summarize === true });

@@ -10,6 +10,9 @@ import type { SessionController } from "./useSession";
 import { nativeApi, sessionRequest, toolPayload } from "./native-api";
 import { NativeTerminal } from "./NativeTerminal";
 import { NativeFiles } from "./NativeFiles";
+import { NativeProjectShells } from "./NativeProjectShells";
+import { NativeSnapshots } from "./NativeSnapshots";
+import { NativeDiffFeedback } from "./NativeDiffFeedback";
 import { diffFiles, evidenceLabel } from "./workbench-state";
 
 /** 截屏画面自适应样式：样式表没有对应图片规则，其余复用现有类。 */
@@ -43,12 +46,13 @@ function ReviewPanel({ session, onOpenFile }: { session: SessionController; onOp
         <h4>{section.title}</h4>{diffFiles(section.diff).map((file, index) => <details className="native-diff-file" key={`${file.path}:${index}`}>
           <summary><span title={file.path}>{file.path}</span><span className="tone-text-success">+{file.added}</span><span className="tone-text-danger">−{file.removed}</span></summary>
           <button className="native-file-link" onClick={() => onOpenFile(file.path)}>预览当前文件</button>
-          <pre className="native-diff-lines">{file.lines.map((line, number) => <span key={number} className={line.startsWith("+") && !line.startsWith("+++") ? "added" : line.startsWith("-") && !line.startsWith("---") ? "removed" : line.startsWith("@@") ? "hunk" : ""}>{line || " "}{"\n"}</span>)}</pre>
+          <NativeDiffFeedback session={session} path={file.path} lines={file.lines} source={section.title} />
         </details>)}<details><summary>原始差异</summary><pre className="native-review-output">{section.diff}</pre></details>
       </section>)}
       {review.truncated && <p className="native-muted">改动内容较大，当前显示已截断。</p>}
     </>}
     <h4>会话产物</h4>
+    <NativeSnapshots session={session} />
     {artifacts.length ? artifacts.map((artifact, index) => <div className="native-file" key={`${artifact.path}:${index}`}><button title={artifact.path} onClick={() => onOpenFile(artifact.path)}>{artifact.path.split(/[\\/]/).at(-1)}</button><small>{artifact.kind}</small></div>) : <p className="native-muted">还没有工具回传的产物。</p>}
   </div>;
 }
@@ -56,12 +60,15 @@ function ReviewPanel({ session, onOpenFile }: { session: SessionController; onOp
 function TerminalPanel({ session }: { session: SessionController }) {
   if (!session.selected) return <div className="native-panel"><p className="native-muted">选择或创建会话后，可打开该会话的 Alpha 终端。</p></div>;
   return <div className="native-terminal-panel">
+    <NativeProjectShells key={session.selected} session={session} />
+    <details className="native-session-terminal"><summary>会话终端与运行日志</summary>
     <div className="native-panel"><h3>Alpha 终端</h3><p className="native-muted">使用当前原生会话；打开期间对话由终端接管。收起右栏不会停止终端。</p>
       {session.terminalActive ? <button onClick={() => void session.terminal("stop")}>关闭 Alpha 终端</button>
         : <button disabled={session.busy || !session.state?.isSettled || session.state.hasPendingAsyncWork} onClick={() => void session.terminal("start")}>打开 Alpha 终端</button>}
     </div>
     {session.terminalActive ? <NativeTerminal id={session.selected} output={session.terminalOutput} onError={session.setError} />
       : <div className="native-panel"><h4>运行日志</h4>{session.logs.length ? session.logs.map((log, index) => <p className="native-log" key={index}><time>{log.at}</time> {log.text}</p>) : <p className="native-muted">还没有运行事件。</p>}</div>}
+    </details>
   </div>;
 }
 

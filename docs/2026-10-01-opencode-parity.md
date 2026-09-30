@@ -9,8 +9,8 @@
 | 1 | skills、mcp、plugins | 原生 SDK 宿主、运行时目录、Skill 导入编辑启停、MCP 生命周期与认证、原生插件管理 | 已接入；fixture 和 Electron 渲染通过，完整外部授权验收待做 |
 | 2 | session commands、composer、requests | 共享命令目录、补全、多图草稿、队列、原生会话树、全文搜索标签、压缩导出、todo 与子 agent | 已接入；会话恢复集成与 Electron 入口通过，真实并行子任务和队列专项待做 |
 | 2 | OMP 原生计划机制 | local:// 文件、xd://propose 审阅、五种选择、模型工具恢复、暂停重进 | 五种选择及取消压缩通过真实内核 fixture；Electron 审阅和清空执行通过；外部编辑器/系统另存对话框待人工验收 |
-| 3 | workspace、file、review、terminal | worktree、文件搜索标签与行引用、行级反馈、独立 shell、外部编辑器 | 待实现 |
-| 3 | snapshot / revert | 独立快照、差异预览、冲突保护、撤销重做 | 待实现 |
+| 3 | workspace、file、review、terminal | worktree、文件搜索标签与行引用、行级反馈、独立 shell、外部编辑器 | 已接入；原生行为与 Electron 操作通过，外部编辑器系统交互待人工验收 |
+| 3 | snapshot / revert | 独立快照、差异预览、冲突保护、撤销重做 | 原生集成与 Electron 撤销重做通过；冲突由集成专项验证，UI 冲突专项待做 |
 | 4 | providers、models、permissions、LSP | 原生配置与凭据、自定义服务商、权限规则、规则命令任务配置与 LSP | 待实现 |
 | 4 | settings、desktop menu、updater | 快捷键、字体主题、通知声音、语言、多窗口、日志、导入与在线更新 | 待实现 |
 | 4 | packaging | 便携包、Office 探针、安装包、更新失败恢复 | 待验收 |
@@ -42,11 +42,11 @@
 | 2.7 | 原生计划入口、修订和重进恢复 | 原生 plan 状态、产物和模式日志；薄桌面审阅控制器 | native-plan.test：write/edit 限制、持续修订、暂停/重进、审阅重启恢复通过；local:// 使用原生 resolver 预览 |
 | 2.8 | 计划五种审阅与分节反馈 | 原生 preparePlanForReview、compact、newSession、模型转换和产物复制 | 五种选择、旧内容冲突、关闭不批准、压缩取消不执行通过；分节反馈已接；外部编辑器/系统另存待人工验收 |
 | 2.9 | 计划模型工具恢复、互斥、内部停止 | 原生 model-transition、tool partition、mode exit teardown | 模型恢复、计划角色实时更改、批准后实际 write 恢复通过；内部停止独立显示；goal/vibe 互斥及异常失败专项仍待做 |
-| 3.1 | 项目、worktree、保留既有改动 | 原生 createSessionWorktree 与 vcs | 已有项目分组；工作区入口待实施 |
-| 3.2 | 文件树、搜索、标签与行引用 | 现有安全文件 API + 搜索适配 | 文件树/预览已有；搜索、标签、行引用待实施 |
-| 3.3 | 修改审查和行级反馈 | 现有 projectReview（整体项目 Git） | 审查已有；反馈回填待实施 |
-| 3.4 | 文件撤销重做与冲突阻止 | Alpha 数据目录独立 Git 快照 | 待实施；不得以原生 context rewind 代替 |
-| 3.5 | 独立项目 shell、多标签、编辑器 | 原生 PtySession；现有会话终端接管 | 会话终端已有；独立 shell 和编辑器待实施 |
+| 3.1 | 项目、worktree、保留既有改动 | 原生 createSessionWorktree 与 vcs，Alpha 注册自建工作树 | 原生与 Electron 创建通过；保留暂存/未暂存/新文件、拒绝脏清理通过 |
+| 3.2 | 文件树、搜索、标签与行引用 | 现有安全文件 API + 原生 fuzzyFind/grep | Unicode 路径、字面内容搜索通过；Electron 双标签与真实行范围回填通过 |
+| 3.3 | 修改审查和行级反馈 | projectReview + 原生 diff 行号，反馈回填输入框 | Electron 选择差异行、输入反馈、回填保留草稿通过 |
+| 3.4 | 文件撤销重做与冲突阻止 | Alpha 数据目录独立 Git 快照 | 原生二进制/删除恢复、用户编辑/跨会话冲突、冷崩溃间隙、长路径通过；Electron 预览撤销/重做通过 |
+| 3.5 | 独立项目 shell、多标签、编辑器 | 原生 PtySession；现有会话终端接管 | 两个真实 PowerShell 标签、输出与写文件、跨项目拒绝通过；Electron 标签开关通过；编辑器按钮已接，系统编辑器待人工验收 |
 | 4.1 | 自定义服务商端点、Key/OAuth | 原生 ModelRegistry/AuthStorage/models.yml | Key/模型界面已有；自定义端点待实施 |
 | 4.2 | 模型与计划/执行思考设置 | 原生 model role / thinking 配置 | 通用设置已有；计划角色接入待实施 |
 | 4.3 | 规则、自定义命令、原生任务配置 | 原生发现目录与 settings 元数据 | 任务设置已有；文件配置入口待实施 |
@@ -68,6 +68,16 @@
 - `native-plan.test.ts` 使用真实 write/edit/xdev、原生会话日志、模型切换、压缩与取消，不用提示词模拟写入限制。原生模式退出 teardown 包围上下文与模型工具转换；避免压缩完成后排队输入在计划模型上提前运行。
 - Electron 第二批结果 `session-ui-result.json`：真实生产 preload 与磁盘状态存储、窗口重建恢复图片/文字和选择、命令目录、历史/进度入口、计划正文编辑、关闭不批准、清空上下文后执行。截图 `plan-review-electron.png`、`session-electron.png`；本机模型固定输出只证明接口与渲染，不代替外部模型或系统文件对话框验收。
 - 原生 RPC branch 的响应只返回 `text`，会丢弃 SDK 的 `selectedImages`。桌面通过同一 session 的 SDK branch 补充带图响应，未改动原生 RPC 协议；记录旧 ID 与新 ID，并保持两者原始会话文件。
+- 第二批提交后的全套复核：110 pass/0 fail、747 assertions、261.59 秒。
+- 第三批全套回归：118 pass/0 fail、793 assertions、283.38 秒；`bun run check`、`bun run build:desktop-ui` 通过。随后会话终端身份与快照收尾调整的专项：1 pass/0 fail、42 assertions、140.16 秒。未修改 Skill 正文。
+- `native-project-workbench.test.ts`：调用实际 OMP worktree、native fuzzy/grep、PtySession，验证源项目既有暂存/未暂存/新文件保留，拒绝脏工作树清理；真实模型 fixture 的 write 后，只有原生 settled 才写结束快照，撤销恢复原始材料且暂存区不动。
+- `native-project-snapshots.test.ts`：独立裸 Git 对象、原始二进制/CRLF、文件删除与新文件、撤销重做、预览后用户编辑、跨会话后续改动、崩溃间隙及 Windows 长路径均有专项。恢复前保存恢复记录与备份对象，恢复中遇到后续编辑会停止并回滚自身已经应用的内容。
+- 快照排除 Alpha 数据目录、原生全局运行目录和当前 profile；Git 项目沿用 Git 的 tracked/untracked/ignore 边界，子模块目录不被替换或重置。单文件 50 MB、总计 512 MB 上限超出会如实阻止任务启动并报告，未把超限工作区算作验收完成。
+- Windows Git 初始化与对象写入遇到 MAX_PATH：复用 `pi-natives/path.getWindowsShortPath`，同时启用该次命令的 core.longpaths；没有改动系统长路径开关，也没有把快照迁出 Alpha 数据目录。
+- 当前原生 `worktreeRemove(path, false)` 在实测中能删除带复制改动的工作树，因此 Alpha 在调用前必须验证两次 Git 状态，并只接受自己登记的工作树；不调用原生 source clean、不重置源仓库、不删除分支。
+- Electron 41.2.2 第三批 `ALPHA_PROJECT_UI_OK`：项目搜索、双文件标签、行范围回填、差异行反馈、两个独立终端标签、真实 native write 后的预览撤销/重做，以及从桌面创建真实工作树。证据 `artifacts/parity-2026-10-01-batch3-proof/project-ui-result.json`、`project-workbench-electron.png`；UI 冲突展示、系统编辑器/选择目录对话框仍单独待验收。
+- 会话终端持续通过原生 session-loader 读取当前日志 ID/title；退出后完成身份和快照收尾再交回 RPC，避免 TUI `/new` 后误续旧会话。计划关闭审阅同时保存正文和分节反馈，不批准执行。
+- 终端身份专项补充：native-project-workbench 共 3 pass/0 fail、24 assertions、19.11 秒；实际 TUI `/new`、发出任务、停止后 RPC 恢复到新 ID，原 ID 保留且终端结束快照已落盘。
 
 # OMP 18.4.3 原生能力复用审查
 
