@@ -50,7 +50,9 @@ try {
   const auth = { "x-alpha-token": "portable-probe-token" };
   const post = (path: string, input: unknown) => fetch(`http://127.0.0.1:${port}/api/native/${path}`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(input) });
   if (!(await post("credentials", { provider: "deepseek", action: "save", key: "alpha-probe-not-a-real-key" })).ok) throw new Error("Isolated probe credentials failed");
-  if (!(await post("settings", { role: "default", model: "deepseek/deepseek-chat" })).ok) throw new Error("Isolated probe model configuration failed");
+  const catalog = await fetch(`http://127.0.0.1:${port}/api/native/models`, { headers: auth }).then(response => response.json()) as { models: Array<{ provider: string; available: boolean; selector: string }> };
+  const model = catalog.models.find(item => item.provider === "deepseek" && item.available);
+  if (!model || !(await post("settings", { role: "default", model: model.selector })).ok) throw new Error("Isolated probe model configuration failed");
   const created = await fetch(`http://127.0.0.1:${port}/api/native/sessions`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify({ cwd: workspace, title: "Portable smoke" }) });
   if (!created.ok) throw new Error(`Portable session creation failed: ${await created.text()}`);
   const id = (await created.json() as { session: { id: string } }).session.id;
