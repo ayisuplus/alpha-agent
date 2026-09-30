@@ -1,3 +1,0 @@
-[test]
-# Tests never provision the real Windows sandbox (its first setup asks for administrator approval).
-preload = ["./test/setup.ts"]
