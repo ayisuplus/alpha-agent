@@ -5,60 +5,60 @@
 :root {
   color-scheme: light;
 
-  --bg-app: #fcfaf8;
-  --bg-sidebar: #f6f2ec;
-  --bg-surface: #ffffff;
-  --bg-elevated: #faf7f3;
-  --bg-hover: #f1ece5;
-  --bg-active: #ece6dd;
-  --bg-inset: #f7f3ee;
+  --bg-app: light-dark(#fcfaf8, #1d1c1a);
+  --bg-sidebar: light-dark(#f6f2ec, #24221f);
+  --bg-surface: light-dark(#ffffff, #292723);
+  --bg-elevated: light-dark(#faf7f3, #302d28);
+  --bg-hover: light-dark(#f1ece5, #36322d);
+  --bg-active: light-dark(#ece6dd, #403c35);
+  --bg-inset: light-dark(#f7f3ee, #211f1c);
   /* Warm sand, used behind names and labels the way a highlighter marks a line. */
-  --bg-highlight: #ebe5dc;
+  --bg-highlight: light-dark(#ebe5dc, #484237);
 
-  --border-subtle: #f0ebe5;
-  --border: #e6dfd5;
-  --border-strong: #cfc6b9;
+  --border-subtle: light-dark(#f0ebe5, #35312c);
+  --border: light-dark(#e6dfd5, #464139);
+  --border-strong: light-dark(#cfc6b9, #686052);
 
-  --text: #1a1a1a;
-  --text-secondary: #3f3b36;
-  --text-muted: #6e685f;
-  --text-faint: #736b61;
+  --text: light-dark(#1a1a1a, #eee9e0);
+  --text-secondary: light-dark(#3f3b36, #d2cabe);
+  --text-muted: light-dark(#6e685f, #b1a89a);
+  --text-faint: light-dark(#736b61, #a79d8f);
 
   /* Sage: links, running and selected states. */
-  --accent: #4b6a52;
-  --accent-strong: #3d5a44;
-  --accent-deep: #2f4735;
-  --accent-bg: #eef2ea;
-  --accent-border: #c5d3bf;
+  --accent: light-dark(#4b6a52, #abc39e);
+  --accent-strong: light-dark(#3d5a44, #bfd0b5);
+  --accent-deep: light-dark(#2f4735, #c4d8bf);
+  --accent-bg: light-dark(#eef2ea, #2b3629);
+  --accent-border: light-dark(#c5d3bf, #53634a);
   /* Primary actions are ink pills. */
-  --accent-soft: #1a1a1a;
-  --accent-soft-hover: #3a3733;
-  --accent-soft-border: #1a1a1a;
-  --accent-gold: #8a6a45;
-  --accent-warm: #ebe5dc;
+  --accent-soft: light-dark(#1a1a1a, #eee9e0);
+  --accent-soft-hover: light-dark(#3a3733, #d2cabe);
+  --accent-soft-border: light-dark(#1a1a1a, #eee9e0);
+  --accent-gold: light-dark(#8a6a45, #d0ad75);
+  --accent-warm: light-dark(#ebe5dc, #403c35);
   /* Foregrounds: --on-accent sits on the sage --accent, --on-accent-soft on the ink primary. */
-  --on-accent: #ffffff;
-  --on-accent-soft: #ffffff;
-  --ink: #1a1a1a;
+  --on-accent: light-dark(#ffffff, #1d1c1a);
+  --on-accent-soft: light-dark(#ffffff, #1d1c1a);
+  --ink: light-dark(#1a1a1a, #eee9e0);
   --halftone: #b4c3a6;
 
-  --success: #3f6b47;
-  --success-bg: #eef3ea;
-  --success-border: #c3d4bd;
-  --warning: #8a6418;
-  --warning-bg: #fbf3e3;
-  --warning-border: #e8d3a3;
-  --danger: #a3443c;
-  --danger-bg: #fbefeb;
-  --danger-border: #e9bdb4;
+  --success: light-dark(#3f6b47, #a8c69c);
+  --success-bg: light-dark(#eef3ea, #2b3629);
+  --success-border: light-dark(#c3d4bd, #53634a);
+  --warning: light-dark(#8a6418, #dfbd76);
+  --warning-bg: light-dark(#fbf3e3, #3b3020);
+  --warning-border: light-dark(#e8d3a3, #746038);
+  --danger: light-dark(#a3443c, #e5a59b);
+  --danger-bg: light-dark(#fbefeb, #3e2926);
+  --danger-border: light-dark(#e9bdb4, #7c5048);
 
   /* Warm paper, not the warning palette: the person's own words should read as calm, not flagged. */
-  --user-bubble-bg: #f3eee6;
-  --user-bubble-border: #e9e1d5;
+  --user-bubble-bg: light-dark(#f3eee6, #322e28);
+  --user-bubble-border: light-dark(#e9e1d5, #494237);
 
-  --diff-add-bg: #edf5ec;
+  --diff-add-bg: light-dark(#edf5ec, #293727);
   --diff-add-gutter: #dcebd9;
-  --diff-del-bg: #fbefeb;
+  --diff-del-bg: light-dark(#fbefeb, #3d2926);
   --diff-del-gutter: #f4ddd6;
 
   /* Body text in the system UI face, greetings in a Kai face, numbers and code in a monospace face. */
@@ -97,3 +97,6 @@
   --preview-min: 360px;
   --splitter: 6px;
 }
+
+:root[data-alpha-theme="dark"] { color-scheme: dark; }
+@media (prefers-color-scheme: dark) { :root[data-alpha-theme="system"] { color-scheme: dark; } }

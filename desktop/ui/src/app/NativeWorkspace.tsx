@@ -10,6 +10,7 @@ import type { SessionController } from "./useSession";
 import { nativeApi, sessionRequest, toolPayload } from "./native-api";
 import { NativeTerminal } from "./NativeTerminal";
 import { NativeFiles } from "./NativeFiles";
+import { diffFiles } from "./workbench-state";
 
 /** 截屏画面自适应样式：样式表没有对应图片规则，其余复用现有类。 */
 const FRAME_STYLE: CSSProperties = { maxWidth: "100%", maxHeight: "100%", border: "1px solid var(--border)", background: "white" };
@@ -18,7 +19,7 @@ export type WorkspaceTab = "review" | "terminal" | "browser" | "files" | "logs";
 
 type ProjectReview = { available: boolean; status: string; staged: string; unstaged: string; truncated: boolean; reason?: string };
 
-function ReviewPanel({ session }: { session: SessionController }) {
+function ReviewPanel({ session, onOpenFile }: { session: SessionController; onOpenFile(path: string): void }) {
   const [review, setReview] = useState<ProjectReview | null>(null);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
@@ -38,12 +39,17 @@ function ReviewPanel({ session }: { session: SessionController }) {
     <p className="native-muted">当前项目整体 Git 改动；未跟踪文件只列路径。</p>
     {error ? <p role="alert">{error}</p> : !review ? <p className="native-muted">正在读取…</p> : !review.available ? <p className="native-muted">{review.reason}</p> : <>
       <pre className="native-review-output">{review.status || "工作区没有改动。"}</pre>
-      {!!review.staged && <><h4>已暂存</h4><pre className="native-review-output">{review.staged}</pre></>}
-      {!!review.unstaged && <><h4>未暂存</h4><pre className="native-review-output">{review.unstaged}</pre></>}
+      {[{ title: "已暂存", diff: review.staged }, { title: "未暂存", diff: review.unstaged }].filter(section => section.diff).map(section => <section key={section.title}>
+        <h4>{section.title}</h4>{diffFiles(section.diff).map((file, index) => <details className="native-diff-file" key={`${file.path}:${index}`}>
+          <summary><span title={file.path}>{file.path}</span><span className="tone-text-success">+{file.added}</span><span className="tone-text-danger">−{file.removed}</span></summary>
+          <button className="native-file-link" onClick={() => onOpenFile(file.path)}>预览当前文件</button>
+          <pre className="native-diff-lines">{file.lines.map((line, number) => <span key={number} className={line.startsWith("+") && !line.startsWith("+++") ? "added" : line.startsWith("-") && !line.startsWith("---") ? "removed" : line.startsWith("@@") ? "hunk" : ""}>{line || " "}{"\n"}</span>)}</pre>
+        </details>)}<details><summary>原始差异</summary><pre className="native-review-output">{section.diff}</pre></details>
+      </section>)}
       {review.truncated && <p className="native-muted">改动内容较大，当前显示已截断。</p>}
     </>}
     <h4>会话产物</h4>
-    {artifacts.length ? artifacts.map((artifact, index) => <p className="native-muted" key={`${artifact.path}:${index}`}>{artifact.kind} · {artifact.path}</p>) : <p className="native-muted">还没有工具回传的产物。</p>}
+    {artifacts.length ? artifacts.map((artifact, index) => <div className="native-file" key={`${artifact.path}:${index}`}><button title={artifact.path} onClick={() => onOpenFile(artifact.path)}>{artifact.path.split(/[\\/]/).at(-1)}</button><small>{artifact.kind}</small></div>) : <p className="native-muted">还没有工具回传的产物。</p>}
   </div>;
 }
 
@@ -174,7 +180,7 @@ function BrowserPanel({ visible }: { visible: boolean }) {
   </div>;
 }
 
-export function NativeWorkspace({ session, diagnostics, tab, setTab, onClose }: { session: SessionController; diagnostics: boolean; tab: WorkspaceTab; setTab(tab: WorkspaceTab): void; onClose(): void }) {
+export function NativeWorkspace({ session, diagnostics, tab, setTab, onClose, previewPath, onPreviewPath, onOpenFile, onResize }: { session: SessionController; diagnostics: boolean; tab: WorkspaceTab; setTab(tab: WorkspaceTab): void; onClose(): void; previewPath: string | null; onPreviewPath(path: string | null): void; onOpenFile(path: string): void; onResize(width: number): void }) {
   useEffect(() => { if (!diagnostics && tab === "logs") setTab("browser"); }, [diagnostics, tab]);
   const tabs: Array<{ id: WorkspaceTab; label: string; Icon: typeof Globe2 }> = [
     { id: "review", label: "审查", Icon: ClipboardCheck },
@@ -184,14 +190,19 @@ export function NativeWorkspace({ session, diagnostics, tab, setTab, onClose }: 
     ...(diagnostics ? [{ id: "logs" as const, label: "日志", Icon: Terminal }] : []),
   ];
   return <aside id="native-workspace" aria-label="右侧工作区" className={`native-workspace ${tab === "browser" ? "browser-open" : ""}`}>
+    <div className="native-workspace-resizer" role="separator" aria-label="调整右栏宽度" aria-orientation="vertical" tabIndex={0}
+      onKeyDown={event => { if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); onResize((event.currentTarget.parentElement?.getBoundingClientRect().width ?? 380) + (event.key === "ArrowLeft" ? 24 : -24)); } }}
+      onPointerDown={event => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); }}
+      onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) onResize(window.innerWidth - 56 - event.clientX); }}
+      onPointerUp={event => event.currentTarget.releasePointerCapture(event.pointerId)} />
     <div className="native-tabs" role="tablist" aria-label="工作区视图">
       {tabs.map(({ id, label, Icon }) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}><Icon size={15} /> {label}</button>)}
       <button className="native-workspace-close" aria-label="收起右侧栏" title="收起右侧栏" onClick={onClose}><PanelRightClose size={17} /></button>
     </div>
-    {tab === "review" && <ReviewPanel session={session} />}
+    {tab === "review" && <ReviewPanel session={session} onOpenFile={onOpenFile} />}
     {tab === "terminal" && <TerminalPanel session={session} />}
     {tab === "browser" && <BrowserPanel visible />}
-    <NativeFiles key={session.selected} session={session} visible={tab === "files"} />
+    <NativeFiles key={session.selected} session={session} visible={tab === "files"} previewPath={previewPath} onPreviewPath={onPreviewPath} />
     {tab === "logs" && <div className="native-panel">
       <h3>运行日志</h3>
       {session.logs.length ? session.logs.map((log, index) => <p className="native-log" key={index}><time>{log.at}</time> {log.text}</p>) : <p className="native-muted">还没有运行事件。</p>}

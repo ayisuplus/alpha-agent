@@ -8,15 +8,17 @@
  * - 顶栏显示天枢状态段（SSE 转发的 setStatus，statusKey="tianshu"）。
  */
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowUp, CircleStop, FileText, RotateCcw, Terminal } from "lucide-react";
+import { ArrowDown, Check, CircleStop, Copy, MoreHorizontal, RotateCcw, Terminal } from "lucide-react";
 import {
-  argsSummary, contentImages, plain, toolPayload, request, sessionRequest,
-  type NativeMessage, type SessionItem, type ToolPayload,
+  contentImages, plain, toolPayload, request,
+  type NativeMessage, type NativeModel, type SessionItem, type ToolPayload,
 } from "./native-api";
 import type { PendingCall, SessionController } from "./useSession";
+import { NativeComposer } from "./NativeComposer";
+import { atBottom, toolLabel, toolTarget, withLiveMessage } from "./workbench-state";
 import "./Thread.css";
 
 /** 新元素（缩略图/画面）自适应样式：现有样式表没有对应图片规则，其余全部复用现有类。 */
@@ -27,6 +29,7 @@ type ToolItem = {
   key: string;
   toolName: string;
   args: string;
+  target: string;
   ok: boolean;
   running: boolean;
   durationMs: number | null;
@@ -68,7 +71,7 @@ export function buildItems(messages: NativeMessage[], pending: PendingCall[], ti
         settledCalls.add(callId);
         const result = messages.find(message => message.role === "toolResult" && message.toolCallId === callId);
         items.push({
-          kind: "tool", key: `tool:${callId}`, toolName: part.name ?? "工具", args: argsSummary(part.arguments),
+          kind: "tool", key: `tool:${callId}`, toolName: part.name ?? "工具", args: JSON.stringify(part.arguments, null, 2) ?? "", target: toolTarget(part.arguments),
           ok: result ? !result.isError : true, running: !result,
           durationMs: timing[callId] ?? (result?.timestamp && message.timestamp ? result.timestamp - message.timestamp : null),
           resultText: result ? plain(result) : "", images: result ? contentImages(result).map(image => image.dataUrl) : [],
@@ -82,7 +85,7 @@ export function buildItems(messages: NativeMessage[], pending: PendingCall[], ti
       if (settledCalls.has(callId)) continue;
       settledCalls.add(callId);
       items.push({
-        kind: "tool", key: `tool:${callId}`, toolName: message.toolName ?? "工具", args: "",
+        kind: "tool", key: `tool:${callId}`, toolName: message.toolName ?? "工具", args: "", target: "",
         ok: !message.isError, running: false,
         durationMs: timing[callId] ?? null, resultText: plain(message),
         images: contentImages(message).map(image => image.dataUrl), payload: toolPayload(message),
@@ -111,7 +114,7 @@ export function buildItems(messages: NativeMessage[], pending: PendingCall[], ti
   }
   for (const call of pending) {
     if (settledCalls.has(call.toolCallId)) continue;
-    items.push({ kind: "tool", key: `tool:${call.toolCallId}`, toolName: call.toolName, args: argsSummary(call.args), ok: true, running: true, durationMs: null, resultText: "", images: [], payload: null });
+    items.push({ kind: "tool", key: `tool:${call.toolCallId}`, toolName: call.toolName, args: JSON.stringify(call.args, null, 2) ?? "", target: toolTarget(call.args), ok: true, running: true, durationMs: null, resultText: "", images: [], payload: null });
   }
   for (const note of liveNotes) items.push({ kind: "note", key: `live:${note.id}`, text: note.text });
   return items;
@@ -145,7 +148,7 @@ export function absoluteArtifactPath(path: string, cwd: string | undefined): str
 }
 
 /** C5 产物卡片：缩略图（edit 带前后对比）、打开、在文件夹中显示。 */
-function ArtifactCard({ payload, images, setError, cwd }: { payload: ToolPayload; images: string[]; setError(value: string): void; cwd?: string }) {
+function ArtifactCard({ payload, images, setError, cwd, onOpenFile }: { payload: ToolPayload; images: string[]; setError(value: string): void; cwd?: string; onOpenFile(path: string): void }) {
   let cursor = 0;
   const rows = payload.artifacts?.map(artifact => {
     if (artifact.before) return { artifact, after: images[cursor++] ?? null, before: images[cursor++] ?? null };
@@ -157,10 +160,11 @@ function ArtifactCard({ payload, images, setError, cwd }: { payload: ToolPayload
     {rows.map(({ artifact, after, before }) => <div className="task-result" key={artifact.path}>
       <div className="task-result-file">
         <strong>{artifact.path.split(/[\\/]/).at(-1) ?? artifact.path}</strong>
-        <a onClick={() => void openOnDesktop(absoluteArtifactPath(artifact.path, cwd), setError)}>打开</a>
-        <a onClick={() => void revealOnDesktop(absoluteArtifactPath(artifact.path, cwd), setError)}>在文件夹中显示</a>
+        <button onClick={() => onOpenFile(absoluteArtifactPath(artifact.path, cwd))}>预览</button>
+        {window.alpha?.openFolder && <button onClick={() => void openOnDesktop(absoluteArtifactPath(artifact.path, cwd), setError)}>系统打开</button>}
+        {window.alpha && <button onClick={() => void revealOnDesktop(absoluteArtifactPath(artifact.path, cwd), setError)}>在文件夹中显示</button>}
       </div>
-      <p className="native-muted">{artifact.kind} · {artifact.path} · sha256 {artifact.sha256.slice(0, 12)}…</p>
+      <p className="native-muted">{artifact.kind}</p><details className="native-artifact-details"><summary>文件信息</summary><p className="native-muted">{artifact.path}<br />sha256 {artifact.sha256}</p></details>
       {before && after && <details open><summary>前后对比</summary><div className="office-preview-grid">
         <div className="office-pdf-preview"><strong>修改前</strong><img alt="修改前预览" src={before} style={THUMB_STYLE} /></div>
         <div className="office-pdf-preview"><strong>修改后</strong><img alt="修改后预览" src={after} style={THUMB_STYLE} /></div>
@@ -171,19 +175,21 @@ function ArtifactCard({ payload, images, setError, cwd }: { payload: ToolPayload
   </section>;
 }
 
-function ToolRow({ item, setError, cwd }: { item: ToolItem; setError(value: string): void; cwd?: string }) {
+function ToolRow({ item, setError, cwd, onOpenFile }: { item: ToolItem; setError(value: string): void; cwd?: string; onOpenFile(path: string): void }) {
   return <article className="native-message">
     <details className="native-tool-call">
       <summary>
-        <strong>{item.toolName}</strong>
-        {item.args && <span> · {item.args}</span>}
-        <span> · {item.running ? "运行中" : item.ok ? "成功" : "失败"}</span>
+        <span className={`native-status-dot ${item.running ? "running" : item.ok ? "success" : "danger"}`} />
+        <strong>{toolLabel(item.toolName, item.running, item.ok)}</strong>
+        {item.target && <span className="native-tool-target" title={item.target}>{item.target}</span>}
         {item.durationMs !== null && <span> · {item.durationMs >= 1000 ? `${(item.durationMs / 1000).toFixed(1)}s` : `${Math.max(0, Math.round(item.durationMs))}ms`}</span>}
       </summary>
+      <p className="native-muted">工具：{item.toolName}</p>
+      {item.args && <pre>{item.args}</pre>}
       {item.resultText && <pre>{item.resultText}</pre>}
       {item.images.map(src => <img alt="工具结果附图" key={src} src={src} style={THUMB_STYLE} />)}
     </details>
-    {item.payload && <ArtifactCard payload={item.payload} images={item.images} setError={setError} cwd={cwd} />}
+    {item.payload && <ArtifactCard payload={item.payload} images={item.images} setError={setError} cwd={cwd} onOpenFile={onOpenFile} />}
   </article>;
 }
 
@@ -198,97 +204,80 @@ function TianshuMessage({ item }: { item: Extract<ThreadItem, { kind: "tianshu" 
   </article>;
 }
 
-function ThreadBody({ items, setError, cwd }: { items: ThreadItem[]; setError(value: string): void; cwd?: string }) {
-  return <div className="native-thread">
+function ThreadBody({ items, setError, cwd, id, settled, onOpenFile }: { items: ThreadItem[]; setError(value: string): void; cwd?: string; id: string; settled: boolean; onOpenFile(path: string): void }) {
+  const viewport = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const pinned = useRef(true);
+  const resumeOnScroll = useRef(false);
+  const initialized = useRef(false);
+  const [hasNew, setHasNew] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const storageKey = `alpha-scroll:${id}`;
+  const save = () => {
+    const element = viewport.current;
+    if (!element || !initialized.current) return;
+    try { localStorage.setItem(storageKey, JSON.stringify({ top: element.scrollTop, pinned: pinned.current })); } catch { /* Reading still works when storage is full. */ }
+  };
+  const jump = () => { pinned.current = true; const element = viewport.current; if (element) element.scrollTop = element.scrollHeight; setHasNew(false); save(); };
+  const readingIntent = (up: boolean) => {
+    resumeOnScroll.current = !up;
+    if (up) { pinned.current = false; setHasNew(true); }
+    else if (viewport.current && atBottom(viewport.current.scrollTop, viewport.current.scrollHeight, viewport.current.clientHeight)) { pinned.current = true; setHasNew(false); }
+  };
+  useLayoutEffect(() => {
+    const element = viewport.current!;
+    if (!initialized.current && items.length) {
+      let saved: { top?: number; pinned?: boolean } = {};
+      try { saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}") ?? {}; } catch { /* Use the live tail. */ }
+      pinned.current = saved.pinned !== false;
+      element.scrollTop = pinned.current ? element.scrollHeight : Math.min(typeof saved.top === "number" ? saved.top : 0, Math.max(0, element.scrollHeight - element.clientHeight));
+      setHasNew(!pinned.current);
+      initialized.current = true;
+    } else if (pinned.current) element.scrollTop = element.scrollHeight;
+    else setHasNew(true);
+  }, [items]);
+  useEffect(() => {
+    const element = viewport.current!;
+    const observer = new ResizeObserver(() => { if (pinned.current) element.scrollTop = element.scrollHeight; });
+    observer.observe(content.current!);
+    return () => { save(); observer.disconnect(); };
+  }, []);
+  const turnStart = items.findLastIndex(item => item.kind === "user");
+  const tools = items.slice(turnStart + 1).filter((item): item is ToolItem => item.kind === "tool");
+  const copy = async (key: string, text: string) => {
+    try { await navigator.clipboard.writeText(text); setCopied(key); }
+    catch { setError("无法复制消息，请选择文字后复制。"); }
+  };
+  return <div className="native-thread-wrap"><div className="native-thread" ref={viewport} tabIndex={0} aria-label="会话记录"
+    onWheel={event => { if (event.deltaY) readingIntent(event.deltaY < 0); }}
+    onPointerDown={event => { if (event.target === event.currentTarget) resumeOnScroll.current = true; }}
+    onKeyDown={event => { if (event.target !== event.currentTarget) return; if (["PageUp", "Home", "ArrowUp"].includes(event.key)) readingIntent(true); else if (["PageDown", "End", "ArrowDown"].includes(event.key)) readingIntent(false); }}
+    onScroll={() => {
+    const element = viewport.current!;
+    if (!atBottom(element.scrollTop, element.scrollHeight, element.clientHeight)) pinned.current = false;
+    else if (resumeOnScroll.current) { pinned.current = true; resumeOnScroll.current = false; }
+    setHasNew(!pinned.current); save();
+  }}><div ref={content}>
     {items.length ? items.map(item => {
-      if (item.kind === "tool") return <ToolRow key={item.key} item={item} setError={setError} cwd={cwd} />;
+      if (item.kind === "tool") return <ToolRow key={item.key} item={item} setError={setError} cwd={cwd} onOpenFile={onOpenFile} />;
       if (item.kind === "tianshu") return <TianshuMessage key={item.key} item={item} />;
       if (item.kind === "note") return <p className="native-log" key={item.key}>{item.text}</p>;
       return <article key={item.key} className={`native-message ${item.kind}`}>
-        <div className="native-role">{item.kind === "user" ? "你" : "Alpha"}</div>
+        <div className="native-message-heading"><div className="native-role">{item.kind === "user" ? "你" : "Alpha"}</div><button className="native-icon-button" aria-label="复制消息" title="复制消息" onClick={() => void copy(item.key, item.text)}>{copied === item.key ? <Check size={15} /> : <Copy size={15} />}</button></div>
         <div className="native-markdown">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.text}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: ({ href, children }) => href && !/^[a-z]+:/i.test(href) && !href.startsWith("//") && !href.startsWith("#")
+            ? <button className="native-file-link" onClick={() => { let path = href; try { path = decodeURI(href); } catch { /* A literal percent can be part of a file name. */ } onOpenFile(absoluteArtifactPath(path, cwd)); }}>{children}</button>
+            : <a href={href} target="_blank" rel="noreferrer">{children}</a> }}>{item.text}</ReactMarkdown>
           {item.images.map(src => <img alt="消息附图" key={src} src={src} style={THUMB_STYLE} />)}
         </div>
       </article>;
     }) : <div className="native-welcome"><div className="native-glyph">α</div><h1>从这里开始</h1><p>告诉 Alpha 你想完成什么。</p></div>}
-  </div>;
-}
-
-function Composer({ session, onOpenSettings }: { session: SessionController; onOpenSettings(): void }) {
-  const [drafts] = useState(() => new Map<string, string>());
-  const [draft, setDraft] = useState("");
-  const [image, setImage] = useState<{ data: string; mimeType: string; name: string } | null>(null);
-  const [attachments, setAttachments] = useState<string[]>([]);
-  const [commands, setCommands] = useState<Array<{ name: string; description?: string }> | null>(null);
-  const input = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => { setDraft(drafts.get(session.selected ?? "") ?? ""); setImage(null); setAttachments([]); setCommands(null); }, [session.selected, drafts]);
-  useEffect(() => {
-    if (!session.queuedDraft) return;
-    setDraft(session.queuedDraft);
-    session.consumeDraft();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- consumeDraft 每次渲染都是新引用；只随草稿值触发。
-  }, [session.queuedDraft]);
-  const state = session.state;
-  const placeholder = state?.isStreaming ? "补充要求，将实时送给正在工作的 Alpha…" : "向 Alpha 说明你的任务…";
-  const send = async () => {
-    const text = attachments.length ? `${draft.trim() || "请读取附件"}\n\n用户选择的本机附件（请用 read 读取；修改前先检查文件支持范围）：\n${attachments.map(path => `- ${JSON.stringify(path)}`).join("\n")}` : draft;
-    if (await session.send(text, image ?? undefined)) {
-      setDraft("");
-      setImage(null);
-      setAttachments([]);
-      drafts.delete(session.selected ?? "");
-    }
-  };
-  const attach = async (file?: File) => {
-    if (!file) return;
-    if (!file.type.startsWith("image/") || file.size > 4_000_000) { session.setError("请选择不超过 4 MB 的图片。"); return; }
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result));
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-    setImage({ data: dataUrl.split(",")[1] ?? "", mimeType: file.type, name: file.name });
-  };
-  return <div className="native-compose">
-    {session.widgets.map(block => block.lines.map((line, index) => <div className="native-tool-call" key={`${block.key}:${index}`}>{line}</div>))}
-    <div className="native-compose-tools">
-      {window.alpha?.choosePaths && <button onClick={() => void window.alpha!.choosePaths!("files").then(paths => setAttachments(current => [...new Set([...current, ...paths])]), cause => session.setError(String(cause)))}>添加文件</button>}
-      <label title="添加图片"><FileText size={16} /><input type="file" accept="image/*" onChange={event => void attach(event.target.files?.[0])} /></label>
-      {image && <span>{image.name} <button onClick={() => setImage(null)}>×</button></span>}
-      <select title="模型" value={state?.model ? `${state.model.provider}/${state.model.id}` : ""} onChange={event => {
-        const [provider, ...rest] = event.target.value.split("/");
-        void session.command({ type: "set_model", provider, modelId: rest.join("/") });
-      }}>
-        <option value="">选择模型</option>
-        {session.models.map(model => <option key={`${model.provider}/${model.id}`} value={`${model.provider}/${model.id}`}>{model.name ?? model.id} · {model.provider}</option>)}
-      </select>
-      <select aria-label="当前会话思考强度" value={state?.thinkingLevel ?? "off"} onChange={event => void session.command({ type: "set_thinking_level", level: event.target.value })}>
-        {["off", "minimal", "low", "medium", "high", "xhigh", "max"].map(level => <option key={level}>{level}</option>)}
-      </select>
-      <button onClick={onOpenSettings}>模型设置</button>
-      <button onClick={() => void session.command({ type: "compact" })} title="压缩上下文">压缩上下文</button>
-      <button onClick={() => {
-        if (commands) { setCommands(null); return; }
-        if (session.selected) void sessionRequest<{ data: { commands: Array<{ name: string; description?: string }> } }>(session.selected, "command", { type: "get_available_commands" }).then(result => setCommands(result.data.commands), cause => session.setError(String(cause)));
-      }}>原生命令</button>
-    </div>
-    {!!attachments.length && <div className="native-compose-tools">{attachments.map(path => <span key={path} title={path}>{path.split(/[\\/]/).at(-1)} <button onClick={() => setAttachments(current => current.filter(item => item !== path))}>×</button></span>)}</div>}
-    {commands && <div className="native-command-list"><p className="native-muted">当前会话的原生命令与 Skill。MCP、OAuth 和完整交互管理可打开 Alpha 终端。</p><div className="native-compose-tools">{commands.map(item => <button key={item.name} title={item.description} onClick={() => { setDraft(`/${item.name} `); setCommands(null); input.current?.focus(); }}>/{item.name}</button>)}</div></div>}
-    <textarea ref={input} value={draft} aria-label={placeholder}
-      onChange={event => { setDraft(event.target.value); drafts.set(session.selected ?? "", event.target.value); }}
-      onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }}
-      placeholder={placeholder} />
-    <div className="native-compose-bottom">
-      <span>{state?.model ? `${state.model.provider}/${state.model.id}` : "跟随全局默认模型"}</span>
-      <button disabled={!session.opened || (!draft.trim() && !attachments.length)} onClick={() => void send()} aria-label="发送"><ArrowUp size={17} /></button>
-    </div>
-  </div>;
+    {settled && tools.length > 0 && <p className="native-turn-summary">本轮工具执行：{tools.filter(item => !item.running && item.ok).length} 项成功 · {tools.filter(item => !item.running && !item.ok).length} 项失败 · {tools.filter(item => item.running).length} 项待确认</p>}
+  </div></div>{hasNew && <button className="native-jump" onClick={jump}><ArrowDown size={15} />回到最新</button>}</div>;
 }
 
 /** 会话视图：顶栏（天枢状态段）+ 进程提示 + 对话流 + 输入框（setWidget 行在输入框上方）。 */
-export function NativeThread({ session, sessionInfo, onOpenSettings, onOpenTerminal }: { session: SessionController; sessionInfo: SessionItem; onOpenSettings(): void; onOpenTerminal(): void }) {
+export function NativeThread({ session, sessionInfo, models, onOpenFile, onOpenSettings, onOpenTerminal }: { session: SessionController; sessionInfo: SessionItem; models: NativeModel[]; onOpenFile(path: string): void; onOpenSettings(): void; onOpenTerminal(): void }) {
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(sessionInfo.title);
   useEffect(() => { setName(sessionInfo.title); setRenaming(false); }, [sessionInfo.id]);
@@ -304,22 +293,22 @@ export function NativeThread({ session, sessionInfo, onOpenSettings, onOpenTermi
       const link = document.createElement("a"); link.href = url; link.download = `${sessionInfo.title.replace(/[<>:"/\\|?*]/g, "_")}.md`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1_000);
     }
   };
-  const end = useRef<HTMLDivElement>(null);
   const items = useMemo(
-    () => buildItems(session.liveMessage ? [...session.messages.filter(message => message.role !== "assistant" || message.timestamp !== session.liveMessage?.timestamp), session.liveMessage] : session.messages, session.pendingCalls, session.toolTiming, session.liveNotes),
+    () => buildItems(withLiveMessage(session.messages, session.liveMessage), session.pendingCalls, session.toolTiming, session.liveNotes),
     [session.messages, session.liveMessage, session.pendingCalls, session.toolTiming, session.liveNotes],
   );
-  useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [items.length, sessionInfo.id]);
   const state = session.state;
   return <>
     <header className="native-header">
       <div><strong>{sessionInfo.title}</strong><small>{sessionInfo.cwd}</small></div>
       <div className="native-header-actions">
-        <button onClick={() => { setName(sessionInfo.title); setRenaming(value => !value); }}>重命名</button>
-        <button onClick={() => void edit({ archived: !sessionInfo.archived })}>{sessionInfo.archived ? "恢复会话" : "归档"}</button>
-        <button onClick={() => void exportMessages().catch(cause => session.setError(String(cause)))}>导出</button>
-        {session.tianshuStatus && <span className="native-status" title="天枢状态（与终端页脚一致）">{session.tianshuStatus}</span>}
-        <span className={`native-status ${state?.isStreaming ? "running" : ""}`}>{state?.isStreaming ? "运行中" : state?.hasPendingAsyncWork ? "后台任务" : state?.isSettled ? "本轮结束" : "就绪"}</span>
+        <details className="native-more"><summary aria-label="会话操作" title="会话操作"><MoreHorizontal size={18} /></summary><div onClick={event => event.currentTarget.parentElement?.removeAttribute("open")}>
+          <button onClick={() => { setName(sessionInfo.title); setRenaming(value => !value); }}>重命名</button>
+          <button onClick={() => void edit({ archived: !sessionInfo.archived })}>{sessionInfo.archived ? "恢复会话" : "归档"}</button>
+          <button onClick={() => void exportMessages().catch(cause => session.setError(String(cause)))}>导出</button>
+        </div></details>
+        {session.tianshuStatus && <span className="native-status native-tianshu-status" title={session.tianshuStatus}>{session.tianshuStatus.replace(/(\d+\.\d+)%/g, (_, percent: string) => `${Number(percent).toFixed(1)}%`)}</span>}
+        <span className={`native-status ${state?.isStreaming ? "running" : ""}`}>{session.uiRequest ? "等待输入" : state?.isStreaming ? "运行中" : state?.hasPendingAsyncWork ? "后台任务" : state?.isSettled ? "本轮结束" : "就绪"}</span>
         <button title="刷新" onClick={() => session.refresh()}><RotateCcw size={16} /></button>
         {session.terminalActive
           ? <button title="关闭 Alpha 终端" onClick={() => void session.terminal("stop")}><CircleStop size={17} /></button>
@@ -333,8 +322,10 @@ export function NativeThread({ session, sessionInfo, onOpenSettings, onOpenTermi
       <span>{session.hostNotice}</span>
       <button onClick={() => session.reopen()}>重新打开会话</button>
     </div>}
-    <ThreadBody items={items} setError={session.setError} cwd={session.current?.cwd} />
+    <ThreadBody key={`thread:${sessionInfo.id}`} id={sessionInfo.id} items={items} setError={session.setError} cwd={session.current?.cwd} settled={!!state?.isSettled} onOpenFile={onOpenFile} />
     {session.terminalActive ? <div className="native-update-banner" role="status"><span>Alpha 终端正在使用这个会话。关闭终端后可继续对话。</span><button onClick={onOpenTerminal}>查看终端</button><button onClick={() => void session.terminal("stop")}>关闭终端</button></div>
-      : <Composer session={session} onOpenSettings={onOpenSettings} />}
+      : <NativeComposer key={`composer:${sessionInfo.id}`} session={session} models={models} model={state?.model ? `${state.model.provider}/${state.model.id}` : ""} thinking={state?.thinkingLevel ?? "off"}
+        onModel={selector => { const [provider, ...rest] = selector.split("/"); void session.command({ type: "set_model", provider, modelId: rest.join("/") }); }}
+        onThinking={level => void session.command({ type: "set_thinking_level", level })} onOpenSettings={onOpenSettings} />}
   </>;
 }

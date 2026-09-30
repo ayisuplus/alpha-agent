@@ -9,7 +9,7 @@
 /** Alpha 发行版本；随发版更新（方案 10.1：本轮重构发版 0.2.0）。 */
 export const ALPHA_VERSION = "0.2.1";
 
-export type NativeModel = { selector: string; provider: string; id: string; name: string; available: boolean; reasoning: boolean; contextWindow: number };
+export type NativeModel = { selector: string; provider: string; id: string; name: string; available: boolean; reasoning: boolean; contextWindow: number; input?: string[] };
 export type NativeCatalog = { models: NativeModel[]; providers: Array<{ id: string; origin: string | null; storedKey: boolean; oauth: boolean; available: number }>; error: string | null };
 export type NativeSetting = { id: string; type: string; value: unknown; label: string; description: string; tab: string; group: string; values?: string[]; provenance: string };
 export type NativeConfig = { agentDir: string; modelRoles: Record<string, string>; settings: NativeSetting[] };
@@ -229,19 +229,4 @@ export function toolPayload(message: NativeMessage): ToolPayload | null {
   } catch {
     return null;
   }
-}
-
-export function argsSummary(input: unknown): string {
-  if (!input || typeof input !== "object") return "";
-  const record = input as Record<string, unknown>;
-  for (const key of ["command", "cmd", "path", "file_path", "url", "prompt"]) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.replace(/\s+/g, " ").trim().slice(0, 120);
-  }
-  return Object.entries(record)
-    .filter(([, value]) => ["string", "number", "boolean"].includes(typeof value))
-    .slice(0, 3)
-    .map(([key, value]) => `${key}=${String(value)}`)
-    .join(" ")
-    .slice(0, 120);
 }

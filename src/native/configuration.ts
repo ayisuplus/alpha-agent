@@ -27,7 +27,7 @@ export class NativeConfiguration {
       const available = new Set(registry.getAvailable().map(model => `${model.provider}/${model.id}`));
       const models = registry.getAll("chat").map(model => ({
         provider: model.provider, id: model.id, name: model.name || model.id,
-        selector: `${model.provider}/${model.id}`, reasoning: model.reasoning,
+        selector: `${model.provider}/${model.id}`, reasoning: model.reasoning, input: model.input,
         contextWindow: model.contextWindow, available: available.has(`${model.provider}/${model.id}`) &&
           (auth.keys.source(model.provider)?.kind !== "env" || auth.credentials.list(model.provider).length > 0),
       }));

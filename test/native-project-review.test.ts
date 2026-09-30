@@ -32,6 +32,8 @@ test("project review reads staged, unstaged and untracked status without changin
     const result = await projectReview(join(root, "nested"));
     expect(result.available).toBe(true);
     expect(result.status).toContain("untracked.txt");
+    expect(result.staged.split("\n")[0]).toBe("diff --git a/staged.txt b/staged.txt");
+    expect(result.unstaged.split("\n")[0]).toBe("diff --git a/changed.txt b/changed.txt");
     expect(result.staged).toContain("+staged-change");
     expect(result.unstaged).toContain("+unstaged-change");
     expect(result.status).not.toContain("outside.txt");

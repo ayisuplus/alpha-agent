@@ -1,8 +1,27 @@
 import { describe, expect, test } from "bun:test";
 import { absoluteArtifactPath, buildItems } from "../desktop/ui/src/app/NativeThread";
-import { handleUiFrame } from "../desktop/ui/src/app/useSession";
+import { handleUiFrame, reconcileLiveMessage } from "../desktop/ui/src/app/useSession";
+import { withLiveMessage } from "../desktop/ui/src/app/workbench-state";
 
 describe("artifact paths resolve against the session project", () => {
+  test("settling retains the live answer until history contains its complete content", () => {
+    const final = { role: "assistant", timestamp: 7, content: "长回答的完整末尾" };
+    expect(reconcileLiveMessage(final, [])).toBe(final);
+    expect(reconcileLiveMessage(final, [{ ...final, content: "长回答" }])).toBe(final);
+    expect(reconcileLiveMessage(final, [{ ...final, timestamp: 6 }])).toBe(final);
+    expect(reconcileLiveMessage(final, [final])).toBeNull();
+    expect(reconcileLiveMessage(final, [{ ...final, content: "OMP 脱敏后的权威历史" }], true)).toBeNull();
+  });
+  test("live replacement keeps tool calls before their results even when native content differs", () => {
+    const call = { role: "assistant", timestamp: 7, content: [{ type: "toolCall", id: "read-call", name: "read", arguments: { path: "材料.txt" } }] };
+    const result = { role: "toolResult", timestamp: 8, toolCallId: "read-call", toolName: "read", content: "材料内容" };
+    const merged = withLiveMessage([{ ...call, content: [] }, result], call);
+    expect(merged).toEqual([call, result]);
+    const items = buildItems(merged, [], {}, []);
+    expect(items).toHaveLength(1);
+    expect(items[0].kind).toBe("tool");
+    expect(items[0].kind === "tool" && items[0].resultText).toBe("材料内容");
+  });
   test("empty assistant failures remain visible and streaming text renders", () => {
     const items = buildItems([{ role: "assistant", content: [], errorMessage: "HTTP 401" }, { role: "assistant", content: "正在处理" }], [], {}, []);
     expect(items.some(item => "text" in item && item.text.includes("HTTP 401"))).toBe(true);
@@ -14,6 +33,14 @@ describe("artifact paths resolve against the session project", () => {
     expect(absoluteArtifactPath("E:\\elsewhere\\x.pdf", "E:\\proj")).toBe("E:\\elsewhere\\x.pdf");
     expect(absoluteArtifactPath("/tmp/x.pdf", "E:\\proj")).toBe("/tmp/x.pdf");
     expect(absoluteArtifactPath("outputs/a.png", undefined)).toBe("outputs/a.png");
+  });
+  test("tool summaries show a readable target while details retain all native arguments", () => {
+    const arguments_ = { action: "create", kind: "docx", name: "体验改进", content: "正文".repeat(100) };
+    const items = buildItems([{ role: "assistant", content: [{ type: "toolCall", id: "office", name: "alpha_office", arguments: arguments_ }] }], [], {}, []);
+    const tool = items.find(item => item.kind === "tool");
+    expect(tool?.target).toBe("体验改进");
+    expect(JSON.parse(tool?.args ?? "{}")).toEqual(arguments_);
+    expect(tool?.running).toBe(true);
   });
 });
 

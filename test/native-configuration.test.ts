@@ -60,6 +60,7 @@ test("desktop settings persist through OMP and a new RPC session uses the select
     const model = list(catalog.models).find(item => item.provider === "deepseek" && item.available === true);
     const selector = typeof model?.selector === "string" ? model.selector : "";
     expect(selector).not.toBe("");
+    expect(model?.input).toContain("text");
     expect((await request("settings", { role: "default", model: selector })).status).toBe(200);
     expect((await request("settings", { id: "retry.maxRetries", value: 4 })).status).toBe(200);
     expect((await request("settings", { id: "compaction.enabled", value: "false" })).status).toBe(400);

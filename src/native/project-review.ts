@@ -33,7 +33,7 @@ export async function projectReview(cwd: string): Promise<ProjectReview> {
     if (error.code === "ENOENT") throw new Error("本机没有可用的 Git");
     throw new Error("无法读取项目 Git 状态");
   }
-  const flags = ["--no-ext-diff", "--no-textconv", "--no-color"];
+  const flags = ["--no-ext-diff", "--no-textconv", "--no-color", "--relative"];
   const [unstaged, staged] = await Promise.all([git(["diff", ...flags, "--", "."]), git(["diff", "--cached", ...flags, "--", "."])]);
   return { available: true, status, staged, unstaged, truncated };
 }

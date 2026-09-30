@@ -114,17 +114,19 @@ function CapabilityPage({ sessionId }: { sessionId: string | null }) {
   </section>;
 }
 
-/** “技能”页：只读清单（随包发行的 Alpha Skill，来自 sidecar 的 /api/native/skills）。 */
-function SkillsPage() {
+/** “技能”页：随包方法清单与当前草稿入口，来自 sidecar 的 /api/native/skills。 */
+function SkillsPage({ onUse }: { onUse(name: string): void }) {
   const [skills, setSkills] = useState<Array<{ name: string; description: string }>>([]);
   const [filter, setFilter] = useState("");
-  useEffect(() => { void nativeApi<{ skills: Array<{ name: string; description: string }> }>("skills").then(result => setSkills(result.skills), () => setSkills([])); }, []);
+  const [error, setError] = useState("");
+  useEffect(() => { void nativeApi<{ skills: Array<{ name: string; description: string }> }>("skills").then(result => setSkills(result.skills), cause => setError(String(cause))); }, []);
   const shown = skills.filter(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(filter.toLowerCase()));
   return <section>
-    <SectionTitle title="技能" description={`只读清单：随包发行的 ${skills.length} 个 Alpha Skill（来自 presets/alpha-plugin）。`} />
+    <SectionTitle title="技能" description={`${skills.length} 个随包方法。选择技能，将使用指令加入当前草稿，再补充材料和期望结果。`} />
+    {error && <p role="alert">{error}</p>}
     <input className="native-settings-filter" aria-label="搜索技能" placeholder="搜索技能…" value={filter} onChange={event => setFilter(event.target.value)} />
     {shown.map(skill => <div key={skill.name}>
-      <div className="native-file"><span>{skill.name}</span></div>
+      <div className="native-file"><span>{skill.name}</span><button onClick={() => onUse(skill.name)}>用于当前任务</button></div>
       <p className="native-muted">{skill.description}</p>
     </div>)}
   </section>;
@@ -243,9 +245,12 @@ function AboutPage({ update, onCheckUpdate }: { update: UpdateStatus | null; onC
   </section>;
 }
 
-export function NativeSettings({ config, catalog, onConfig, reload, onClose, fontSize, setFontSize, workspaceVisible, setWorkspaceVisible, diagnostics, setDiagnostics, update, onCheckUpdate, sessionId, initialSection = "model", onOpenSession }: {
+export function NativeSettings({ config, catalog, onConfig, reload, onClose, fontSize, setFontSize, workspaceVisible, setWorkspaceVisible, diagnostics, setDiagnostics, update, onCheckUpdate, sessionId, initialSection = "model", onOpenSession, onUseSkill, theme, setTheme }: {
   initialSection?: string;
   onOpenSession?(id: string): void;
+  onUseSkill(name: string): void;
+  theme: string;
+  setTheme(value: string): void;
   config: NativeConfig | null;
   catalog: NativeCatalog | null;
   onConfig(value: NativeConfig): void;
@@ -302,12 +307,13 @@ export function NativeSettings({ config, catalog, onConfig, reload, onClose, fon
         {error && <p role="alert" className="native-settings-error">{error}</p>}
         {notice && <p role="status" className="native-settings-notice">{notice}</p>}
         {section === "capabilities" ? <CapabilityPage sessionId={sessionId} />
-          : section === "skills" ? <SkillsPage />
+          : section === "skills" ? <SkillsPage onUse={onUseSkill} />
           : section === "schedules" ? <SchedulesPage onOpenSession={onOpenSession} />
           : section === "about" ? <AboutPage update={update} onCheckUpdate={onCheckUpdate} />
           : section === "interface" ? <section>
             <SectionTitle title="界面" description="只影响工作台本身。" />
-            <Field label="文字大小" description="调整正文与输入框的字号，界面布局不变。">
+            <Field label="外观" description="选择浅色、深色，或跟随系统。"><select aria-label="外观" value={theme} onChange={event => setTheme(event.target.value)}><option value="light">浅色</option><option value="dark">深色</option><option value="system">跟随系统</option></select></Field>
+            <Field label="文字大小" description="调整工作台文字；代码与终端保留独立字号。">
               <select aria-label="文字大小" value={fontSize} onChange={event => setFontSize(Number(event.target.value))}>
                 {[12, 13, 14, 15, 16].map(size => <option key={size} value={size}>{size}px</option>)}
               </select>
@@ -318,6 +324,7 @@ export function NativeSettings({ config, catalog, onConfig, reload, onClose, fon
             <Field label="诊断日志" description="右栏的“日志”页签只用于诊断，默认隐藏。">
               <Toggle label="显示诊断日志" checked={diagnostics} onChange={setDiagnostics} />
             </Field>
+            <Field label="快捷键" description="Ctrl+Enter 发送 · Shift+Enter 换行 · Ctrl+N 新会话 · Ctrl+, 设置 · Ctrl+Shift+F 文件 · Esc 关闭当前弹窗或设置。"><span>模型选择菜单支持方向键和 Enter。</span></Field>
           </section>
           : !config || !catalog ? <p>正在读取配置…</p>
           : section === "model" ? <section>

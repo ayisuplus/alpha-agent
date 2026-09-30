@@ -17,6 +17,7 @@ import {
   type SessionItem,
   type UiRequest,
 } from "./native-api";
+import { readDraft, writeDraft } from "./workbench-state";
 
 export interface LogEntry { at: string; text: string }
 export interface PendingCall { toolCallId: string; toolName: string; args: unknown; startedAt: number }
@@ -35,13 +36,14 @@ export interface SessionController {
   select(id: string | null): void;
   create(cwd?: string): Promise<boolean>;
   continueLegacy(task: LegacyTask): Promise<boolean>;
-  startFromHome(input: { text: string; cwd: string; model: string; thinking: string }): Promise<boolean>;
+  startFromHome(input: { text: string; cwd: string; model: string; thinking: string; image?: AttachedImage }): Promise<boolean>;
   state: NativeState | null;
   messages: NativeMessage[];
   liveMessage: NativeMessage | null;
   /** 旧版任务“继续”带回来的续写草稿；Composer 拾取后调用 consumeDraft 清除。 */
   queuedDraft: string;
   consumeDraft(): void;
+  prefill(text: string): void;
   models: Array<{ provider: string; id: string; name?: string }>;
   files: Array<{ name: string; type: string; size?: number }>;
   pendingCalls: PendingCall[];
@@ -73,6 +75,10 @@ export interface SessionController {
 const REFRESH_EVENTS = ["message_end", "prompt_result", "session_settled", "agent_end", "model_changed", "session_tree"];
 const LOG_EVENTS = ["subagent_lifecycle", "subagent_progress", "host_error", "auto_retry_end", "auto_compaction_end"];
 
+export function reconcileLiveMessage(live: NativeMessage | null, history: NativeMessage[], completed = false): NativeMessage | null {
+  return live?.timestamp !== undefined && history.some(message => message.role === "assistant" && message.timestamp === live.timestamp && (completed || JSON.stringify(message.content) === JSON.stringify(live.content))) ? null : live;
+}
+
 export function useSession(): SessionController {
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [legacy, setLegacy] = useState<LegacyTask[]>([]);
@@ -102,7 +108,13 @@ export function useSession(): SessionController {
 
   const selectedRef = useRef<string | null>(null);
   const toolStarts = useRef<Map<string, number>>(new Map());
+  const completedLive = useRef<NativeMessage | null>(null);
   const statuses = useRef(new Map<string, string | undefined>());
+  const sending = useRef(false);
+  const responding = useRef(false);
+  const startupError = useRef<{ id: string; message: string } | null>(null);
+  const requestRef = useRef(uiRequest);
+  requestRef.current = uiRequest;
   selectedRef.current = selected;
 
   const reloadList = useCallback(async () => {
@@ -129,6 +141,7 @@ export function useSession(): SessionController {
     setTerminalOutput(terminal.output);
     if (terminal.active) return;
     // 契约：state/messages/models 要求进程已打开（POST /open 之后才读）。
+    const completed = completedLive.current;
     const [nextState, history, available, directory] = await Promise.all([
       sessionRequest<NativeState>(id, "state"),
       sessionRequest<{ messages: NativeMessage[] }>(id, "messages"),
@@ -139,6 +152,7 @@ export function useSession(): SessionController {
     setState(nextState);
     setOpened(true); setHostNotice(null);
     setMessages(history.messages ?? []);
+    setLiveMessage(current => reconcileLiveMessage(current, history.messages ?? [], current === completed));
     setModels(available.models ?? []);
     setFiles(directory.files ?? []);
     setPendingCalls(current => {
@@ -165,7 +179,10 @@ export function useSession(): SessionController {
     let timer: ReturnType<typeof setTimeout> | undefined;
     setState(null); setMessages([]); setLogs([]); setWidgets([]); setPendingCalls([]); setToolTiming({});
     setLiveMessage(null);
-    setLiveNotes([]); setTianshuStatus(null); setOpened(false); setHostNotice(null); setError("");
+    completedLive.current = null;
+    setLiveNotes([]); setTianshuStatus(null); setOpened(false); setHostNotice(null);
+    setError(startupError.current?.id === selected ? startupError.current.message : "");
+    startupError.current = null;
     const refresh = () => {
       clearTimeout(timer);
       timer = setTimeout(() => void loadSelected(selected).catch(cause => { if (!cancelled) setError(String(cause)); }), 180);
@@ -185,12 +202,12 @@ export function useSession(): SessionController {
           const type = String(frame.type ?? "");
           if (type === "message_update") {
             const partial = (frame.assistantMessageEvent as { partial?: NativeMessage } | undefined)?.partial ?? frame.message as NativeMessage | undefined;
-            if (partial?.role === "assistant") setLiveMessage(partial);
+            if (partial?.role === "assistant") { completedLive.current = null; setLiveMessage(partial); }
           }
-          if (type === "message_end") setLiveMessage(null);
+          // Keep the final row until get_messages replaces it, so settling cannot shrink the reading viewport.
+          if (type === "message_end" && (frame.message as NativeMessage | undefined)?.role === "assistant") { completedLive.current = frame.message as NativeMessage; setLiveMessage(completedLive.current); }
           if (type === "agent_start") setState(current => current ? { ...current, isStreaming: true, isSettled: false } : current);
           if (type === "prompt_result") {
-            setLiveMessage(null);
             if (frame.status === "error") setError((frame.error as { message?: string } | undefined)?.message ?? "本轮执行失败");
             if (frame.status === "aborted") setLiveNotes(current => [...current.filter(note => note.id !== "result"), { id: "result", text: "本轮已中止" }]);
           }
@@ -294,26 +311,36 @@ export function useSession(): SessionController {
     finally { setBusy(false); }
   }, [reloadList, select]);
 
-  const startFromHome = useCallback(async (input: { text: string; cwd: string; model: string; thinking: string }) => {
+  const startFromHome = useCallback(async (input: { text: string; cwd: string; model: string; thinking: string; image?: AttachedImage }) => {
     const text = input.text.trim();
-    if (!text || !input.model || busy) return false;
+    if (!text || !input.model || sending.current) return false;
+    sending.current = true;
     setBusy(true); setError("");
+    let created: string | null = null;
     try {
       const result = await request<{ session: SessionItem }>("/api/native/sessions", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ cwd: input.cwd.trim() || undefined, title: text.slice(0, 70) }),
       });
+      created = result.session.id;
       const [provider, ...modelId] = input.model.split("/");
       await openSession(result.session.id);
       await sessionRequest(result.session.id, "command", { type: "set_model", provider, modelId: modelId.join("/") });
       if (input.thinking !== "auto") await sessionRequest(result.session.id, "command", { type: "set_thinking_level", level: input.thinking });
       await reloadList();
+      await sessionRequest(result.session.id, "command", { type: "prompt", message: text, ...(input.image ? { images: [{ type: "image", data: input.image.data, mimeType: input.image.mimeType }] } : {}) });
       select(result.session.id);
-      await sessionRequest(result.session.id, "command", { type: "prompt", message: text });
       return true;
-    } catch (cause) { setError(String(cause)); return false; }
-    finally { setBusy(false); }
-  }, [busy, reloadList, select]);
+    } catch (cause) {
+      if (created) {
+        startupError.current = { id: created, message: String(cause) };
+        writeDraft(created, readDraft("home", localStorage), localStorage);
+        select(created);
+      }
+      setError(String(cause)); return false;
+    }
+    finally { sending.current = false; setBusy(false); }
+  }, [reloadList, select]);
 
   const command = useCallback(async (value: Record<string, unknown>) => {
     const id = selectedRef.current;
@@ -327,10 +354,12 @@ export function useSession(): SessionController {
   }, [loadSelected]);
 
   const send = useCallback(async (text: string, image?: AttachedImage) => {
-    const message = text.trim();
-    if (!message || !selectedRef.current) return false;
+    const message = text.trim() || (image ? "请分析这张图片。" : "");
+    if (!message || !selectedRef.current || sending.current) return false;
+    sending.current = true;
     const images = image ? [{ type: "image", data: image.data, mimeType: image.mimeType }] : undefined;
-    return command({ type: state?.isStreaming ? "steer" : "prompt", message, ...(images ? { images } : {}) });
+    try { return await command({ type: state?.isStreaming ? "steer" : "prompt", message, ...(images ? { images } : {}) }); }
+    finally { sending.current = false; }
   }, [command, state?.isStreaming]);
 
   const terminal = useCallback(async (action: "start" | "stop") => {
@@ -345,14 +374,16 @@ export function useSession(): SessionController {
 
   const respond = useCallback(async (confirmed?: boolean) => {
     const id = selectedRef.current;
-    if (!id || !uiRequest) return;
+    if (!id || !uiRequest || requestRef.current?.id !== uiRequest.id || responding.current) return;
+    responding.current = true;
     const response = confirmed === false ? { type: "extension_ui_response", id: uiRequest.id, cancelled: true }
       : uiRequest.method === "confirm" ? { type: "extension_ui_response", id: uiRequest.id, confirmed: true }
       : { type: "extension_ui_response", id: uiRequest.id, value: uiValue };
     try {
       await sessionRequest(id, "ui-response", response);
-      setUiRequest(null);
+      setUiRequest(current => current?.id === uiRequest.id ? null : current);
     } catch (cause) { setError(String(cause)); }
+    finally { responding.current = false; }
   }, [uiRequest, uiValue]);
 
   const refresh = useCallback(() => {
@@ -363,7 +394,7 @@ export function useSession(): SessionController {
   return {
     sessions, legacy, selected, current: sessions.find(item => item.id === selected) ?? null,
     opened, hostNotice, reopen, select, create, continueLegacy, startFromHome,
-    state, messages, liveMessage, queuedDraft, consumeDraft: () => setQueuedDraft(""),
+    state, messages, liveMessage, queuedDraft, consumeDraft: () => setQueuedDraft(""), prefill: setQueuedDraft,
     models, files, pendingCalls, toolTiming, liveNotes, widgets, tianshuStatus, logs,
     uiRequest, uiValue, setUiValue, respond, externalUrl, setExternalUrl,
     terminalActive, terminalOutput, terminal, command, send, refresh, reloadList,

@@ -51,12 +51,13 @@ function FilePreview({ id, path, onBack }: { id: string; path: string; onBack():
   </div>;
 }
 
-export function NativeFiles({ session, visible }: { session: SessionController; visible: boolean }) {
+export function NativeFiles({ session, visible, previewPath, onPreviewPath }: { session: SessionController; visible: boolean; previewPath: string | null; onPreviewPath(path: string | null): void }) {
   const [path, setPath] = useState("");
   const [selected, setSelected] = useState("");
   const [directory, setDirectory] = useState<Directory | null>(null);
   const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
+  useEffect(() => { if (previewPath) setSelected(previewPath); }, [previewPath]);
   useEffect(() => {
     if (!visible || !session.selected) return;
     let cancelled = false;
@@ -67,7 +68,7 @@ export function NativeFiles({ session, visible }: { session: SessionController; 
   if (!visible) return null;
   if (!session.selected) return <div className="native-panel"><p className="native-muted">选择会话后，可以浏览和预览项目文件。</p></div>;
   return <div className="native-panel">
-    {selected ? <FilePreview key={selected} id={session.selected} path={selected} onBack={() => setSelected("")} /> : <>
+    {selected ? <FilePreview key={selected} id={session.selected} path={selected} onBack={() => { setSelected(""); onPreviewPath(null); }} /> : <>
       <h3>项目文件</h3><p className="native-muted">{directory?.path ?? session.current?.cwd}</p>
       <div className="native-file-actions">
         <button onClick={() => setPath("")}>项目根目录</button>
