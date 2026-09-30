@@ -26,8 +26,9 @@ afterEach(async () => {
 
 describe("Alpha launch construction", () => {
   test("rpc and terminal argv differ only by --mode", async () => {
-    const rpc = await buildLaunch(options());
-    const terminal = await buildLaunch(options({ mode: "terminal" }));
+    const input = options();
+    const rpc = await buildLaunch(input);
+    const terminal = await buildLaunch({ ...input, mode: "terminal" });
     const modeIndex = rpc.argv.indexOf("--mode");
     expect(modeIndex).toBeGreaterThan(0);
     expect(rpc.argv.slice(modeIndex)).toEqual(["--mode", "rpc-ui"]);
