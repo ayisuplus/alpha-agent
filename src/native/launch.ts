@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 
 /**
  * Single place that constructs how Alpha launches the native OMP process.
- * RPC and terminal modes share this construction and may differ only in `--mode`.
+ * Both modes keep OMP's native bootstrap and identical identity/configuration flags.
  */
 
 export interface LaunchOptions {
@@ -118,7 +118,7 @@ export async function buildLaunch(options: LaunchOptions): Promise<LaunchPlan> {
   const cli = join(appRoot, "node_modules", "@oh-my-pi", "pi-coding-agent", "dist", "cli.js");
   const configPath = await writeLaunchConfig(options);
   const argv = [
-    cli,
+    options.mode === "rpc" ? join(appRoot, "src", "native", "omp-host.ts") : cli,
     "--plugin-dir", join(appRoot, "presets", "alpha-plugin"),
     "--append-system-prompt", join(appRoot, "presets", "alpha-identity.md"),
     "--config", configPath,

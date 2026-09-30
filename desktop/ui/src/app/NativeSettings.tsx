@@ -1,6 +1,6 @@
 /**
  * 设置（方案 8.2）：模型与账号、运行与工具（内核原生设置）、本机能力（状态/检测/浏览器授权）、
- * 技能（只读 30 个 Alpha Skill）、界面、关于（Alpha 版本、OMP 版本与许可、天枢来源与许可）。
+ * 原生技能、MCP、插件管理、界面、关于（Alpha 版本、OMP 版本与许可、天枢来源与许可）。
  * OMP 来源与版本只出现在“关于”页。
  */
 
@@ -10,6 +10,7 @@ import type { BrowserHostStatus } from "../api/types";
 import { Field, SectionTitle, Toggle } from "../components/settings/controls";
 import "../components/settings/settings.css";
 import { NativeModelPicker } from "./NativeModelPicker";
+import { NativeExtensions } from "./NativeExtensions";
 import {
   ALPHA_VERSION,
   modelPreference,
@@ -111,24 +112,6 @@ function CapabilityPage({ sessionId }: { sessionId: string | null }) {
         void nativeDelete(`sessions/${sessionId}/browser-consent`).then(check, () => setBusy(false));
       }}>撤销授权</button>
     </Field>
-  </section>;
-}
-
-/** “技能”页：随包方法清单与当前草稿入口，来自 sidecar 的 /api/native/skills。 */
-function SkillsPage({ onUse }: { onUse(name: string): void }) {
-  const [skills, setSkills] = useState<Array<{ name: string; description: string }>>([]);
-  const [filter, setFilter] = useState("");
-  const [error, setError] = useState("");
-  useEffect(() => { void nativeApi<{ skills: Array<{ name: string; description: string }> }>("skills").then(result => setSkills(result.skills), cause => setError(String(cause))); }, []);
-  const shown = skills.filter(skill => `${skill.name} ${skill.description}`.toLowerCase().includes(filter.toLowerCase()));
-  return <section>
-    <SectionTitle title="技能" description={`${skills.length} 个随包方法。选择技能，将使用指令加入当前草稿，再补充材料和期望结果。`} />
-    {error && <p role="alert">{error}</p>}
-    <input className="native-settings-filter" aria-label="搜索技能" placeholder="搜索技能…" value={filter} onChange={event => setFilter(event.target.value)} />
-    {shown.map(skill => <div key={skill.name}>
-      <div className="native-file"><span>{skill.name}</span><button onClick={() => onUse(skill.name)}>用于当前任务</button></div>
-      <p className="native-muted">{skill.description}</p>
-    </div>)}
   </section>;
 }
 
@@ -292,6 +275,8 @@ export function NativeSettings({ config, catalog, onConfig, reload, onClose, fon
     { id: "runtime", title: "运行与工具", Icon: Gauge },
     { id: "capabilities", title: "本机能力", Icon: Wrench },
     { id: "skills", title: "技能", Icon: Sparkles },
+    { id: "mcp", title: "MCP", Icon: Wrench },
+    { id: "plugins", title: "插件", Icon: Wrench },
     { id: "schedules", title: "定时任务", Icon: Timer },
     { id: "interface", title: "界面", Icon: MonitorCog },
     { id: "about", title: "关于", Icon: Info },
@@ -305,7 +290,7 @@ export function NativeSettings({ config, catalog, onConfig, reload, onClose, fon
         {error && <p role="alert" className="native-settings-error">{error}</p>}
         {notice && <p role="status" className="native-settings-notice">{notice}</p>}
         {section === "capabilities" ? <CapabilityPage sessionId={sessionId} />
-          : section === "skills" ? <SkillsPage onUse={onUseSkill} />
+          : ["skills", "mcp", "plugins"].includes(section) ? <NativeExtensions key={section} kind={section === "skills" ? "skill" : section === "mcp" ? "mcp" : "plugin"} sessionId={sessionId} onUse={onUseSkill} />
           : section === "schedules" ? <SchedulesPage onOpenSession={onOpenSession} />
           : section === "about" ? <AboutPage update={update} onCheckUpdate={onCheckUpdate} />
           : section === "interface" ? <section>

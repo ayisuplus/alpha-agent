@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createInterface } from "node:readline";
 import type { RpcCommand, RpcResponse } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
+import type { HostMethod } from "./host-types";
 
 type Frame = Record<string, unknown> & { type: string; id?: string };
 type Pending = { resolve(value: RpcResponse): void; reject(error: Error): void; timer: NodeJS.Timeout };
@@ -12,6 +13,7 @@ export class RpcProcess extends EventEmitter {
   readonly child: ChildProcessWithoutNullStreams;
   readonly ready: Promise<void>;
   #pending = new Map<string, Pending>();
+  #hostPending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void; timer: NodeJS.Timeout }>();
   #chunks = new Map<string, Chunk>();
   #sequence = 0;
   #closed = false;
@@ -27,7 +29,15 @@ export class RpcProcess extends EventEmitter {
       cwd: options.cwd,
       env: options.env,
       windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe", "ipc"],
+    }) as ChildProcessWithoutNullStreams;
+    this.child.on("message", message => {
+      const frame = message as Frame;
+      if (frame.type !== "alpha_response" || !frame.id) return;
+      const pending = this.#hostPending.get(frame.id); if (!pending) return;
+      this.#hostPending.delete(frame.id); clearTimeout(pending.timer);
+      if (frame.success === false) pending.reject(new Error(String(frame.error)));
+      else pending.resolve(frame.data);
     });
     this.child.stderr.setEncoding("utf8");
     this.child.stderr.on("data", chunk => { this.#stderr = (this.#stderr + chunk).slice(-4000); });
@@ -46,6 +56,8 @@ export class RpcProcess extends EventEmitter {
         this.#closed = true;
         const error = new Error(`OMP exited (${code}): ${this.#stderr}`);
         for (const [id, pending] of this.#pending) { clearTimeout(pending.timer); pending.reject(error); this.#pending.delete(id); }
+        for (const pending of this.#hostPending.values()) { clearTimeout(pending.timer); pending.reject(error); }
+        this.#hostPending.clear();
         this.emit("exit", error);
         reject(error);
       });
@@ -89,6 +101,16 @@ export class RpcProcess extends EventEmitter {
 
   async command(command: RpcCommand, timeoutMs = 30_000): Promise<RpcResponse> {
     return this.#command(command, `alpha-${++this.#sequence}`, timeoutMs);
+  }
+  async hostCommand(method: HostMethod, input: Record<string, unknown> = {}, timeoutMs = 90_000): Promise<unknown> {
+    await this.ready;
+    if (this.#closed) throw new Error("OMP session is closed");
+    const id = `host-${++this.#sequence}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.#hostPending.delete(id); reject(new Error(`Alpha ${method} timed out`)); }, timeoutMs);
+      this.#hostPending.set(id, { resolve, reject, timer });
+      this.child.send({ type: "alpha_request", id, method, input }, error => { if (!error) return; clearTimeout(timer); this.#hostPending.delete(id); reject(error); });
+    });
   }
 
   async #command(command: RpcCommand, id: string, timeoutMs: number): Promise<RpcResponse> {
@@ -136,7 +158,10 @@ export class RpcProcess extends EventEmitter {
 
   async stop(): Promise<void> {
     if (this.#closed) return;
-    this.child.kill();
-    await new Promise<void>(resolve => this.child.once("exit", () => resolve()));
+    const exited = new Promise<void>(resolve => this.child.once("exit", () => resolve()));
+    // Native RPC's EOF path disposes tools, subagents, MCP and session storage.
+    this.child.stdin.end();
+    const fallback = setTimeout(() => this.child.kill(), 10_000);
+    try { await exited; } finally { clearTimeout(fallback); }
   }
 }

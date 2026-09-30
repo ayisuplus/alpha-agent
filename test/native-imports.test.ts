@@ -6,9 +6,10 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 const repoRoot = resolve(import.meta.dir, "..");
 const nativeRoot = join(repoRoot, "src", "native");
 
-/** The three native entry modules whose import closure must stay inside src/native/. */
+/** Native entry modules whose import closure must stay inside src/native/. */
 const entries = [
   join("src", "native", "server.ts"),
+  join("src", "native", "omp-host.ts"),
   join("src", "native", "tianshu", "extension.ts"),
   join("src", "native", "capabilities", "extension.ts"),
 ];
@@ -38,7 +39,7 @@ const insideNative = (path: string) => {
 };
 
 describe("native import closure", () => {
-  test("the three entry files exist", () => {
+  test("the native entry files exist", () => {
     for (const entry of entries) expect(existsSync(join(repoRoot, entry))).toBe(true);
   });
 

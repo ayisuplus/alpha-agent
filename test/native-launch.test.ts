@@ -34,20 +34,21 @@ describe("Alpha launch construction", () => {
     await expect(persistedSessionId(sessionDir, "missing-id")).rejects.toThrow("已有会话文件未改动");
     expect(await readFile(join(sessionDir, "2026-09-30_saved-id.jsonl"), "utf8")).toContain('"id":"saved-id"');
   });
-  test("rpc and terminal argv differ only by --mode", async () => {
+  test("SDK host and terminal retain identical native bootstrap flags", async () => {
     const input = options();
     const rpc = await buildLaunch(input);
     const terminal = await buildLaunch({ ...input, mode: "terminal" });
     const modeIndex = rpc.argv.indexOf("--mode");
     expect(modeIndex).toBeGreaterThan(0);
     expect(rpc.argv.slice(modeIndex)).toEqual(["--mode", "rpc-ui"]);
-    expect(rpc.argv.slice(0, modeIndex)).toEqual(terminal.argv);
+    expect(rpc.argv.slice(1, modeIndex)).toEqual(terminal.argv.slice(1));
+    expect(rpc.argv[0]).toEndWith(join("src", "native", "omp-host.ts"));
   });
 
   test("argv mounts skills, identity, generated config and both extensions, and resumes by id", async () => {
     const plan = await buildLaunch(options({ ompSessionId: "omp-session-42" }));
     const app = resolve(import.meta.dir, "..");
-    expect(plan.argv[0]).toBe(join(app, "node_modules", "@oh-my-pi", "pi-coding-agent", "dist", "cli.js"));
+    expect(plan.argv[0]).toBe(join(app, "src", "native", "omp-host.ts"));
     const pair = (flag: string) => plan.argv[plan.argv.indexOf(flag) + 1];
     expect(pair("--plugin-dir")).toBe(join(app, "presets", "alpha-plugin"));
     expect(pair("--append-system-prompt")).toBe(join(app, "presets", "alpha-identity.md"));

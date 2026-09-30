@@ -13,6 +13,7 @@ import { ComfyClient } from "./capabilities/comfyui/comfy-client";
 import { ScheduleStore, Scheduler, type Schedule, type ScheduleDeliver } from "./scheduler";
 import { projectReview } from "./project-review";
 import { projectFilePreview, projectFileContent } from "./project-file";
+import type { ExtensionCatalog, HostMethod } from "./host-types";
 
 interface SessionRecord {
   id: string;
@@ -49,6 +50,9 @@ const activity = new Map<string, { status: string; notice?: string; uiRequest?: 
 const MAX_PROCESSES = 4;
 const IDLE_STOP_MS = 10 * 60_000;
 const lastUsed = new Map<string, number>();
+const pendingReloads = new Set<string>();
+let extensionWrites: Promise<unknown> = Promise.resolve();
+let extensionRevision = 0;
 function touch(id: string): void { lastUsed.set(id, Date.now()); }
 
 async function stopProcess(id: string, reason: string): Promise<void> {
@@ -189,6 +193,7 @@ async function openHost(id: string): Promise<RpcProcess> {
   const existing = processes.get(id);
   if (existing) { touch(id); return existing; }
   const item = record(id);
+  const loadedRevision = extensionRevision;
   await enforceProcessCap();
   touch(id);
   const pending = (async () => {
@@ -209,6 +214,7 @@ async function openHost(id: string): Promise<RpcProcess> {
     child.on("protocol_error", error => emit(id, { type: "host_error", error: String(error) }));
     await child.ready;
     await child.command({ type: "negotiate_protocol", protocolVersion: 2 });
+    if (loadedRevision === extensionRevision) pendingReloads.delete(id);
     if (!ompSessionId) {
       const state = await child.command({ type: "get_state" });
       const data = "data" in state ? state.data : null;
@@ -372,6 +378,44 @@ const server = Bun.serve({
         return json({ paused: input.paused === true });
       }
       if (url.pathname === "/api/native/legacy" && request.method === "GET") return json({ tasks: await legacyList() });
+      const controls = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/host\/(catalog|extension|mode|plan|tree|navigate|usage|reload)$/.exec(url.pathname);
+      if (controls) {
+        const [, id, method] = controls;
+        record(id);
+        let child = await host(id);
+        if (method === "reload" && request.method === "POST") {
+          if (!await reclaimable(child)) return json({ pendingReload: true });
+          await stopProcess(id, "正在重新加载扩展"); child = await host(id);
+          pendingReloads.delete(id);
+          return json(await child.hostCommand("catalog"));
+        }
+        if (request.method === "GET" && ["catalog", "mode", "tree", "usage"].includes(method)) {
+          const result = await child.hostCommand(method as HostMethod);
+          return json(method === "catalog" ? { ...result as ExtensionCatalog, pendingReload: pendingReloads.has(id) } : result);
+        }
+        if (request.method === "POST" && ["extension", "plan", "navigate"].includes(method)) {
+          const input = await body(request);
+          const execute = async () => {
+            child = await host(id);
+            const result = await child.hostCommand(method as HostMethod, input) as { pendingReload?: boolean };
+            if (method === "extension" && result.pendingReload) {
+              extensionRevision++;
+              for (const target of processes.keys()) if (input.scope !== "project" || input.kind === "plugin" || record(target).cwd === record(id).cwd) pendingReloads.add(target);
+              if (await reclaimable(child)) {
+                await stopProcess(id, "正在重新加载扩展"); child = await host(id);
+                const catalog = await child.hostCommand("catalog") as ExtensionCatalog;
+                return json({ ...result, pendingReload: false, catalog });
+              }
+            }
+            return json(result);
+          };
+          if (method !== "extension") return await execute();
+          const operation = extensionWrites.then(execute);
+          extensionWrites = operation.catch(() => undefined);
+          return await operation;
+        }
+        throw new Error("Unsupported host operation");
+      }
       const terminalMatch = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/terminal(?:\/(start|input|resize|stop))?$/.exec(url.pathname);
       if (terminalMatch) {
         const [, id, action] = terminalMatch;

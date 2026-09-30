@@ -40,7 +40,7 @@ async function collectSource(file: string): Promise<void> {
     await collectSource(target);
   }
 }
-for (const entry of ["server.ts", "tianshu/extension.ts", "capabilities/extension.ts"]) await collectSource(join(root, "src", "native", entry));
+for (const entry of ["server.ts", "omp-host.ts", "tianshu/extension.ts", "capabilities/extension.ts"]) await collectSource(join(root, "src", "native", entry));
 for (const file of activeSource) {
   const target = join(output, file.slice(root.length + 1));
   await mkdir(resolve(target, ".."), { recursive: true });

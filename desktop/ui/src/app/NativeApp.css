@@ -259,6 +259,12 @@
 .native-reset { color: var(--text-muted); font-size: var(--ui-caption); }
 .native-settings-notice { padding: 12px; background: var(--accent-bg); border-radius: var(--radius); font-size: var(--ui-caption); }
 .native-settings-error { color: var(--danger); }
+.native-extension-manager .settings-field-control { flex-wrap: wrap; }
+.native-extension-manager .settings-field.stacked .settings-field-control { width: 100%; flex-direction: column; align-items: stretch; }
+.native-extension-manager textarea { width: 100%; min-height: 240px; font: 13px/1.6 var(--font-mono); }
+.native-extension-manager pre { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 var(--font-mono); }
+.native-extension-row { padding: 10px 0; border-bottom: 1px solid var(--border-subtle); }
+.native-extension-row p { overflow-wrap: anywhere; font-size: var(--ui-caption); }
 
 .native-error { position: fixed; right: 16px; bottom: 16px; z-index: 20; max-width: min(440px, calc(100vw - 32px)); padding: 16px; border: 1px solid var(--danger-border); border-radius: var(--radius-lg); background: var(--danger-bg); box-shadow: var(--shadow-pop); font-size: var(--ui-caption); }
 .native-error p { margin: 8px 0; overflow-wrap: anywhere; }
