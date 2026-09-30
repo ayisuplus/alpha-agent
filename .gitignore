@@ -6,3 +6,4 @@ release/
 /products/
 artifacts/
 __pycache__/
+.workbuddy/memory/

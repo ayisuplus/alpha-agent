@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
-import { basename, join, resolve, sep } from "node:path";
+import { mkdir, readFile, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
+import { basename, join, relative, resolve, sep } from "node:path";
 import { PtySession } from "@oh-my-pi/pi-natives";
 import type { RpcCommand } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-types";
 import { RpcProcess } from "./rpc-process";
@@ -10,7 +10,7 @@ import { NativeConfiguration } from "./configuration";
 import { buildLaunch, defaultWorkspaceRoot } from "./launch";
 import { officeRuntimeStatus } from "./capabilities/office/office-runtime";
 import { ComfyClient } from "./capabilities/comfyui/comfy-client";
-import { ScheduleStore, Scheduler, type Schedule, type ScheduleInput } from "./scheduler";
+import { ScheduleStore, Scheduler, type Schedule, type ScheduleDeliver } from "./scheduler";
 
 interface SessionRecord {
   id: string;
@@ -21,6 +21,7 @@ interface SessionRecord {
   legacyTaskId?: string;
   /** The OMP session id captured from get_state; sessions resume explicitly via --resume. */
   ompSessionId?: string;
+  archived?: boolean;
 }
 
 const appRoot = resolve(import.meta.dir, "../..");
@@ -39,6 +40,8 @@ const installedVersion = (JSON.parse(await readFile(join(appRoot, "package.json"
 const updates = new OmpUpdateMonitor(installedVersion, dataRoot);
 const configuration = new NativeConfiguration();
 let saveQueue = Promise.resolve();
+let hostQueue: Promise<unknown> = Promise.resolve();
+const activity = new Map<string, { status: string; notice?: string; uiRequest?: Record<string, unknown> }>();
 
 /** OMP process lifecycle: at most MAX_PROCESSES alive, idle ones reclaimed after IDLE_STOP_MS. */
 const MAX_PROCESSES = 4;
@@ -59,10 +62,20 @@ async function stopProcess(id: string, reason: string): Promise<void> {
 async function enforceProcessCap(): Promise<void> {
   while (processes.size >= MAX_PROCESSES) {
     const ordered = [...processes.keys()].sort((a, b) => (lastUsed.get(a) ?? 0) - (lastUsed.get(b) ?? 0));
-    const victim = ordered.find(id => (streams.get(id)?.size ?? 0) === 0) ?? ordered[0];
-    if (!victim) return;
+    ordered.sort((a, b) => Number((streams.get(a)?.size ?? 0) > 0) - Number((streams.get(b)?.size ?? 0) > 0));
+    let victim: string | undefined;
+    for (const id of ordered) if (await reclaimable(await processes.get(id)!)) { victim = id; break; }
+    if (!victim) throw new Error("4 个会话都在工作，请等待其中一个完成后再打开其他会话");
     await stopProcess(victim, "Alpha 已按最近使用回收内核进程");
   }
+}
+
+async function reclaimable(child: RpcProcess): Promise<boolean> {
+  if (child.hasPendingWork) return false;
+  const response = await child.command({ type: "get_state" }).catch(() => null);
+  const state = response && "data" in response ? response.data : null;
+  return !child.hasPendingWork && !!state && typeof state === "object" && "isSettled" in state && state.isSettled === true &&
+    !("hasPendingAsyncWork" in state && state.hasPendingAsyncWork);
 }
 
 async function reapIdleProcesses(): Promise<void> {
@@ -74,29 +87,33 @@ async function reapIdleProcesses(): Promise<void> {
     if (!pending) continue;
     const child = await pending.catch(() => null);
     if (!child) { processes.delete(id); lastUsed.delete(id); continue; }
-    const state = await child.command({ type: "get_state" }).catch(() => null);
-    const data = state && "data" in state ? state.data : null;
-    const settled = data && typeof data === "object" && "isSettled" in data && data.isSettled === true;
-    if (settled && !terminals.has(id)) await stopProcess(id, "Alpha 已停止空闲的内核进程");
+    if (!terminals.has(id) && await reclaimable(child)) await stopProcess(id, "Alpha 已停止空闲的内核进程");
   }
 }
 const reaper = setInterval(() => void reapIdleProcesses(), 60_000);
 reaper.unref();
 
 /** 定时任务投递：复用会话通道（/open + prompt）。目标为 new 时到点新建会话。 */
-async function deliverSchedule(schedule: Schedule): Promise<string> {
+async function deliverSchedule(schedule: Schedule): ReturnType<ScheduleDeliver> {
   const target = schedule.target;
   const sessionId = target.kind === "session" ? target.sessionId : undefined;
   const item = sessionId ? record(sessionId) : await createSession(target.cwd ? { cwd: target.cwd, title: `定时任务 · ${schedule.name}` } : { title: `定时任务 · ${schedule.name}` });
   const child = await host(item.id);
-  await child.command({ type: "prompt", message: schedule.prompt });
-  return target.kind === "session" ? `已投递给会话 ${item.title}` : `已新建会话「${item.title}」并投递`;
+  await schedules.beginRun(schedule.id, new Date(), item.id);
+  if (!await reclaimable(child)) throw new Error(`目标会话「${item.title}」正在工作，本次跳过`);
+  const receipt = await child.promptAndWait(schedule.prompt);
+  if (receipt.status !== "completed") {
+    const error = receipt.error as { message?: string } | undefined;
+    return receipt.status === "aborted" ? { result: "任务已中止", status: "aborted" } : { result: `失败：${error?.message ?? "原生会话执行失败"}`, status: "failed" };
+  }
+  return `已完成 · 会话「${item.title}」`;
 }
 
 const schedules = new ScheduleStore(dataRoot);
 const scheduler = new Scheduler(schedules, deliverSchedule);
 
 await mkdir(nativeRoot, { recursive: true });
+await writeFile(join(nativeRoot, "browser-control.json"), JSON.stringify({ paused: false }));
 await mkdir(sessionCwd, { recursive: true });
 const saved = await readFile(indexPath, "utf8").then(text => JSON.parse(text), () => ({ sessions: [] })).catch(() => ({ sessions: [] }));
 for (const item of Array.isArray(saved.sessions) ? saved.sessions : []) if (typeof item?.id === "string" && /^[0-9a-f-]{36}$/.test(item.id)) records.set(item.id, item);
@@ -137,12 +154,35 @@ function record(id: string): SessionRecord {
   return found;
 }
 function emit(id: string, frame: unknown): void {
+  const event = frame as Record<string, unknown>;
+  const state = activity.get(id) ?? { status: "空闲" };
+  if (event.type === "agent_start" || event.type === "tool_execution_start") state.status = "工作中";
+  if (event.type === "host_command_start") state.status = "工作中";
+  if (event.type === "host_command_end") state.status = event.error ? "失败" : "完成";
+  if (event.type === "prompt_result") {
+    const error = event.error as { message?: string } | undefined;
+    state.status = event.status === "error" ? "失败" : event.status === "aborted" ? "已中止" : event.sessionSettled === true ? "完成" : "工作中";
+    state.notice = error?.message;
+  }
+  if (event.type === "session_settled" && state.status === "工作中") state.status = "完成";
+  if (event.type === "host_exit") { state.status = "未打开"; delete state.uiRequest; }
+  if (event.type === "extension_ui_request") {
+    if (["select", "confirm", "input", "editor"].includes(String(event.method))) { state.uiRequest = event; state.status = "等待输入"; }
+    if (event.method === "cancel") { delete state.uiRequest; state.status = "工作中"; }
+    if (event.method === "notify") state.notice = String(event.message ?? "");
+  }
+  activity.set(id, state);
   const data = encoder.encode(`data: ${JSON.stringify(frame)}\n\n`);
   for (const controller of streams.get(id) ?? []) {
     try { controller.enqueue(data); } catch { streams.get(id)?.delete(controller); }
   }
 }
 async function host(id: string): Promise<RpcProcess> {
+  const operation = hostQueue.then(() => openHost(id));
+  hostQueue = operation.catch(() => undefined);
+  return operation;
+}
+async function openHost(id: string): Promise<RpcProcess> {
   if (terminals.has(id)) throw new Error("Alpha 终端正在使用这个会话，请先关闭终端");
   const existing = processes.get(id);
   if (existing) { touch(id); return existing; }
@@ -155,7 +195,13 @@ async function host(id: string): Promise<RpcProcess> {
     await mkdir(dir, { recursive: true });
     const plan = await buildLaunch({ appRoot, cwd: item.cwd, sessionDir: dir, sessionId: id, dataRoot, mode: "rpc", ...(item.ompSessionId ? { ompSessionId: item.ompSessionId } : {}) });
     const child = new RpcProcess({ cwd: item.cwd, argv: plan.argv, env: plan.env });
-    child.on("frame", frame => emit(id, frame));
+    child.on("frame", frame => {
+      if (frame.type === "session_info_update" && typeof frame.title === "string" && frame.title.trim()) {
+        item.title = frame.title.trim().slice(0, 120);
+        void saveRecords();
+      }
+      emit(id, frame);
+    });
     child.on("exit", error => { processes.delete(id); if (!terminals.has(id)) emit(id, { type: "host_exit", error: error.message }); });
     child.on("protocol_error", error => emit(id, { type: "host_error", error: String(error) }));
     await child.ready;
@@ -264,7 +310,7 @@ const server = Bun.serve({
       if (url.pathname === "/api/native/updates" && request.method === "GET") return json(updates.status());
       if (url.pathname === "/api/native/capabilities" && request.method === "GET") {
         const [office, comfyOk] = await Promise.all([officeRuntimeStatus().catch(error => ({ available: false as const, reason: String(error) })),
-          new ComfyClient().health().catch(() => false)]);
+          new ComfyClient(process.env.ALPHA_COMFY_URL).health().catch(() => false)]);
         return json({ office, comfy: { available: comfyOk, url: process.env.ALPHA_COMFY_URL ?? "http://127.0.0.1:8188", ...(comfyOk ? {} : { reason: "本机未检测到 ComfyUI 服务" }) } });
       }
       if (url.pathname === "/api/native/skills" && request.method === "GET") {
@@ -293,8 +339,28 @@ const server = Bun.serve({
         return json(updates.status());
       }
       if (url.pathname === "/api/native/sessions") {
-        if (request.method === "GET") return json({ sessions: [...records.values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) });
+        if (request.method === "GET") return json({ sessions: [...records.values()].map(item => ({ ...item, ...(activity.get(item.id) ?? { status: "未打开" }) })).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)) });
         if (request.method === "POST") return json({ session: await createSession(await body(request)) }, 201);
+      }
+      const meta = /^\/api\/native\/sessions\/([0-9a-f-]{36})$/.exec(url.pathname);
+      if (meta && request.method === "POST") {
+        const item = record(meta[1]);
+        const input = await body(request);
+        if (typeof input.archived === "boolean") item.archived = input.archived;
+        if (typeof input.title === "string") {
+          if (!input.title.trim() || input.title.trim().length > 120) throw new Error("会话名称需要 1–120 个字符");
+          const child = await host(item.id);
+          await child.command({ type: "set_session_name", name: input.title.trim() });
+          item.title = input.title.trim();
+        }
+        item.updatedAt = new Date().toISOString();
+        await saveRecords();
+        return json({ session: item });
+      }
+      if (url.pathname === "/api/native/browser-control" && request.method === "POST") {
+        const input = await body(request);
+        await writeFile(join(nativeRoot, "browser-control.json"), JSON.stringify({ paused: input.paused === true }));
+        return json({ paused: input.paused === true });
       }
       if (url.pathname === "/api/native/legacy" && request.method === "GET") return json({ tasks: await legacyList() });
       const terminalMatch = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/terminal(?:\/(start|input|resize|stop))?$/.exec(url.pathname);
@@ -310,7 +376,7 @@ const server = Bun.serve({
             const state = await rpc.command({ type: "get_state" });
             const data = "data" in state ? state.data : null;
             const settled = data && typeof data === "object" ? data : {};
-            if (!("isSettled" in settled) || !settled.isSettled || ("hasPendingAsyncWork" in settled && settled.hasPendingAsyncWork)) throw new Error("Wait for OMP to finish before opening its native terminal");
+            if (rpc.hasPendingWork || !("isSettled" in settled) || !settled.isSettled || ("hasPendingAsyncWork" in settled && settled.hasPendingAsyncWork)) throw new Error("请等待会话完成后再打开原生终端");
             await rpc.stop();
             processes.delete(id);
             lastUsed.delete(id);
@@ -363,10 +429,11 @@ const server = Bun.serve({
       if (consentMatch && (request.method === "GET" || request.method === "DELETE")) {
         const [, id] = consentMatch;
         record(id);
-        const file = join(dataRoot, "native", "browser-consent.json");
+        const file = join(dataRoot, "native", "browser-consents", `${id}.json`);
         const entries = await readFile(file, "utf8").then(text => JSON.parse(text) as Record<string, unknown>, () => ({}) as Record<string, unknown>);
         if (request.method === "GET") return json({ consent: entries[id] ?? null });
         delete entries[id];
+        await mkdir(join(nativeRoot, "browser-consents"), { recursive: true });
         await writeFile(file, JSON.stringify(entries, null, 2), "utf8");
         return json({ revoked: true });
       }
@@ -379,12 +446,17 @@ const server = Bun.serve({
           return json({ open: true });
         }
         if (action === "files" && request.method === "GET") {
-          const directory = await readdir(record(id).cwd, { withFileTypes: true });
-          const files = await Promise.all(directory.filter(item => !item.name.startsWith(".")).slice(0, 120).map(async item => ({
+          const root = await realpath(record(id).cwd);
+          const path = await realpath(resolve(root, url.searchParams.get("path") ?? "."));
+          const part = relative(root, path);
+          if (part === ".." || part.startsWith(`..${sep}`) || resolve(root, part) !== path) throw new Error("只能浏览会话项目目录内的文件");
+          const directory = await readdir(path, { withFileTypes: true });
+          const files = await Promise.all(directory.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name)).map(async item => ({
             name: item.name, type: item.isDirectory() ? "directory" : "file",
-            size: item.isFile() ? await stat(join(record(id).cwd, item.name)).then(info => info.size, () => 0) : undefined,
+            path: join(path, item.name),
+            size: item.isFile() ? await stat(join(path, item.name)).then(info => info.size, () => 0) : undefined,
           })));
-          return json({ files });
+          return json({ path, relative: part, files });
         }
         if (action === "events" && request.method === "GET") {
           let currentController: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -395,6 +467,8 @@ const server = Bun.serve({
               clients.add(controller);
               streams.set(id, clients);
               controller.enqueue(encoder.encode(": connected\n\n"));
+              const pending = activity.get(id)?.uiRequest;
+              if (pending) controller.enqueue(encoder.encode(`data: ${JSON.stringify(pending)}\n\n`));
             },
             cancel() { if (currentController) streams.get(id)?.delete(currentController); },
           });
@@ -410,9 +484,19 @@ const server = Bun.serve({
         if (action === "command" && request.method === "POST") {
           const input = await body(request);
           if (typeof input.type !== "string" || ["set_host_tools", "set_host_uri_schemes", "set_event_filter"].includes(input.type)) throw new Error("Unsupported desktop command");
-          const response = await process.command(input as unknown as RpcCommand, ["compact", "login", "bash", "handoff"].includes(input.type) ? 300_000 : 30_000);
+          const work = ["compact", "login", "bash", "handoff"].includes(input.type);
+          if (work) emit(id, { type: "host_command_start" });
+          let response;
+          try {
+            response = await process.command(input as unknown as RpcCommand, work ? 300_000 : 30_000);
+            if (work && !process.hasPendingWork) emit(id, { type: "host_command_end" });
+          } catch (error) {
+            if (work && !process.hasPendingWork) emit(id, { type: "host_command_end", error: String(error) });
+            throw error;
+          }
           const item = record(id);
           item.updatedAt = new Date().toISOString();
+          if (input.type === "set_session_name" && typeof input.name === "string") item.title = input.name.trim().slice(0, 120);
           void saveRecords();
           return json(response);
         }
@@ -420,6 +504,8 @@ const server = Bun.serve({
           const input = await body(request);
           if (input.type !== "extension_ui_response" || typeof input.id !== "string") throw new Error("Invalid OMP UI response");
           process.sendFrame(input);
+          const active = activity.get(id);
+          if (active?.uiRequest?.id === input.id) { delete active.uiRequest; active.status = "工作中"; }
           return json({ accepted: true });
         }
       }
@@ -431,6 +517,7 @@ const server = Bun.serve({
 console.log(`ALPHA_SERVER_READY ${server.port}`);
 if (selfIssuedToken) console.log(`ALPHA_SERVER_TOKEN ${apiToken}`);
 void updates.start();
+await schedules.recoverInterrupted();
 scheduler.start();
 process.on("SIGINT", () => {
   scheduler.stop();

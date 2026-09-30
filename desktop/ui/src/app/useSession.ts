@@ -38,6 +38,7 @@ export interface SessionController {
   startFromHome(input: { text: string; cwd: string; model: string; thinking: string }): Promise<boolean>;
   state: NativeState | null;
   messages: NativeMessage[];
+  liveMessage: NativeMessage | null;
   /** 旧版任务“继续”带回来的续写草稿；Composer 拾取后调用 consumeDraft 清除。 */
   queuedDraft: string;
   consumeDraft(): void;
@@ -80,6 +81,7 @@ export function useSession(): SessionController {
   const [hostNotice, setHostNotice] = useState<string | null>(null);
   const [state, setState] = useState<NativeState | null>(null);
   const [messages, setMessages] = useState<NativeMessage[]>([]);
+  const [liveMessage, setLiveMessage] = useState<NativeMessage | null>(null);
   const [models, setModels] = useState<Array<{ provider: string; id: string; name?: string }>>([]);
   const [files, setFiles] = useState<Array<{ name: string; type: string; size?: number }>>([]);
   const [pendingCalls, setPendingCalls] = useState<PendingCall[]>([]);
@@ -100,6 +102,7 @@ export function useSession(): SessionController {
 
   const selectedRef = useRef<string | null>(null);
   const toolStarts = useRef<Map<string, number>>(new Map());
+  const statuses = useRef(new Map<string, string | undefined>());
   selectedRef.current = selected;
 
   const reloadList = useCallback(async () => {
@@ -108,6 +111,14 @@ export function useSession(): SessionController {
       request<{ tasks: LegacyTask[] }>("/api/native/legacy"),
     ]);
     setSessions(live.sessions);
+    for (const item of live.sessions) {
+      const before = statuses.current.get(item.id);
+      if (before && before !== item.status && ["完成", "失败", "等待输入"].includes(item.status ?? "")) {
+        window.alpha?.notify?.(`Alpha · ${item.status}`, `${item.title}${item.notice ? `：${item.notice}` : ""}`, item.id);
+        if (item.status === "等待输入") window.alpha?.attention?.();
+      }
+      statuses.current.set(item.id, item.status);
+    }
     setLegacy(old.tasks);
   }, []);
 
@@ -137,6 +148,8 @@ export function useSession(): SessionController {
 
   useEffect(() => {
     void reloadList().catch(cause => setError(String(cause)));
+    const timer = setInterval(() => void reloadList().catch(() => undefined), 3_000);
+    return () => clearInterval(timer);
   }, [reloadList]);
 
   useEffect(() => {
@@ -150,6 +163,7 @@ export function useSession(): SessionController {
     let feed: EventSource | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     setState(null); setMessages([]); setLogs([]); setWidgets([]); setPendingCalls([]); setToolTiming({});
+    setLiveMessage(null);
     setLiveNotes([]); setTianshuStatus(null); setOpened(false); setHostNotice(null); setError("");
     const refresh = () => {
       clearTimeout(timer);
@@ -165,6 +179,18 @@ export function useSession(): SessionController {
         feed.onmessage = event => {
           const frame = JSON.parse(event.data) as Record<string, unknown>;
           const type = String(frame.type ?? "");
+          if (type === "message_update") {
+            const partial = (frame.assistantMessageEvent as { partial?: NativeMessage } | undefined)?.partial ?? frame.message as NativeMessage | undefined;
+            if (partial?.role === "assistant") setLiveMessage(partial);
+          }
+          if (type === "message_end") setLiveMessage(null);
+          if (type === "agent_start") setState(current => current ? { ...current, isStreaming: true, isSettled: false } : current);
+          if (type === "prompt_result") {
+            setLiveMessage(null);
+            if (frame.status === "error") setError((frame.error as { message?: string } | undefined)?.message ?? "本轮执行失败");
+            if (frame.status === "aborted") setLiveNotes(current => [...current.filter(note => note.id !== "result"), { id: "result", text: "本轮已中止" }]);
+          }
+          if (type === "command_output") setLiveNotes(current => [...current.filter(note => note.id !== "command"), { id: "command", text: String(frame.text ?? "") }]);
           const at = new Date().toLocaleTimeString();
           if (type === "terminal_start") setTerminalActive(true);
           if (type === "terminal_chunk") setTerminalOutput(current => (current + String(frame.chunk ?? "")).slice(-100_000));
@@ -174,7 +200,7 @@ export function useSession(): SessionController {
             onDialog(request) { setUiValue(request.prefill ?? ""); setUiRequest(request); },
             onCancel(targetId) { setUiRequest(current => current && (!targetId || current.id === targetId) ? null : current); },
             onUrl(value) { setExternalUrl(value); },
-            onNotify(message) { setLogs(items => [...items.slice(-149), { at, text: message }]); },
+            onNotify(message) { setLogs(items => [...items.slice(-149), { at, text: message }]); setLiveNotes(current => [...current.filter(note => note.id !== "notification"), { id: "notification", text: message }]); },
             onStatus(key, text) { if (key === "tianshu") setTianshuStatus(text ?? null); },
             onWidget(key, lines) {
               setWidgets(current => {
@@ -332,7 +358,7 @@ export function useSession(): SessionController {
   return {
     sessions, legacy, selected, current: sessions.find(item => item.id === selected) ?? null,
     opened, hostNotice, reopen, select, create, continueLegacy, startFromHome,
-    state, messages, queuedDraft, consumeDraft: () => setQueuedDraft(""),
+    state, messages, liveMessage, queuedDraft, consumeDraft: () => setQueuedDraft(""),
     models, files, pendingCalls, toolTiming, liveNotes, widgets, tianshuStatus, logs,
     uiRequest, uiValue, setUiValue, respond, externalUrl, setExternalUrl,
     terminalActive, terminalOutput, terminal, command, send, refresh, reloadList,

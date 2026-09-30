@@ -1,5 +1,7 @@
 # Alpha 评测集
 
+> 历史材料：本目录针对已退役的 Alpha HTTP 协议，`bun run eval` 已不可用，不属于当前版本验收入口。当前检查使用根目录 README 中的 check / test / validate:skills / build:desktop-ui。下文保留旧评测方案供参考。
+
 用来回答"这次改 harness 之后，Alpha 是变好了还是变差了"。评测脚本像用户一样通过工作台 HTTP 接口给 Alpha 派任务，等它自己结束，再用 Alpha 看不到的检查打分：
 
 - 代码任务：一个带 bug 的小仓库。Alpha 能看到仓库和可见的冒烟测试；打分时把隐藏测试放进它改完的项目副本里运行。

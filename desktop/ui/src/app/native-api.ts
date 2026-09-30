@@ -7,7 +7,7 @@
  */
 
 /** Alpha 发行版本；随发版更新（方案 10.1：本轮重构发版 0.2.0）。 */
-export const ALPHA_VERSION = "0.2.0";
+export const ALPHA_VERSION = "0.2.1";
 
 export type NativeModel = { selector: string; provider: string; id: string; name: string; available: boolean; reasoning: boolean; contextWindow: number };
 export type NativeCatalog = { models: NativeModel[]; providers: Array<{ id: string; origin: string | null; storedKey: boolean; oauth: boolean; available: number }>; error: string | null };
@@ -23,6 +23,9 @@ export interface SessionItem {
   legacyTaskId?: string;
   /** OMP 显式 --resume 恢复用的会话 ID。 */
   ompSessionId?: string;
+  archived?: boolean;
+  status?: string;
+  notice?: string;
 }
 
 export interface LegacyTask { id: string; title: string; status: string; objective: string }
@@ -60,6 +63,7 @@ export interface NativeMessage {
   timestamp?: number;
   duration?: number;
   retryRecovery?: RetryRecoveryNote;
+  errorMessage?: string;
 }
 
 export interface NativeState {

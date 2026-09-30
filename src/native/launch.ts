@@ -63,6 +63,11 @@ export function buildLaunchEnv(options: LaunchOptions, source: NodeJS.ProcessEnv
   env.ALPHA_DATA_ROOT = options.dataRoot;
   if (source.ALPHA_CVM_MODE) env.ALPHA_CVM_MODE = source.ALPHA_CVM_MODE;
   if (source.PI_CODING_AGENT_DIR) env.PI_CODING_AGENT_DIR = source.PI_CODING_AGENT_DIR;
+  if (source.ALPHA_COMFY_URL) {
+    const url = new URL(source.ALPHA_COMFY_URL);
+    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1") throw new Error("ComfyUI must be on loopback");
+    env.ALPHA_COMFY_URL = url.origin;
+  }
   if (options.mode === "rpc") env.PI_RPC_EMIT_TITLE = "1";
   if (options.mode === "terminal" && options.terminalTheme) env.ALPHA_TERMINAL_THEME = "1";
   return env;

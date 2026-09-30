@@ -83,7 +83,7 @@ function CapabilityPage({ sessionId }: { sessionId: string | null }) {
     ? status.office.available ? `可用${status.office.version ? `（${status.office.version}${status.office.location ? ` · ${status.office.location === "bundled" ? "随包" : "系统"}` : ""}）` : ""}` : `缺失${status.office.reason ? `（${status.office.reason}）` : ""}`
     : "未检测";
   const comfyLine = status
-    ? status.comfy.available ? `可用（${status.comfy.url}）` : `不可用${status.comfy.reason ? `（${status.comfy.reason}）` : ""}`
+    ? status.comfy.available ? `服务可连接（${status.comfy.url}）` : `不可用${status.comfy.reason ? `（${status.comfy.reason}）` : ""}`
     : "未检测";
   return <section>
     <SectionTitle title="本机能力" description="模型可调用的本机能力、引擎状态与浏览器授权。浏览器授权按会话存储，可在此撤销。" />
@@ -100,7 +100,7 @@ function CapabilityPage({ sessionId }: { sessionId: string | null }) {
         void window.alpha?.browserHostRestart?.().then(check, () => setBusy(false));
       }}>重启宿主</button>
     </Field>
-    <Field label="ComfyUI" description="本机图片、配音与视频生成服务；服务由你自己保持运行。">
+    <Field label="ComfyUI" description="本机图片、配音与视频生成服务，由你保持运行。这里只检测连接；生成前还需准备工作流要求的节点与模型。">
       <span className="native-muted">{comfyLine}</span>
     </Field>
     <h3 className="settings-subheading">浏览器授权（当前会话）</h3>
@@ -131,7 +131,7 @@ function SkillsPage() {
 }
 
 /** “定时任务”页：到点把提示词投递给指定会话或新建会话（sidecar 调度，不叠加执行）。 */
-function SchedulesPage() {
+function SchedulesPage({ onOpenSession }: { onOpenSession?(id: string): void }) {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
   const [sessions, setSessions] = useState<Array<{ id: string; title: string }>>([]);
   const [name, setName] = useState("");
@@ -143,20 +143,22 @@ function SchedulesPage() {
   const [sessionId, setSessionId] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [cwd, setCwd] = useState("");
   const refresh = () => {
     void Promise.all([
       nativeApi<{ schedules: Array<Record<string, unknown>> }>("schedules").then(result => setRows(result.schedules)),
       nativeApi<{ sessions: Array<{ id: string; title: string }> }>("sessions").then(result => setSessions(result.sessions)),
     ]).catch(cause => setError(String(cause)));
   };
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { refresh(); const timer = setInterval(refresh, 5_000); return () => clearInterval(timer); }, []);
   const submit = () => {
     setBusy(true); setError("");
-    void nativeApi("schedules", {
+    void nativeApi(editing ? `schedules/${editing}` : "schedules", {
       name, prompt, kind,
       ...(kind === "interval" ? { intervalMinutes: Number(intervalMinutes) } : { cron }),
-      target: targetKind === "new" ? { kind: "new" } : { kind: "session", sessionId },
-    }).then(() => { setName(""); setPrompt(""); refresh(); }, cause => setError(String(cause))).finally(() => setBusy(false));
+      target: targetKind === "new" ? { kind: "new", ...(cwd.trim() ? { cwd: cwd.trim() } : {}) } : { kind: "session", sessionId },
+    }).then(() => { setName(""); setPrompt(""); setEditing(null); refresh(); }, cause => setError(String(cause))).finally(() => setBusy(false));
   };
   const patch = (id: string, input: Record<string, unknown>) => {
     setBusy(true);
@@ -168,8 +170,8 @@ function SchedulesPage() {
     void nativeDelete(`schedules/${id}`).then(refresh, cause => setError(String(cause))).finally(() => setBusy(false));
   };
   return <section>
-    <SectionTitle title="定时任务" description="到点把提示词投递给指定会话，或自动新建会话执行；同一任务上一次未完成时不叠加。" />
-    <h3 className="settings-subheading">新建</h3>
+    <SectionTitle title="定时任务" description={`仅在 Alpha 运行时执行。按本机时区 ${Intl.DateTimeFormat().resolvedOptions().timeZone} 调度；重启后错过的触发只补一次。目标会话忙碌时本次跳过，完成记录以实际执行结束为准。`} />
+    <h3 className="settings-subheading">{editing ? "编辑任务" : "新建"}</h3>
     <Field label="名称" description="显示在列表里的名字。">
       <input aria-label="名称" value={name} onChange={event => setName(event.target.value)} placeholder="例如：每早日报" />
     </Field>
@@ -194,19 +196,27 @@ function SchedulesPage() {
         <option value="">选择会话…</option>
         {sessions.map(session => <option key={session.id} value={session.id}>{session.title}</option>)}
       </select>}
-      <button disabled={busy || !name.trim() || !prompt.trim() || (targetKind === "session" && !sessionId)} onClick={submit}>添加</button>
+      {targetKind === "new" && <input aria-label="定时任务项目目录" value={cwd} onChange={event => setCwd(event.target.value)} placeholder="项目目录（留空使用默认工作区）" />}
+      <button disabled={busy || !name.trim() || !prompt.trim() || (targetKind === "session" && !sessionId)} onClick={submit}>{editing ? "保存修改" : "添加"}</button>
+      {editing && <button onClick={() => { setEditing(null); setName(""); setPrompt(""); }}>取消编辑</button>}
     </Field>
     {error && <p className="native-settings-error">{error}</p>}
     <h3 className="settings-subheading">计划列表（{rows.length}）</h3>
     {rows.length === 0 && <p className="native-muted">还没有定时任务。</p>}
     {rows.map(row => {
-      const target = row.target as { kind?: string } | undefined;
+      const target = row.target as { kind?: string; sessionId?: string; cwd?: string } | undefined;
       return <div key={String(row.id)} className="native-file">
         <span>{String(row.name)}</span>
         <span className="native-muted">{row.kind === "interval" ? `每 ${String(row.intervalMinutes)} 分钟` : `cron ${String(row.cron)}`}</span>
         <span className="native-muted">{target?.kind === "new" ? "新建会话" : "指定会话"}</span>
         <span className="native-muted">下次 {row.nextRunAt ? new Date(String(row.nextRunAt)).toLocaleString() : "—"}</span>
         <span className="native-muted">{row.lastResult ? `上次：${String(row.lastResult)}` : ""}</span>
+        {typeof row.lastSessionId === "string" && <button onClick={() => onOpenSession?.(row.lastSessionId as string)}>查看执行会话</button>}
+        <button disabled={busy || row.lastStatus === "running"} onClick={() => {
+          setEditing(String(row.id)); setName(String(row.name)); setPrompt(String(row.prompt));
+          setKind(row.kind === "cron" ? "cron" : "interval"); setIntervalMinutes(String(row.intervalMinutes ?? 30)); setCron(String(row.cron ?? "0 9 * * 1-5"));
+          setTargetKind(target?.kind === "session" ? "session" : "new"); setSessionId(target?.sessionId ?? ""); setCwd(target?.cwd ?? "");
+        }}>编辑</button>
         <button disabled={busy} onClick={() => patch(String(row.id), { enabled: row.enabled !== true })}>{row.enabled === true ? "停用" : "启用"}</button>
         <button disabled={busy} onClick={() => remove(String(row.id))}>删除</button>
       </div>;
@@ -218,7 +228,7 @@ function SchedulesPage() {
 function AboutPage({ update, onCheckUpdate }: { update: UpdateStatus | null; onCheckUpdate(): void }) {
   return <section>
     <SectionTitle title="关于" description="产品、内核与天枢层的版本与许可。" />
-    <Field label="Alpha" description="桌面工作台与本机能力层。"><span className="native-muted">{ALPHA_VERSION}</span></Field>
+    <Field label="Alpha" description="桌面工作台与本机能力层。Apache-2.0 许可，见发行包 LICENSE 与 NOTICE。"><span className="native-muted">{ALPHA_VERSION}</span></Field>
     <Field label="OMP 内核" description="会话、模型、工具与终端由 OMP 原生内核执行；MIT 许可（随包 node_modules/@oh-my-pi/pi-coding-agent/LICENSE）。">
       <span className="native-muted">{update?.current ?? "18.4.3"}</span>
     </Field>
@@ -233,7 +243,9 @@ function AboutPage({ update, onCheckUpdate }: { update: UpdateStatus | null; onC
   </section>;
 }
 
-export function NativeSettings({ config, catalog, onConfig, reload, onClose, fontSize, setFontSize, workspaceVisible, setWorkspaceVisible, diagnostics, setDiagnostics, update, onCheckUpdate, sessionId }: {
+export function NativeSettings({ config, catalog, onConfig, reload, onClose, fontSize, setFontSize, workspaceVisible, setWorkspaceVisible, diagnostics, setDiagnostics, update, onCheckUpdate, sessionId, initialSection = "model", onOpenSession }: {
+  initialSection?: string;
+  onOpenSession?(id: string): void;
   config: NativeConfig | null;
   catalog: NativeCatalog | null;
   onConfig(value: NativeConfig): void;
@@ -249,7 +261,7 @@ export function NativeSettings({ config, catalog, onConfig, reload, onClose, fon
   onCheckUpdate(): void;
   sessionId: string | null;
 }) {
-  const [section, setSection] = useState("model");
+  const [section, setSection] = useState(initialSection);
   const [filter, setFilter] = useState("");
   const [group, setGroup] = useState("context");
   const [allProviders, setAllProviders] = useState(false);
@@ -291,7 +303,7 @@ export function NativeSettings({ config, catalog, onConfig, reload, onClose, fon
         {notice && <p role="status" className="native-settings-notice">{notice}</p>}
         {section === "capabilities" ? <CapabilityPage sessionId={sessionId} />
           : section === "skills" ? <SkillsPage />
-          : section === "schedules" ? <SchedulesPage />
+          : section === "schedules" ? <SchedulesPage onOpenSession={onOpenSession} />
           : section === "about" ? <AboutPage update={update} onCheckUpdate={onCheckUpdate} />
           : section === "interface" ? <section>
             <SectionTitle title="界面" description="只影响工作台本身。" />
@@ -317,7 +329,7 @@ export function NativeSettings({ config, catalog, onConfig, reload, onClose, fon
             <div className="native-settings-search"><input aria-label="搜索服务商" placeholder="搜索服务商…" value={filter} onChange={event => setFilter(event.target.value)} /><label><input type="checkbox" checked={allProviders} onChange={event => setAllProviders(event.target.checked)} />显示全部服务商</label><button disabled={busy} onClick={() => { setBusy(true); void reload().catch(cause => setError(String(cause))).finally(() => setBusy(false)); }}>刷新</button></div>
             {catalog.providers.filter(item => (allProviders || filter || item.origin || item.storedKey) && item.id.toLowerCase().includes(filter.toLowerCase())).map(item =>
               <div className="provider-row" key={item.id}>
-                <div className="provider-main"><strong>{item.id}</strong><small>{item.origin ? `已配置 · ${item.origin}` : "未配置凭据"} · {item.available} 个模型可用</small></div>
+                <div className="provider-main"><strong>{item.id}</strong><small>{item.origin === "env" && !item.storedKey && !item.oauth ? "检测到环境凭据，请在这里保存后使用" : item.origin ? `已配置 · ${item.origin}` : "未配置凭据"} · {item.available} 个模型可用</small></div>
                 {provider === item.id ? <form className="provider-key-form" onSubmit={event => { event.preventDefault(); void credential(item.id, "save"); }}>
                   <input type="password" autoComplete="off" aria-label={`${item.id} API Key`} placeholder="粘贴 API Key" value={key} onChange={event => setKey(event.target.value)} />
                   <button disabled={busy || !key.trim()}>保存</button>

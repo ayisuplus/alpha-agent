@@ -30,9 +30,36 @@ describe("cron scheduling", () => {
     expect(nextCronRun("a b c d e", at("2026-09-30T10:00:00Z"))).toBeNull();
     expect(computeNextRun({ kind: "cron", cron: "bad" }, at("2026-09-30T10:00:00Z"))).toBeNull();
   });
+  test("supports Sunday 7, day OR semantics, leap years, and field bounds", () => {
+    const from = new Date(2026, 8, 30, 10);
+    expect(nextCronRun("0 9 * * 7", from)?.getDay()).toBe(0);
+    // October 1 is Thursday, but the restricted day-of-month matches.
+    expect(nextCronRun("0 9 1 * 1", from)?.getDate()).toBe(1);
+    expect(nextCronRun("0 9 29 2 *", from)?.getFullYear()).toBe(2028);
+    for (const expr of ["0 24 * * *", "0 9 0 * *", "0 9 * 13 *", "0 9 * * 8", "0 9 31 2 *", "0 9 * * 5-1"]) {
+      expect(nextCronRun(expr, from)).toBeNull();
+    }
+  });
 });
 
 describe("schedule store", () => {
+  test("serializes complete read-modify-write operations and recovers after invalid updates", async () => {
+    const root = await mkdtemp(join(tmpdir(), "alpha-schedule-race-"));
+    try {
+      const store = new ScheduleStore(root);
+      const items = await Promise.all(Array.from({ length: 20 }, (_, i) => store.create({ name: `task-${i}`, prompt: "p", kind: "interval", intervalMinutes: 10 })));
+      expect(await store.list()).toHaveLength(20);
+      await expect(store.update(items[0].id, { prompt: "" })).rejects.toThrow();
+      await Promise.all(items.map(item => store.update(item.id, { prompt: "updated" })));
+      expect((await store.list()).every(item => item.prompt === "updated")).toBe(true);
+      await store.beginRun(items[0].id, new Date(), "session-link");
+      await new ScheduleStore(root).recoverInterrupted();
+      const recovered = (await store.list()).find(item => item.id === items[0].id)!;
+      expect(recovered.lastStatus).toBe("interrupted");
+      expect(recovered.lastSessionId).toBe("session-link");
+      expect(recovered.nextRunAt).not.toBeNull();
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
   test("persists schedules, validates input, and records runs", async () => {
     const root = await mkdtemp(join(tmpdir(), "alpha-schedules-"));
     try {
@@ -86,6 +113,7 @@ describe("scheduler ticks", () => {
       await startedSignal;
       await scheduler.tick(); // 上一次未完成：不叠加
       expect(delivered).toEqual(["due"]);
+      expect((await store.list()).find(item => item.id === due.id)?.lastStatus).toBe("running");
       release?.();
       await first;
 

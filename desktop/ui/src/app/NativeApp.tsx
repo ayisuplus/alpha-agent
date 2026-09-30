@@ -18,6 +18,8 @@ import "./NativeApp.css";
 export function NativeApp() {
   const session = useSession();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState("model");
+  const openSettings = (section = "model") => { setSettingsSection(section); setSettingsOpen(true); };
   const [projectDialog, setProjectDialog] = useState(false);
   const [projectPath, setProjectPath] = useState("");
   const [config, setConfig] = useState<NativeConfig | null>(null);
@@ -28,6 +30,11 @@ export function NativeApp() {
   const [diagnostics, setDiagnostics] = useState(() => localStorage.getItem("alpha-native-diagnostics") === "1");
   const [error, setError] = useState("");
   const alertedVersion = useRef<string | null>(null);
+
+  useEffect(() => window.alpha?.onOpenTask?.(id => {
+    if (id === "omp-update") { setSettingsSection("about"); setSettingsOpen(true); }
+    else { session.select(id); setSettingsOpen(false); }
+  }), [session.select]);
 
   useEffect(() => {
     void loadConfiguration().then(loaded => { setConfig(loaded.config); setCatalog(loaded.catalog); }).catch(cause => setError(String(cause)));
@@ -68,7 +75,7 @@ export function NativeApp() {
       onNew={() => { session.select(null); setSettingsOpen(false); }}
       onNewElsewhere={() => { setProjectPath(""); setProjectDialog(true); }}
       onContinueLegacy={task => void session.continueLegacy(task)}
-      onOpenSettings={() => setSettingsOpen(true)}
+      onOpenSettings={openSettings}
     />
     <main className="native-main">
       {update?.available && update.latest && <div className="native-update-banner" role="status">
@@ -81,6 +88,9 @@ export function NativeApp() {
         }}>发布说明</button>
       </div>}
       {settingsOpen ? <NativeSettings
+        key={settingsSection}
+        initialSection={settingsSection}
+        onOpenSession={id => { session.select(id); setSettingsOpen(false); }}
         config={config}
         catalog={catalog}
         onConfig={setConfig}
@@ -100,14 +110,14 @@ export function NativeApp() {
         onCheckUpdate={() => void request<UpdateStatus>("/api/native/updates/check", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then(setUpdate, cause => setError(String(cause)))}
         sessionId={session.selected}
       />
-        : session.current ? <NativeThread session={session} sessionInfo={session.current} onOpenSettings={() => setSettingsOpen(true)} />
+        : session.current ? <NativeThread session={session} sessionInfo={session.current} onOpenSettings={openSettings} />
         : <NativeHome
           session={session}
           catalog={catalog}
           config={config}
           projectPath={projectPath}
           setProjectPath={setProjectPath}
-          onOpenSettings={() => setSettingsOpen(true)}
+          onOpenSettings={openSettings}
         />}
     </main>
     {session.current && workspaceVisible && !settingsOpen && <NativeWorkspace session={session} diagnostics={diagnostics} />}

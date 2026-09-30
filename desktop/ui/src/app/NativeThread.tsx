@@ -14,7 +14,7 @@ import remarkGfm from "remark-gfm";
 import { ArrowUp, CircleStop, FileText, RotateCcw, Terminal } from "lucide-react";
 import { NativeTerminal } from "./NativeTerminal";
 import {
-  argsSummary, contentImages, plain, toolPayload,
+  argsSummary, contentImages, plain, toolPayload, request, sessionRequest,
   type NativeMessage, type SessionItem, type ToolPayload,
 } from "./native-api";
 import type { PendingCall, SessionController } from "./useSession";
@@ -43,7 +43,7 @@ type ThreadItem =
   | { kind: "note"; key: string; text: string };
 
 /** 消息流 + 进行中的工具调用 + 计时 → 对话条目。 */
-function buildItems(messages: NativeMessage[], pending: PendingCall[], timing: Record<string, number>, liveNotes: Array<{ id: string; text: string }>): ThreadItem[] {
+export function buildItems(messages: NativeMessage[], pending: PendingCall[], timing: Record<string, number>, liveNotes: Array<{ id: string; text: string }>): ThreadItem[] {
   const items: ThreadItem[] = [];
   const settledCalls = new Set<string>();
   for (const message of messages) {
@@ -54,7 +54,8 @@ function buildItems(messages: NativeMessage[], pending: PendingCall[], timing: R
     }
     if (message.role === "assistant") {
       const parts = Array.isArray(message.content) ? message.content : [];
-      const text = parts.filter(part => part.type === "text").map(part => part.text ?? "").join("\n");
+      const text = plain(message);
+      if (message.errorMessage) items.push({ kind: "note", key: `${key}:error`, text: `执行失败：${message.errorMessage}` });
       const recovery = message.retryRecovery;
       if (recovery) {
         items.push({
@@ -219,8 +220,10 @@ function Composer({ session, onOpenSettings }: { session: SessionController; onO
   const [drafts] = useState(() => new Map<string, string>());
   const [draft, setDraft] = useState("");
   const [image, setImage] = useState<{ data: string; mimeType: string; name: string } | null>(null);
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [commands, setCommands] = useState<Array<{ name: string; description?: string }> | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => { setDraft(drafts.get(session.selected ?? "") ?? ""); setImage(null); }, [session.selected, drafts]);
+  useEffect(() => { setDraft(drafts.get(session.selected ?? "") ?? ""); setImage(null); setAttachments([]); setCommands(null); }, [session.selected, drafts]);
   useEffect(() => {
     if (!session.queuedDraft) return;
     setDraft(session.queuedDraft);
@@ -230,9 +233,11 @@ function Composer({ session, onOpenSettings }: { session: SessionController; onO
   const state = session.state;
   const placeholder = state?.isStreaming ? "补充要求，将实时送给正在工作的 Alpha…" : "向 Alpha 说明你的任务…";
   const send = async () => {
-    if (await session.send(draft, image ?? undefined)) {
+    const text = attachments.length ? `${draft.trim() || "请读取附件"}\n\n用户选择的本机附件（请用 read 读取；修改前先检查文件支持范围）：\n${attachments.map(path => `- ${JSON.stringify(path)}`).join("\n")}` : draft;
+    if (await session.send(text, image ?? undefined)) {
       setDraft("");
       setImage(null);
+      setAttachments([]);
       drafts.delete(session.selected ?? "");
     }
   };
@@ -250,6 +255,7 @@ function Composer({ session, onOpenSettings }: { session: SessionController; onO
   return <div className="native-compose">
     {session.widgets.map(block => block.lines.map((line, index) => <div className="native-tool-call" key={`${block.key}:${index}`}>{line}</div>))}
     <div className="native-compose-tools">
+      {window.alpha?.choosePaths && <button onClick={() => void window.alpha!.choosePaths!("files").then(paths => setAttachments(current => [...new Set([...current, ...paths])]), cause => session.setError(String(cause)))}>添加文件</button>}
       <label title="添加图片"><FileText size={16} /><input type="file" accept="image/*" onChange={event => void attach(event.target.files?.[0])} /></label>
       {image && <span>{image.name} <button onClick={() => setImage(null)}>×</button></span>}
       <select title="模型" value={state?.model ? `${state.model.provider}/${state.model.id}` : ""} onChange={event => {
@@ -264,24 +270,45 @@ function Composer({ session, onOpenSettings }: { session: SessionController; onO
       </select>
       <button onClick={onOpenSettings}>模型设置</button>
       <button onClick={() => void session.command({ type: "compact" })} title="压缩上下文">压缩上下文</button>
+      <button onClick={() => {
+        if (commands) { setCommands(null); return; }
+        if (session.selected) void sessionRequest<{ data: { commands: Array<{ name: string; description?: string }> } }>(session.selected, "command", { type: "get_available_commands" }).then(result => setCommands(result.data.commands), cause => session.setError(String(cause)));
+      }}>原生命令</button>
     </div>
+    {!!attachments.length && <div className="native-compose-tools">{attachments.map(path => <span key={path} title={path}>{path.split(/[\\/]/).at(-1)} <button onClick={() => setAttachments(current => current.filter(item => item !== path))}>×</button></span>)}</div>}
+    {commands && <div className="native-command-list"><p className="native-muted">当前会话的原生命令与 Skill。MCP、OAuth 和完整交互管理可打开 Alpha 终端。</p><div className="native-compose-tools">{commands.map(item => <button key={item.name} title={item.description} onClick={() => { setDraft(`/${item.name} `); setCommands(null); input.current?.focus(); }}>/{item.name}</button>)}</div></div>}
     <textarea ref={input} value={draft} aria-label={placeholder}
       onChange={event => { setDraft(event.target.value); drafts.set(session.selected ?? "", event.target.value); }}
       onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }}
       placeholder={placeholder} />
     <div className="native-compose-bottom">
       <span>{state?.model ? `${state.model.provider}/${state.model.id}` : "跟随全局默认模型"}</span>
-      <button disabled={!draft.trim()} onClick={() => void send()} aria-label="发送"><ArrowUp size={17} /></button>
+      <button disabled={!session.opened || (!draft.trim() && !attachments.length)} onClick={() => void send()} aria-label="发送"><ArrowUp size={17} /></button>
     </div>
   </div>;
 }
 
 /** 会话视图：顶栏（天枢状态段）+ 进程提示 + 对话流 + 输入框（setWidget 行在输入框上方）。 */
 export function NativeThread({ session, sessionInfo, onOpenSettings }: { session: SessionController; sessionInfo: SessionItem; onOpenSettings(): void }) {
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(sessionInfo.title);
+  useEffect(() => { setName(sessionInfo.title); setRenaming(false); }, [sessionInfo.id]);
+  const edit = async (input: Record<string, unknown>) => {
+    try { await request(`/api/native/sessions/${sessionInfo.id}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input) }); await session.reloadList(); setRenaming(false); }
+    catch (cause) { session.setError(String(cause)); }
+  };
+  const exportMessages = async () => {
+    const text = `# ${sessionInfo.title}\n\n项目：${sessionInfo.cwd}\n\n${session.messages.map(message => `## ${message.role}${message.toolName ? ` · ${message.toolName}` : ""}\n\n${plain(message)}${message.errorMessage ? `\n\n执行失败：${message.errorMessage}` : ""}`).join("\n\n")}\n`;
+    if (window.alpha?.saveText) await window.alpha.saveText(`${sessionInfo.title}.md`, text);
+    else {
+      const url = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" }));
+      const link = document.createElement("a"); link.href = url; link.download = `${sessionInfo.title.replace(/[<>:"/\\|?*]/g, "_")}.md`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    }
+  };
   const end = useRef<HTMLDivElement>(null);
   const items = useMemo(
-    () => buildItems(session.messages, session.pendingCalls, session.toolTiming, session.liveNotes),
-    [session.messages, session.pendingCalls, session.toolTiming, session.liveNotes],
+    () => buildItems(session.liveMessage ? [...session.messages.filter(message => message.role !== "assistant" || message.timestamp !== session.liveMessage?.timestamp), session.liveMessage] : session.messages, session.pendingCalls, session.toolTiming, session.liveNotes),
+    [session.messages, session.liveMessage, session.pendingCalls, session.toolTiming, session.liveNotes],
   );
   useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [items.length, sessionInfo.id]);
   const state = session.state;
@@ -289,6 +316,9 @@ export function NativeThread({ session, sessionInfo, onOpenSettings }: { session
     <header className="native-header">
       <div><strong>{sessionInfo.title}</strong><small>{sessionInfo.cwd}</small></div>
       <div className="native-header-actions">
+        <button onClick={() => { setName(sessionInfo.title); setRenaming(value => !value); }}>重命名</button>
+        <button onClick={() => void edit({ archived: !sessionInfo.archived })}>{sessionInfo.archived ? "恢复会话" : "归档"}</button>
+        <button onClick={() => void exportMessages().catch(cause => session.setError(String(cause)))}>导出</button>
         {session.tianshuStatus && <span className="native-status" title="天枢状态（与终端页脚一致）">{session.tianshuStatus}</span>}
         <span className={`native-status ${state?.isStreaming ? "running" : ""}`}>{state?.isStreaming ? "运行中" : state?.hasPendingAsyncWork ? "后台任务" : state?.isSettled ? "本轮结束" : "就绪"}</span>
         <button title="刷新" onClick={() => session.refresh()}><RotateCcw size={16} /></button>
@@ -298,6 +328,7 @@ export function NativeThread({ session, sessionInfo, onOpenSettings }: { session
         {state?.isStreaming && <button title="停止" onClick={() => void session.command({ type: "abort" })}><CircleStop size={17} /></button>}
       </div>
     </header>
+    {renaming && <form className="native-compose-tools" onSubmit={event => { event.preventDefault(); void edit({ title: name }); }}><input aria-label="会话名称" value={name} maxLength={120} onChange={event => setName(event.target.value)} /><button disabled={!name.trim()}>保存名称</button><button type="button" onClick={() => setRenaming(false)}>取消</button></form>}
     {session.hostNotice && <div className="native-update-banner" role="status">
       <strong>会话进程未运行</strong>
       <span>{session.hostNotice}</span>

@@ -20,7 +20,7 @@ test("desktop settings persist through OMP and a new RPC session uses the select
   await mkdir(agentDir);
   await writeFile(join(agentDir, "config.yml"), "modelRoles:\n  slow: deepseek/deepseek-reasoner\nretry:\n  maxRetries: 3\n");
   const child = Bun.spawn([process.execPath, "run", "src/native/server.ts"], {
-    cwd: resolve(import.meta.dir, ".."), env: { ...process.env, ALPHA_WORKSPACE_ROOT: root, PI_CODING_AGENT_DIR: agentDir },
+    cwd: resolve(import.meta.dir, ".."), env: { ...process.env, DEEPSEEK_API_KEY: "alpha-env-not-a-real-key", ALPHA_WORKSPACE_ROOT: root, PI_CODING_AGENT_DIR: agentDir },
     stdout: "pipe", stderr: "pipe", windowsHide: true,
   });
   const errors = new Response(child.stderr).text();
@@ -51,6 +51,8 @@ test("desktop settings persist through OMP and a new RPC session uses the select
     expect(config.agentDir).toBe(agentDir);
     expect(JSON.stringify(config)).not.toContain("auth.broker.token");
     expect(JSON.stringify(config)).not.toContain("browser.cdpUrl");
+    const envCatalog = row((await request("models")).value);
+    expect(findRow(envCatalog.providers, { id: "deepseek" })?.available).toBe(0);
     expect((await request("credentials", { provider: "deepseek", key: "alpha-test-not-a-real-key", action: "save" })).status).toBe(200);
     const catalog = row((await request("models")).value);
     expect(JSON.stringify(catalog)).not.toContain("alpha-test-not-a-real-key");
@@ -79,6 +81,15 @@ test("desktop settings persist through OMP and a new RPC session uses the select
     expect(state.status).toBe(200);
     const model2 = row(row(state.value).model);
     expect(`${model2.provider}/${model2.id}`).toBe(selector);
+    expect((await request(`sessions/${sessionId}`, { title: "Renamed regression", archived: true })).status).toBe(200);
+    const renamed = findRow(row((await request("sessions")).value).sessions, { id: sessionId });
+    expect(renamed?.title).toBe("Renamed regression");
+    expect(renamed?.archived).toBe(true);
+    expect(JSON.parse(await readFile(join(root, ".alpha", "native", "sessions.json"), "utf8")).sessions[0].title).toBe("Renamed regression");
+    await mkdir(join(root, "nested"));
+    await writeFile(join(root, "nested", ".hidden.txt"), "hidden");
+    expect((await request(`sessions/${sessionId}/files?path=nested`)).status).toBe(200);
+    expect((await request(`sessions/${sessionId}/files?path=..`)).status).toBe(400);
     expect((await request("credentials", { provider: "deepseek", action: "remove" })).status).toBe(200);
     const after = row((await request("models")).value);
     expect(findRow(after.providers, { id: "deepseek" })?.storedKey).toBe(false);

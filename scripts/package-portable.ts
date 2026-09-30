@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { cp, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import ts from "typescript";
-import { uiHashes, verifyUiHashes } from "./portable-ui";
+import { uiHashes, verifyPayloadHashes, verifyUiHashes } from "./portable-ui";
 
 const root = resolve(import.meta.dir, "..");
 const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
@@ -10,6 +10,11 @@ const releaseRoot = join(root, "release");
 const finalOutput = join(releaseRoot, `alpha-portable-${stamp}`);
 const output = join(releaseRoot, `.alpha-portable-${stamp}-${randomUUID().slice(0, 8)}.staging`);
 await mkdir(releaseRoot, { recursive: true });
+const git = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: root });
+if (git.exitCode !== 0) throw new Error("A committed source checkout is required for release");
+const gitSha = git.stdout.toString().trim();
+const dirty = Bun.spawnSync(["git", "status", "--porcelain", "--", "src/native", "desktop", "presets", "scripts", "package.json", "package-lock.json", "LICENSE", "NOTICE"], { cwd: root });
+if (dirty.exitCode !== 0 || dirty.stdout.toString().trim()) throw new Error("Commit the release source before packaging");
 
 const uiBuild = Bun.spawn([process.execPath, "run", "build:desktop-ui"], { cwd: root, stdout: "inherit", stderr: "inherit" });
 if (await uiBuild.exited !== 0) throw new Error("Desktop UI build failed; no release was published");
@@ -50,7 +55,7 @@ await mkdir(join(output, "presets"), { recursive: true });
 for (const name of ["flux2-image.api.json", "voxcpm2-voice.api.json", "h3-video.api.json"]) await cp(join(root, "presets", name), join(output, "presets", name));
 for (const source of ["presets/alpha-plugin", "presets/terminal-themes"]) await cp(join(root, source), join(output, source), { recursive: true });
 await cp(join(root, "presets", "alpha-identity.md"), join(output, "presets", "alpha-identity.md"));
-for (const source of ["desktop/main.cjs", "desktop/preload.cjs", "desktop/browser-host.cjs", "scripts/start-desktop.ts", "scripts/probe-portable.ts", "scripts/portable-ui.ts", "src/native/capabilities/office/office-worker.py", "scripts/probe-office-runtime.ts", "package.json", "package-lock.json"]) {
+for (const source of ["desktop/main.cjs", "desktop/preload.cjs", "desktop/browser-host.cjs", "scripts/start-desktop.ts", "scripts/probe-portable.ts", "scripts/portable-ui.ts", "src/native/capabilities/office/office-worker.py", "scripts/probe-office-runtime.ts", "package.json", "package-lock.json", "LICENSE", "NOTICE"]) {
   const target = join(output, source);
   await mkdir(resolve(target, ".."), { recursive: true });
   await cp(join(root, source), target);
@@ -81,9 +86,21 @@ if (bundledOfficeHash !== officeHash) throw new Error("Bundled LibreOffice diffe
 
 const launcher = '@echo off\r\nsetlocal\r\nset "ALPHA_WORKSPACE_ROOT=%~dp0.."\r\ncd /d "%~dp0"\r\n"%~dp0runtime\\bun.exe" run scripts\\start-desktop.ts\r\n';
 await writeFile(join(output, "Alpha.cmd"), launcher);
-const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as { dependencies: Record<string, string>; devDependencies: Record<string, string> };
+const packageJson = JSON.parse(await readFile(join(root, "package.json"), "utf8")) as { version: string; dependencies: Record<string, string>; devDependencies: Record<string, string> };
+const sources: Record<string, string> = {};
+async function hashSources(name: string): Promise<void> {
+  const path = join(output, name);
+  if ((await stat(path)).isDirectory()) {
+    for (const child of await readdir(path)) await hashSources(`${name}/${child}`);
+  } else sources[name] = createHash("sha256").update(await readFile(path)).digest("hex");
+}
+for (const name of ["src", "presets", "scripts", "desktop/main.cjs", "desktop/preload.cjs", "desktop/browser-host.cjs", "package.json", "package-lock.json", "LICENSE", "NOTICE"]) await hashSources(name);
+await verifyPayloadHashes(root, sources);
 await writeFile(join(output, "release.json"), JSON.stringify({
-  format: 2,
+  format: 3,
+  version: packageJson.version,
+  gitSha,
+  sources,
   builtAt: new Date().toISOString(),
   bun: Bun.version,
   electron: packageJson.devDependencies.electron,
@@ -102,8 +119,10 @@ await writeFile(join(output, "README.txt"), [
   "本包在本机运行，不自动上传或部署。每次启动时检查一次 OMP 更新，运行期间不定时复查。",
   "会话、模型、工具与终端由 OMP 18.4.3 原生内核执行；Alpha 提供桌面界面和天枢认知扩展。",
   "第三方许可证保存在 node_modules 对应包及 node_modules/electron/LICENSE。",
+  "Alpha 自有代码使用 Apache-2.0，见 LICENSE 与 NOTICE；第三方组件保留原许可。",
   "天枢认知改编代码的 Apache-2.0 许可证在 licenses/Tianshu-APACHE-2.0.txt。",
   "离线办公引擎及其许可证保存在 runtime/libreoffice；通过任务附件读取与修改 DOCX、XLSX、PPTX 和 PDF。",
+  "定时任务仅在 Alpha 运行时执行；浏览器标签页与登录状态在所有会话间共享。",
   "",
 ].join("\r\n"));
 const officeProbe = Bun.spawn([join(output, "runtime", "bun.exe"), "run", "scripts/probe-office-runtime.ts"], { cwd: output, env: { ...process.env, ProgramFiles: "C:\\OfficeNotInstalled" }, stdout: "pipe", stderr: "pipe", windowsHide: true });

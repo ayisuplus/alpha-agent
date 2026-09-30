@@ -18,7 +18,7 @@
  *   `tool_approval_*` 事件仅通知、不能代答审批；`tools.approval` 配置只能 allow/deny/prompt，无法表达
  *   “本会话”授权，故由扩展在 tool_call 上发起同款提示）。不支持时依次降级：
  *   `ctx.ui.askDialog` 三选一 → `ctx.ui.confirm` 两步三选（“否”＝拒绝并记住）→ 无 UI 直接拒绝（fail-closed）。
- * - 授权状态存 `<dataRoot>/native/browser-consent.json`（JSON 对象，key = Alpha sessionId）：
+ * - 授权状态存 `<dataRoot>/native/browser-consents/<sessionId>.json`（每会话一文件，避免跨进程覆盖）：
  *   `once` 仅覆盖被批准的那一次调用，下一次调用过期并重新询问；`session` 放行本会话后续调用；
  *   `denied` 拦截所有后续调用。撤销 = 删除该会话条目，下次调用重新询问。
  * - 提示限时 25s（tool_call 处理器预算默认 30s：extensionHandlers.toolCallTimeoutMs，超时同样
@@ -32,7 +32,7 @@ import { dirname, join } from "node:path";
 export interface BrowserConsentContext {
   /** Alpha 会话 ID（授权状态的存储键）。 */
   sessionId: string;
-  /** Alpha 数据根（状态存 `<dataRoot>/native/browser-consent.json`）。 */
+  /** Alpha 数据根（状态存 `<dataRoot>/native/browser-consents/<sessionId>.json`）。 */
   dataRoot: string;
 }
 
@@ -41,15 +41,13 @@ type Choice = "once" | "session" | "deny";
 
 /**
  * OMP 18.4 的浏览器能力是 `eval` 的 browser 预声明空间（browser.open/run/call/tabs…），部分内核另有
- * 独立 `browser` 工具。两种入口都要过会话级授权；eval 里没有 browser 调用时不打扰用户。
+ * 独立 `browser` 工具。eval 的持久别名和动态属性无法用源码匹配判定，全部统一授权。
  */
 export function drivesBrowser(toolName: string, input: unknown): boolean {
-  if (toolName === "browser") return true;
-  if (toolName !== "eval") return false;
-  const source = input && typeof input === "object" ? input : {};
-  const code = "code" in source && typeof source.code === "string" ? source.code
-    : "script" in source && typeof source.script === "string" ? source.script : "";
-  return /\bbrowser\s*\.\s*[A-Za-z_$][\w$]*\s*\(/.test(code);
+  // eval retains aliases across cells and can construct property names dynamically.
+  // Source matching cannot establish whether it will access the browser namespace.
+  void input;
+  return toolName === "browser" || toolName === "eval";
 }
 
 const ASK_TIMEOUT_MS = 25_000;
@@ -73,7 +71,7 @@ function toChoice(answer: string | undefined): Choice | null {
 async function askConsent(ui: ExtensionContext["ui"]): Promise<Choice | null> {
   const timeout = { timeout: ASK_TIMEOUT_MS };
   if (typeof ui.select === "function") {
-    return toChoice(await ui.select("允许 Alpha 在本会话中操作浏览器？", CHOICES, { ...timeout, initialIndex: 0 }));
+    return toChoice(await ui.select("允许 Alpha 使用浏览器与代码求值？代码求值可访问浏览器，统一授权。", CHOICES, { ...timeout, initialIndex: 0 }));
   }
   if (typeof ui.askDialog === "function") {
     const result = await ui.askDialog(
@@ -97,7 +95,7 @@ async function askConsent(ui: ExtensionContext["ui"]): Promise<Choice | null> {
  * 未驱动浏览器的调用（普通 eval、bash 等）原样放行；见 drivesBrowser。
  */
 export function attachBrowserConsent(pi: ExtensionAPI, ctx: BrowserConsentContext): void {
-  const file = join(ctx.dataRoot, "native", "browser-consent.json");
+  const file = join(ctx.dataRoot, "native", "browser-consents", `${ctx.sessionId}.json`);
   let queue: Promise<unknown> = Promise.resolve();
   /** 读—改—写串行化，避免并发 tool_call 互相覆盖授权状态。 */
   const enqueue = <T>(task: () => Promise<T>): Promise<T> => {
@@ -123,6 +121,8 @@ export function attachBrowserConsent(pi: ExtensionAPI, ctx: BrowserConsentContex
   pi.on("tool_call", (event, runtime) => {
     if (!drivesBrowser(event.toolName, event.input)) return;
     return enqueue(async (): Promise<ToolCallEventResult | undefined> => {
+      const control = await readFile(join(ctx.dataRoot, "native", "browser-control.json"), "utf8").then(text => JSON.parse(text) as { paused?: boolean }, () => ({ paused: false }));
+      if (control.paused) return { block: true, reason: "用户正在接管共享浏览器，请等待用户交还后再操作。" };
       const state = await load();
       const current = state[ctx.sessionId];
       if (current === "once") {
@@ -145,6 +145,8 @@ export function attachBrowserConsent(pi: ExtensionAPI, ctx: BrowserConsentContex
       }
       state[ctx.sessionId] = choice;
       await save(state);
+      const paused = await readFile(join(ctx.dataRoot, "native", "browser-control.json"), "utf8").then(text => JSON.parse(text) as { paused?: boolean }, () => ({ paused: false }));
+      if (paused.paused) return { block: true, reason: "用户已接管共享浏览器，本次调用被拦截。" };
       return;
     });
   });

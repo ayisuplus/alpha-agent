@@ -2,14 +2,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
-import { verifyUiHashes } from "./portable-ui";
+import { verifyPayloadHashes, verifyUiHashes } from "./portable-ui";
 
 const root = resolve(import.meta.dir, "..");
 const portable = resolve(Bun.argv[2] ?? "");
 if (!Bun.argv[2]) throw new Error("Usage: bun run scripts/package-installer.ts <verified-portable-directory>");
 const manifest = JSON.parse(await readFile(join(portable, "release.json"), "utf8"));
-if (manifest.format !== 2 || !manifest.ui?.files) throw new Error("Installer requires a verified format-2 portable release");
+if (manifest.format !== 3 || !manifest.ui?.files || !manifest.sources || !manifest.gitSha) throw new Error("Installer requires a verified format-3 portable release");
 await verifyUiHashes(join(portable, "desktop", "dist"), manifest.ui.files);
+await verifyPayloadHashes(portable, manifest.sources);
+await verifyPayloadHashes(root, manifest.sources);
 for (const file of ["desktop/main.cjs", "desktop/preload.cjs", "desktop/browser-host.cjs", "runtime/bun.exe", "runtime/libreoffice/program/soffice.bin", "src/native/server.ts", "node_modules/@oh-my-pi/pi-coding-agent/package.json", "node_modules/@oh-my-pi/pi-natives/package.json"]) {
   if (!(await stat(join(portable, file))).isFile()) throw new Error(`Portable component missing: ${file}`);
 }
@@ -28,6 +30,7 @@ const command = Bun.spawn([builder, "--win", "nsis", "--x64", "--config", join(r
 if (await command.exited !== 0) throw new Error("Windows installer build failed");
 const bundled = join(output, "win-unpacked", "resources", "alpha");
 await verifyUiHashes(join(bundled, "desktop", "dist"), manifest.ui.files);
+await verifyPayloadHashes(bundled, manifest.sources);
 for (const file of ["src/native/server.ts", "desktop/browser-host.cjs", "runtime/bun.exe", "node_modules/@oh-my-pi/pi-coding-agent/package.json", "node_modules/@oh-my-pi/pi-natives/package.json"]) {
   if (!(await stat(join(bundled, file))).isFile()) throw new Error(`Installer component missing: ${file}`);
 }
@@ -40,6 +43,7 @@ const [probeOutput, probeError, probeExit] = await Promise.all([new Response(pro
 if (probeExit !== 0) throw new Error(`Installer payload smoke failed: ${probeError || probeOutput}`);
 
 const version = JSON.parse(await readFile(join(root, "installer", "package.json"), "utf8")).version;
+if (version !== manifest.version) throw new Error("Installer version differs from the portable release");
 const filename = `Alpha-Setup-${version}-x64.exe`;
 const executable = join(output, filename);
 if ((await stat(executable)).size < 1_000_000) throw new Error("Installer executable is incomplete");
@@ -48,7 +52,7 @@ for await (const chunk of createReadStream(executable)) hash.update(chunk);
 await mkdir(finalOutput, { recursive: false });
 await rename(executable, join(finalOutput, filename));
 await writeFile(join(finalOutput, "SHA256SUMS.txt"), `${hash.digest("hex")}  ${filename}\r\n`);
-await writeFile(join(finalOutput, "build.json"), JSON.stringify({ portable, builtAt: new Date().toISOString(), version, electron: manifest.electron, uiFiles: Object.keys(manifest.ui.files).length, payloadSmoke: "passed", signing: "unsigned" }, null, 2));
+await writeFile(join(finalOutput, "build.json"), JSON.stringify({ portable, gitSha: manifest.gitSha, sourceFiles: Object.keys(manifest.sources).length, builtAt: new Date().toISOString(), version, electron: manifest.electron, uiFiles: Object.keys(manifest.ui.files).length, payloadSmoke: "passed", signing: "unsigned" }, null, 2));
 const actual = await realpath(output);
 if (!actual.startsWith(await realpath(releaseRoot) + sep) || !basename(actual).startsWith(".alpha-installer-")) throw new Error(`Refusing to remove unexpected staging directory: ${actual}`);
 await rm(actual, { recursive: true, force: true });

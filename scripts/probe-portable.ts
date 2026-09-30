@@ -1,19 +1,25 @@
-import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { verifyUiHashes } from "./portable-ui";
+import { verifyPayloadHashes, verifyUiHashes } from "./portable-ui";
 
 const portable = resolve(Bun.argv[2] ?? "");
 if (!Bun.argv[2] || !await Bun.file(join(portable, "release.json")).exists()) throw new Error("Pass a built portable release directory");
-const release = JSON.parse(await readFile(join(portable, "release.json"), "utf8")) as { format?: number; ui?: { files?: Record<string, string> } };
-if (release.format === 2) {
+const release = JSON.parse(await readFile(join(portable, "release.json"), "utf8")) as { format?: number; gitSha?: string; sources?: Record<string, string>; ui?: { files?: Record<string, string> } };
+if (release.format === 2 || release.format === 3) {
   if (!release.ui?.files || typeof release.ui.files !== "object") throw new Error("Portable UI manifest is missing");
   await verifyUiHashes(join(portable, "desktop", "dist"), release.ui.files);
 }
+if (release.format === 3) {
+  if (!release.sources || !release.gitSha) throw new Error("Portable source manifest is missing");
+  await verifyPayloadHashes(portable, release.sources);
+}
 const workspace = await mkdtemp(join(tmpdir(), "alpha-portable-probe-"));
+const agentDir = join(workspace, "agent");
+await mkdir(agentDir);
 const child = Bun.spawn([join(portable, "runtime", "bun.exe"), "run", "src/native/server.ts"], {
   cwd: portable,
-  env: { ...process.env, ALPHA_WORKSPACE_ROOT: workspace, ALPHA_SERVER_TOKEN: "portable-probe-token" },
+  env: { ...process.env, ALPHA_WORKSPACE_ROOT: workspace, PI_CODING_AGENT_DIR: agentDir, ALPHA_SERVER_TOKEN: "portable-probe-token" },
   stdout: "pipe",
   stderr: "pipe",
 });
@@ -42,6 +48,9 @@ try {
     if (!response.ok || (await response.arrayBuffer()).byteLength === 0) throw new Error(`Portable desktop UI asset failed: ${asset}`);
   }
   const auth = { "x-alpha-token": "portable-probe-token" };
+  const post = (path: string, input: unknown) => fetch(`http://127.0.0.1:${port}/api/native/${path}`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(input) });
+  if (!(await post("credentials", { provider: "deepseek", action: "save", key: "alpha-probe-not-a-real-key" })).ok) throw new Error("Isolated probe credentials failed");
+  if (!(await post("settings", { role: "default", model: "deepseek/deepseek-chat" })).ok) throw new Error("Isolated probe model configuration failed");
   const created = await fetch(`http://127.0.0.1:${port}/api/native/sessions`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify({ cwd: workspace, title: "Portable smoke" }) });
   if (!created.ok) throw new Error(`Portable session creation failed: ${await created.text()}`);
   const id = (await created.json() as { session: { id: string } }).session.id;
@@ -49,7 +58,7 @@ try {
   if (!opened.ok) throw new Error(`Portable session open failed: ${await opened.text()}`);
   const state = await fetch(`http://127.0.0.1:${port}/api/native/sessions/${id}/state`, { headers: auth });
   if (!state.ok || !(await state.json() as { sessionId?: string }).sessionId) throw new Error("Bundled OMP RPC did not start");
-  console.log(JSON.stringify({ portable, port, health: "ok", ui: "ok", omp: "ok", assets: assets.length, manifest: release.format === 2 ? "verified" : "legacy" }));
+  console.log(JSON.stringify({ portable, port, health: "ok", ui: "ok", omp: "ok", assets: assets.length, manifest: release.format === 3 ? "source-and-ui-verified" : release.format === 2 ? "ui-verified" : "legacy", gitSha: release.gitSha, credentials: "isolated-fake-key" }));
 } finally {
   if (process.platform === "win32") {
     const kill = Bun.spawn(["taskkill.exe", "/T", "/F", "/PID", String(child.pid)], { stdout: "ignore", stderr: "ignore", windowsHide: true });

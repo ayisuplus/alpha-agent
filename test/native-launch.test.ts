@@ -1,17 +1,20 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { buildLaunch, buildLaunchEnv, defaultWorkspaceRoot, writeLaunchConfig, type LaunchOptions } from "../src/native/launch";
 
 const created: string[] = [];
 function options(overrides: Partial<LaunchOptions> = {}): LaunchOptions {
+  const dataRoot = mkdtempSync(join(tmpdir(), "alpha-launch-options-"));
+  created.push(dataRoot);
   return {
-    appRoot: "E:/projects/alpha-agent",
+    appRoot: resolve(import.meta.dir, ".."),
     cwd: "E:/projects/alpha-agent/workspace/demo",
     sessionDir: "E:/projects/alpha-agent/.alpha/native/sessions/abc",
     sessionId: "00000000-0000-4000-8000-000000000001",
-    dataRoot: "E:/projects/alpha-agent/.alpha",
+    dataRoot,
     mode: "rpc",
     ...overrides,
   };
@@ -33,7 +36,7 @@ describe("Alpha launch construction", () => {
 
   test("argv mounts skills, identity, generated config and both extensions, and resumes by id", async () => {
     const plan = await buildLaunch(options({ ompSessionId: "omp-session-42" }));
-    const app = "E:/projects/alpha-agent";
+    const app = resolve(import.meta.dir, "..");
     expect(plan.argv[0]).toBe(join(app, "node_modules", "@oh-my-pi", "pi-coding-agent", "dist", "cli.js"));
     const pair = (flag: string) => plan.argv[plan.argv.indexOf(flag) + 1];
     expect(pair("--plugin-dir")).toBe(join(app, "presets", "alpha-plugin"));
@@ -67,6 +70,8 @@ describe("Alpha launch construction", () => {
     expect(env.ALPHA_NATIVE_SESSION_ID).toBe("00000000-0000-4000-8000-000000000001");
     expect(env.PI_RPC_EMIT_TITLE).toBe("1");
     expect(env.ALPHA_CVM_MODE).toBe("shadow");
+    expect(buildLaunchEnv(options(), { ALPHA_COMFY_URL: "http://127.0.0.1:8199" }).ALPHA_COMFY_URL).toBe("http://127.0.0.1:8199");
+    expect(() => buildLaunchEnv(options(), { ALPHA_COMFY_URL: "https://example.com" })).toThrow("loopback");
     expect(buildLaunchEnv(options(), { ...source, PI_CODING_AGENT_DIR: "D:/omp-profile" }).PI_CODING_AGENT_DIR).toBe("D:/omp-profile");
     for (const key of ["ALPHA_BROWSER_BRIDGE_TOKEN", "ALPHA_BROWSER_BRIDGE_PORT", "ALPHA_CDP_PORT", "DEEPSEEK_API_KEY", "TAVILY_API_KEY", "SSH_AUTH_SOCK"]) {
       expect(key in env).toBe(false);

@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { absoluteArtifactPath } from "../desktop/ui/src/app/NativeThread";
+import { absoluteArtifactPath, buildItems } from "../desktop/ui/src/app/NativeThread";
 import { handleUiFrame } from "../desktop/ui/src/app/useSession";
 
 describe("artifact paths resolve against the session project", () => {
+  test("empty assistant failures remain visible and streaming text renders", () => {
+    const items = buildItems([{ role: "assistant", content: [], errorMessage: "HTTP 401" }, { role: "assistant", content: "正在处理" }], [], {}, []);
+    expect(items.some(item => "text" in item && item.text.includes("HTTP 401"))).toBe(true);
+    expect(items.some(item => item.kind === "assistant" && item.text === "正在处理")).toBe(true);
+  });
   test("relative tool outputs become project-absolute, user paths pass through", () => {
     expect(absoluteArtifactPath("outputs\\media\\a.png", "E:\\proj")).toBe("E:\\proj\\outputs\\media\\a.png");
     expect(absoluteArtifactPath("outputs/report.docx", "E:/proj/")).toBe("E:/proj\\outputs/report.docx");

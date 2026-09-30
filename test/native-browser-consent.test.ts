@@ -38,10 +38,10 @@ describe("browser consent gate", () => {
     attachBrowserConsent(pass.pi, { sessionId: "s1", dataRoot });
     expect(await pass.run({ toolName: "bash", input: { command: "ls" } })).toBeUndefined();
     expect(await pass.run({ toolName: "eval", input: { code: "console.log(1)" } })).toBeUndefined();
-    expect(pass.asked).toHaveLength(0);
+    expect(pass.asked).toHaveLength(1);
 
     const denied = harness("拒绝");
-    attachBrowserConsent(denied.pi, { sessionId: "s1", dataRoot });
+    attachBrowserConsent(denied.pi, { sessionId: "denied", dataRoot });
     const blocked = await denied.run({ toolName: "browser", input: { action: "open", url: "http://127.0.0.1" } });
     expect(blocked && "block" in blocked && blocked.block).toBe(true);
 
@@ -65,7 +65,7 @@ describe("browser consent gate", () => {
     expect(second.asked).toHaveLength(0);
 
     // 撤销 = 删除本会话条目（“本机能力”页或终端内同义）。
-    const file = join(dataRoot, "native", "browser-consent.json");
+    const file = join(dataRoot, "native", "browser-consents", "s1.json");
     const entries = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
     delete entries.s1;
     await writeFile(file, JSON.stringify(entries));
@@ -99,12 +99,22 @@ describe("browser consent gate", () => {
     expect(stillDenied.asked).toHaveLength(0);
   });
 
-  test("drivesBrowser recognises prelude usage without false positives", () => {
+  test("eval authorization cannot be bypassed by aliases or dynamic properties", () => {
     expect(drivesBrowser("browser", {})).toBe(true);
     expect(drivesBrowser("eval", { code: "await browser.open(url)" })).toBe(true);
     expect(drivesBrowser("eval", { code: "browser.tabs()" })).toBe(true);
-    expect(drivesBrowser("eval", { code: "const name = 'browser tool'; console.log(name)" })).toBe(false);
-    expect(drivesBrowser("eval", { code: "console.log(1)" })).toBe(false);
+    expect(drivesBrowser("eval", { code: "const b = browser; b['open'](url)" })).toBe(true);
+    expect(drivesBrowser("eval", { code: "b.open(url)" })).toBe(true);
+    expect(drivesBrowser("eval", { code: "console.log(1)" })).toBe(true);
     expect(drivesBrowser("bash", { command: "browser.open()" })).toBe(false);
+  });
+  test("manual takeover blocks even sessions with persisted permission", async () => {
+    const dataRoot = await fixture();
+    const allowed = harness("本会话");
+    attachBrowserConsent(allowed.pi, { sessionId: "s1", dataRoot });
+    await allowed.run({ toolName: "eval", input: {} });
+    await writeFile(join(dataRoot, "native", "browser-control.json"), JSON.stringify({ paused: true }));
+    const result = await allowed.run({ toolName: "eval", input: { code: "b.open(url)" } });
+    expect(result && "block" in result && result.block).toBe(true);
   });
 });

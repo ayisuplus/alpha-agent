@@ -7,6 +7,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { FileText, FolderOpen, Globe2, Terminal } from "lucide-react";
 import type { BrowserHostStatus, BrowserTabInfo } from "../api/types";
 import type { SessionController } from "./useSession";
+import { nativeApi, sessionRequest } from "./native-api";
 
 /** 截屏画面自适应样式：样式表没有对应图片规则，其余复用现有类。 */
 const FRAME_STYLE: CSSProperties = { maxWidth: "100%", maxHeight: "100%", border: "1px solid var(--border)", background: "white" };
@@ -73,22 +74,30 @@ function BrowserPanel({ visible }: { visible: boolean }) {
 
   // 关闭面板或退出时交还窗口。
   useEffect(() => () => {
-    if (takenRef.current) void window.alpha?.browserHandback?.().catch(() => undefined);
+    if (takenRef.current) void window.alpha?.browserHandback?.().then(result => { if (result.ok) void nativeApi("browser-control", { paused: false }); }).catch(() => undefined);
   }, []);
 
   const takeover = async () => {
     const rect = slot.current?.getBoundingClientRect();
     if (!rect) return;
+    try {
+    await nativeApi("browser-control", { paused: true });
+    const live = await nativeApi<{ sessions: Array<{ status?: string }> }>("sessions");
+    if (live.sessions.some(item => item.status === "工作中" || item.status === "等待输入")) {
+      await nativeApi("browser-control", { paused: false });
+      setNote("请先停止或等待工作中的会话完成，再接管共享浏览器。"); return;
+    }
     const result = await window.alpha?.browserTakeover?.({
       rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
       ...(target ? { targetId: target } : {}),
     });
     if (result?.ok) { setTaken(true); setNote(""); }
-    else setNote(result?.error ?? "无法接管浏览器窗口");
+    else { await nativeApi("browser-control", { paused: false }); setNote(result?.error ?? "无法接管浏览器窗口"); }
+    } catch (cause) { await nativeApi("browser-control", { paused: false }).catch(() => undefined); setNote(String(cause)); }
   };
   const handback = async () => {
     const result = await window.alpha?.browserHandback?.();
-    if (result?.ok) { setTaken(false); setNote(""); }
+    if (result?.ok) { await nativeApi("browser-control", { paused: false }); setTaken(false); setNote(""); }
     else setNote(result?.error ?? "无法交还浏览器窗口");
   };
 
@@ -99,6 +108,7 @@ function BrowserPanel({ visible }: { visible: boolean }) {
   };
 
   return <div className="native-browser">
+    <p className="native-muted">共享浏览器 · 所有会话共用标签页与登录状态；接管期间暂停新的浏览器与代码求值调用。</p>
     <div className="native-browser-tabs">
       {tabs.map(tab => <button key={tab.targetId} className={target === tab.targetId ? "active" : ""} onClick={() => setTarget(tab.targetId)} title={`${tab.title}\n${tab.url}`}>{tab.title || tab.url || "页面"}</button>)}
       {host?.available && (taken
@@ -119,6 +129,33 @@ function BrowserPanel({ visible }: { visible: boolean }) {
   </div>;
 }
 
+function FilesPanel({ session }: { session: SessionController }) {
+  const [path, setPath] = useState("");
+  const [directory, setDirectory] = useState<{ path: string; relative: string; files: Array<{ name: string; path: string; type: string; size?: number }> } | null>(null);
+  useEffect(() => { setPath(""); setDirectory(null); }, [session.selected]);
+  useEffect(() => {
+    if (!session.selected) return;
+    let cancelled = false;
+    void sessionRequest<NonNullable<typeof directory>>(session.selected, `files?path=${encodeURIComponent(path || ".")}`).then(result => { if (!cancelled) setDirectory(result); }, cause => { if (!cancelled) session.setError(String(cause)); });
+    return () => { cancelled = true; };
+  }, [session.selected, path, session.files]);
+  const open = async (path: string) => {
+    if (!window.alpha?.openFolder) { session.setError("请在 Alpha 桌面版打开本机文件"); return; }
+    const error = await window.alpha.openFolder(path); if (error) session.setError(error);
+  };
+  return <div className="native-panel">
+    <h3>项目文件</h3>
+    <p className="native-muted">{directory?.path ?? session.current?.cwd}</p>
+    <button onClick={() => setPath("")}>项目根目录</button>
+    <button disabled={!directory?.relative} onClick={() => setPath(`${directory!.relative}/..`)}>上一级</button>
+    {directory?.files.map(file => <div className="native-file" key={file.path}>
+      {file.type === "directory" ? <FolderOpen size={14} /> : <FileText size={14} />}
+      <button onClick={() => file.type === "directory" ? setPath(file.path) : void open(file.path)}>{file.name}</button>
+      <small>{file.type === "directory" ? "目录" : `${Math.round((file.size ?? 0) / 1024)} KB`}</small>
+    </div>)}
+  </div>;
+}
+
 export function NativeWorkspace({ session, diagnostics }: { session: SessionController; diagnostics: boolean }) {
   const [tab, setTab] = useState<WorkspaceTab>(() => {
     const saved = localStorage.getItem("alpha-native-workspace-tab");
@@ -136,14 +173,7 @@ export function NativeWorkspace({ session, diagnostics }: { session: SessionCont
       {tabs.map(({ id, label, Icon }) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}><Icon size={15} /> {label}</button>)}
     </div>
     {tab === "browser" && <BrowserPanel visible />}
-    {tab === "files" && <div className="native-panel">
-      <h3>项目文件</h3>
-      <p className="native-muted">{session.current?.cwd ?? "未选择项目"}</p>
-      {session.files.map(file => <div className="native-file" key={file.name}>
-        <FileText size={14} /><span>{file.name}</span>
-        <small>{file.type === "directory" ? "目录" : file.size ? `${Math.round(file.size / 1024)} KB` : "文件"}</small>
-      </div>)}
-    </div>}
+    {tab === "files" && <FilesPanel session={session} />}
     {tab === "logs" && <div className="native-panel">
       <h3>运行日志</h3>
       {session.logs.length ? session.logs.map((log, index) => <p className="native-log" key={index}><time>{log.at}</time> {log.text}</p>) : <p className="native-muted">还没有运行事件。</p>}

@@ -34,6 +34,7 @@ export function NativeDialogs({ session, projectDialog, closeProjectDialog, proj
   return <>
     {projectDialog && <div className="native-modal-backdrop"><div className="native-modal" role="dialog" aria-modal="true">
       <h2>在其他目录开始</h2>
+      {window.alpha?.choosePaths && <button onClick={() => void window.alpha!.choosePaths!("directory").then(paths => { if (paths[0]) setProjectPath(paths[0]); }, cause => session.setError(String(cause)))}>选择文件夹</button>}
       <p>输入本机已有的项目目录，Alpha 将直接在其中工作。</p>
       <input className="native-path-input" autoFocus value={projectPath} onChange={event => setProjectPath(event.target.value)} placeholder="例如 E:\projects\my-project" />
       <div><button onClick={closeProjectDialog}>取消</button><button className="native-primary" disabled={!projectPath.trim() || session.busy} onClick={() => void create()}>创建会话</button></div>

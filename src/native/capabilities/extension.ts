@@ -30,6 +30,6 @@ export default function alphaCapabilities(pi: ExtensionAPI): void {
   const ctx: CapabilityContext = { sessionId: id, dataRoot, projectRoot: process.cwd() };
 
   registerOfficeTools(pi, ctx);
-  for (const tool of createComfyPlugin({ projectRoot: ctx.projectRoot, dataRoot: ctx.dataRoot }).tools) pi.registerTool(tool);
+  for (const tool of createComfyPlugin({ projectRoot: ctx.projectRoot, dataRoot: ctx.dataRoot, url: process.env.ALPHA_COMFY_URL }).tools) pi.registerTool(tool);
   attachBrowserConsent(pi, { sessionId: id, dataRoot });
 }

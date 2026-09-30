@@ -356,6 +356,11 @@ app.whenReady().then(async () => {
     });
     shell.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     void shell.webContents.setVisualZoomLevelLimits(1, 1);
+    ipcMain.handle("alpha:choose-paths", async (event, kind) => {
+      if (event.sender !== shell.webContents || !["directory", "files"].includes(kind)) return [];
+      const result = await dialog.showOpenDialog(window, { properties: kind === "directory" ? ["openDirectory"] : ["openFile", "multiSelections"] });
+      return result.canceled ? [] : result.filePaths;
+    });
     ipcMain.handle("alpha:open-folder", async (event, targetPath) => {
       if (event.sender !== shell.webContents || typeof targetPath !== "string") return "不允许打开这个路径";
       try {
@@ -411,7 +416,7 @@ app.whenReady().then(async () => {
       if (event.sender !== shell.webContents || window.isFocused() || !Notification.isSupported() ||
           typeof title !== "string" || typeof body !== "string" || (taskId !== "omp-update" && !/^[0-9a-f-]{36}$/.test(taskId))) return;
       const notice = new Notification({ title: title.slice(0, 100), body: body.slice(0, 250) });
-      notice.on("click", () => { window.show(); window.focus(); if (taskId !== "omp-update") shell.webContents.send("alpha:open-task", taskId); });
+      notice.on("click", () => { window.show(); window.focus(); shell.webContents.send("alpha:open-task", taskId); });
       notice.show();
     });
     ipcMain.on("alpha:attention", event => {

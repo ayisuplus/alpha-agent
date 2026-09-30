@@ -28,7 +28,8 @@ export class NativeConfiguration {
       const models = registry.getAll("chat").map(model => ({
         provider: model.provider, id: model.id, name: model.name || model.id,
         selector: `${model.provider}/${model.id}`, reasoning: model.reasoning,
-        contextWindow: model.contextWindow, available: available.has(`${model.provider}/${model.id}`),
+        contextWindow: model.contextWindow, available: available.has(`${model.provider}/${model.id}`) &&
+          (auth.keys.source(model.provider)?.kind !== "env" || auth.credentials.list(model.provider).length > 0),
       }));
       const providers = [...new Set(models.map(model => model.provider))].sort().map(id => ({
         id, origin: auth.keys.source(id)?.kind ?? null,

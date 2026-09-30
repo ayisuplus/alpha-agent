@@ -1,6 +1,17 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
+
+export async function verifyPayloadHashes(root: string, expected: Record<string, string>): Promise<void> {
+  const base = resolve(root);
+  if (!Object.keys(expected).length) throw new Error("Portable source manifest is empty");
+  for (const [name, hash] of Object.entries(expected)) {
+    const path = resolve(base, name);
+    if (!path.startsWith(base + sep)) throw new Error("Portable manifest path leaves release root");
+    const actual = createHash("sha256").update(await readFile(path)).digest("hex");
+    if (actual !== hash) throw new Error(`Packaged source differs from the build: ${name}`);
+  }
+}
 
 export async function uiHashes(root: string): Promise<Record<string, string>> {
   const files: Record<string, string> = {};

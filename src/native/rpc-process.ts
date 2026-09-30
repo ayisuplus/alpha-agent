@@ -16,6 +16,10 @@ export class RpcProcess extends EventEmitter {
   #sequence = 0;
   #closed = false;
   #stderr = "";
+  #work = new Set<string>();
+  #prompts = new Set<string>();
+
+  get hasPendingWork(): boolean { return this.#work.size > 0 || this.#prompts.size > 0; }
 
   constructor(options: { cwd: string; argv: string[]; env: Record<string, string> }) {
     super();
@@ -68,6 +72,12 @@ export class RpcProcess extends EventEmitter {
       }
       return;
     }
+    if (frame.type === "response" && frame.id) {
+      this.#work.delete(frame.id);
+      if (frame.success === false) this.#prompts.delete(frame.id);
+    }
+    if (frame.type === "prompt_result" && frame.id && frame.sessionSettled === true) this.#prompts.delete(frame.id);
+    if (frame.type === "session_settled") this.#prompts.clear();
     if (frame.type === "response" && frame.id && this.#pending.has(frame.id)) {
       const pending = this.#pending.get(frame.id)!;
       this.#pending.delete(frame.id);
@@ -78,9 +88,14 @@ export class RpcProcess extends EventEmitter {
   }
 
   async command(command: RpcCommand, timeoutMs = 30_000): Promise<RpcResponse> {
+    return this.#command(command, `alpha-${++this.#sequence}`, timeoutMs);
+  }
+
+  async #command(command: RpcCommand, id: string, timeoutMs: number): Promise<RpcResponse> {
     await this.ready;
     if (this.#closed) throw new Error("OMP session is closed");
-    const id = `alpha-${++this.#sequence}`;
+    if (!command.type.startsWith("get_") && command.type !== "negotiate_protocol") this.#work.add(id);
+    if (command.type === "prompt") this.#prompts.add(id);
     const result = new Promise<RpcResponse>((resolve, reject) => {
       const timer = setTimeout(() => { this.#pending.delete(id); reject(new Error(`OMP ${command.type} timed out`)); }, timeoutMs);
       this.#pending.set(id, { resolve, reject, timer });
@@ -89,6 +104,29 @@ export class RpcProcess extends EventEmitter {
     const response = await result;
     if (!response.success) throw new Error(response.error);
     return response;
+  }
+
+  /** Acceptance is not completion: correlate the native receipt, then wait for async work. */
+  async promptAndWait(message: string): Promise<Frame> {
+    const id = `alpha-${++this.#sequence}`;
+    let receipt: Frame | undefined;
+    const completion = Promise.withResolvers<Frame>();
+    const onFrame = (frame: Frame) => {
+      if (frame.type === "prompt_result" && frame.id === id) receipt = frame;
+      if (receipt && (receipt.sessionSettled === true || frame.type === "session_settled")) completion.resolve(receipt);
+    };
+    const onExit = (error: Error) => completion.reject(error);
+    this.on("frame", onFrame);
+    this.on("exit", onExit);
+    // A child can exit while the acceptance command is still pending.
+    void completion.promise.catch(() => undefined);
+    try {
+      await this.#command({ type: "prompt", message }, id, 30_000);
+      return await completion.promise;
+    } finally {
+      this.off("frame", onFrame);
+      this.off("exit", onExit);
+    }
   }
 
   sendFrame(frame: Record<string, unknown>): void {

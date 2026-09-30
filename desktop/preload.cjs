@@ -48,6 +48,9 @@ contextBridge.exposeInMainWorld("alpha", {
   openFolder(path) {
     return ipcRenderer.invoke("alpha:open-folder", path);
   },
+  choosePaths(kind) {
+    return ipcRenderer.invoke("alpha:choose-paths", kind);
+  },
   revealItem(path) {
     return ipcRenderer.invoke("alpha:reveal-item", path);
   },

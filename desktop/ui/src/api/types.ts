@@ -437,6 +437,7 @@ declare global {
     alpha?: {
       serverToken?(): Promise<string>;
       openFolder?(path: string): Promise<string>;
+      choosePaths?(kind: "directory" | "files"): Promise<string[]>;
       revealItem?(path: string): Promise<string>;
       openExternal?(url: string): Promise<boolean>;
       saveText?(filename: string, content: string): Promise<boolean>;
