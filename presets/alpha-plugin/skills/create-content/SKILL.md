@@ -29,8 +29,18 @@ description: 用于内容策划与文案创作：受众定位、选题、长短�
 
 - 读取素材：用 OMP 原生 `read` 工具按路径直接读 docx/xlsx/pptx/pdf/epub，转为 Markdown 后理解内容；网页调研用 `web_search`/`fetch` 核对来源与平台规则。
 - 交付成稿：正文与发布说明用 Markdown 交付；需要 docx/pdf 成品时用 `alpha_office create`（Markdown→docx/pdf）写入项目内 `outputs/`，需要改已有文档时用 `edit`（按地址编辑，永不覆盖原件，输出 `<原名>.alpha-v<N>.<扩展名>`），每次 `create`/`edit` 后用 `preview` 自检。工具返回 `{ summary, artifacts: [{ path, kind, sha256, preview? }] }`。
-- 配图需求用 `alpha_generate_image` 出概念图，产出写到 `outputs/media/<可读名>.<扩展名>`；ComfyUI 服务不可用时上报缺口，不代替用户启动服务。浏览器自动化用 `eval` 的 `browser` 命名空间（browser.open/run/call/tabs…，需用户授权）。
+- 配图需求用 `alpha_generate_image` 出概念图，产出写到 `outputs/media/<可读名>.<扩展名>`；ComfyUI 服务不可用时上报缺口，不代替用户启动服务
 - 超出能力范围时如实上报缺口，不虚构素材与效果数据。
+
+### 浏览器自动化
+
+浏览器自动化用 `eval` 的 `browser` 命名空间（同一可见浏览器，保留登录态；首次使用会询问会话级授权）：
+
+- 打开与读取：`await browser.open({ url })` 打开页面，`browser.tabs()` 列标签；读页面内容优先 `await tab.extract("markdown")`，看结构用 `tab.ariaSnapshot()`。
+- 稳定操作：先 `await tab.waitFor(selector)` 等元素出现再操作；点击与填表优先用**元素句柄**——`const el = await tab.waitFor("#go"); await el.click(); await el.fill("文本")`——或用稳定选择器（id、角色、可见文本），不做坐标点击。
+- 键盘与滚动：`tab.press(key)`、`tab.type(selector, text)`、`tab.scroll(dx, dy)`；等待跳转后重新 `waitFor` 目标元素。
+- 每步操作后读回 DOM 或元素文本核对结果，不以“没报错”当成功；需要留证时 `await tab.screenshot()`。
+- 表单提交、发布、后台写操作必须先获得用户明确授权；授权弹窗按“仅这次 / 本会话 / 拒绝”如实选择，不绕过、不代答。
 
 ## 交付
 

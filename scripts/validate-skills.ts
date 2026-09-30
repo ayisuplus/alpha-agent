@@ -55,6 +55,26 @@ const TOOL_SECTION_SKILLS: Record<string, true> = {
   "direct-visuals": true,
   "craft-game-art": true,
   "grow-short-video": true,
+  "implement-frontend": true,
+  "implement-gameplay": true,
+  "verify-code": true,
+  "release-service": true,
+  "plant-xiaohongshu": true,
+  "run-live-stream": true,
+  "review-content-analytics": true,
+};
+
+/** Skills that operate web pages must name the real browser entry (eval prelude) and its stable-use pattern. */
+const BROWSER_SECTION_SKILLS: Record<string, true> = {
+  "create-content": true,
+  "grow-short-video": true,
+  "implement-frontend": true,
+  "implement-gameplay": true,
+  "verify-code": true,
+  "release-service": true,
+  "plant-xiaohongshu": true,
+  "run-live-stream": true,
+  "review-content-analytics": true,
 };
 
 /** Retired expert-system vocabulary that must not survive the merge (plan §5.3-1, §5.3-6). */
@@ -146,7 +166,10 @@ async function validate(root: string, only?: string[]): Promise<Problem[]> {
       }
     }
     if (TOOL_SECTION_SKILLS[name] && !/^##+ *工具用法/m.test(body)) {
-      problems.push({ file: skillFile, message: "缺少「## 工具用法」一节（办公/媒体类 Skill 必写）" });
+      problems.push({ file: skillFile, message: "缺少「## 工具用法」一节（办公/媒体/浏览器类 Skill 必写）" });
+    }
+    if (BROWSER_SECTION_SKILLS[name] && (!body.includes("browser` 命名空间") || !body.includes("元素句柄"))) {
+      problems.push({ file: skillFile, message: "缺少浏览器自动化稳定用法（应写明 eval 的 browser 命名空间与元素句柄点击）" });
     }
   }
 

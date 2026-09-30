@@ -33,3 +33,13 @@ description: 用于缺陷复现、回归测试、权限边界核查与独立代�
 检查契约违背、身份/资源权限、数据损坏、竞态、失败恢复及测试遗漏。每条发现必须有具体触发条件、后果、文件位置和可验证证据；样式偏好不是阻断项。
 
 结论为通过、需修改或证据不足。未执行的测试标为未执行；静态阅读、构建、浏览器操作和真实部署各自只支持对应结论。
+
+## 工具用法
+
+浏览器自动化用 `eval` 的 `browser` 命名空间（同一可见浏览器，保留登录态；首次使用会询问会话级授权）：
+
+- 打开与读取：`await browser.open({ url })` 打开页面，`browser.tabs()` 列标签；读页面内容优先 `await tab.extract("markdown")`，看结构用 `tab.ariaSnapshot()`。
+- 稳定操作：先 `await tab.waitFor(selector)` 等元素出现再操作；点击与填表优先用**元素句柄**——`const el = await tab.waitFor("#go"); await el.click(); await el.fill("文本")`——或用稳定选择器（id、角色、可见文本），不做坐标点击。
+- 键盘与滚动：`tab.press(key)`、`tab.type(selector, text)`、`tab.scroll(dx, dy)`；等待跳转后重新 `waitFor` 目标元素。
+- 每步操作后读回 DOM 或元素文本核对结果，不以“没报错”当成功；需要留证时 `await tab.screenshot()`。
+- 表单提交、发布、后台写操作必须先获得用户明确授权；授权弹窗按“仅这次 / 本会话 / 拒绝”如实选择，不绕过、不代答。
