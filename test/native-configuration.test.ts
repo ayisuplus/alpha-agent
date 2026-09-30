@@ -50,6 +50,7 @@ test("desktop settings persist through OMP and a new RPC session uses the select
     const config = row(before.value);
     expect(config.agentDir).toBe(agentDir);
     expect(JSON.stringify(config)).not.toContain("auth.broker.token");
+    expect(JSON.stringify(config)).not.toContain("browser.cdpUrl");
     expect((await request("credentials", { provider: "deepseek", key: "alpha-test-not-a-real-key", action: "save" })).status).toBe(200);
     const catalog = row((await request("models")).value);
     expect(JSON.stringify(catalog)).not.toContain("alpha-test-not-a-real-key");
@@ -61,6 +62,12 @@ test("desktop settings persist through OMP and a new RPC session uses the select
     expect((await request("settings", { id: "retry.maxRetries", value: 4 })).status).toBe(200);
     expect((await request("settings", { id: "compaction.enabled", value: "false" })).status).toBe(400);
     expect((await request("settings", { id: "auth.broker.token", value: "forbidden" })).status).toBe(400);
+    // 结构化设置（数组/记录）走 JSON 编辑：形状不对拒绝，保存可读回，可重置。
+    expect((await request("settings", { id: "tools.approval", value: ["bad"] })).status).toBe(400);
+    expect((await request("settings", { id: "tools.approval", value: { bash: "allow" } })).status).toBe(200);
+    const structured = row((await request("configuration")).value);
+    expect(JSON.stringify(findRow(structured.settings, { id: "tools.approval" })?.value)).toContain('"bash":"allow"');
+    expect((await request("settings", { id: "tools.approval", reset: true })).status).toBe(200);
     const persisted = await readFile(join(agentDir, "config.yml"), "utf8");
     expect(persisted).toContain(selector);
     expect(persisted).toContain("deepseek/deepseek-reasoner");

@@ -10,6 +10,7 @@ import { NativeConfiguration } from "./configuration";
 import { buildLaunch, defaultWorkspaceRoot } from "./launch";
 import { officeRuntimeStatus } from "./capabilities/office/office-runtime";
 import { ComfyClient } from "./capabilities/comfyui/comfy-client";
+import { ScheduleStore, Scheduler, type Schedule, type ScheduleInput } from "./scheduler";
 
 interface SessionRecord {
   id: string;
@@ -81,6 +82,19 @@ async function reapIdleProcesses(): Promise<void> {
 }
 const reaper = setInterval(() => void reapIdleProcesses(), 60_000);
 reaper.unref();
+
+/** 定时任务投递：复用会话通道（/open + prompt）。目标为 new 时到点新建会话。 */
+async function deliverSchedule(schedule: Schedule): Promise<string> {
+  const target = schedule.target;
+  const sessionId = target.kind === "session" ? target.sessionId : undefined;
+  const item = sessionId ? record(sessionId) : await createSession(target.cwd ? { cwd: target.cwd, title: `定时任务 · ${schedule.name}` } : { title: `定时任务 · ${schedule.name}` });
+  const child = await host(item.id);
+  await child.command({ type: "prompt", message: schedule.prompt });
+  return target.kind === "session" ? `已投递给会话 ${item.title}` : `已新建会话「${item.title}」并投递`;
+}
+
+const schedules = new ScheduleStore(dataRoot);
+const scheduler = new Scheduler(schedules, deliverSchedule);
 
 await mkdir(nativeRoot, { recursive: true });
 await mkdir(sessionCwd, { recursive: true });
@@ -263,6 +277,14 @@ const server = Bun.serve({
         }));
         return json({ skills: skills.filter(skill => skill.description) });
       }
+      if (url.pathname === "/api/native/schedules" && request.method === "GET") return json({ schedules: await schedules.list() });
+      if (url.pathname === "/api/native/schedules" && request.method === "POST") return json({ schedule: await schedules.create(await body(request)) }, 201);
+      const scheduleMatch = /^\/api\/native\/schedules\/([0-9a-f-]{36})$/.exec(url.pathname);
+      if (scheduleMatch) {
+        const [, id] = scheduleMatch;
+        if (request.method === "POST") return json({ schedule: await schedules.update(id, await body(request)) });
+        if (request.method === "DELETE") { await schedules.remove(id); return json({ removed: true }); }
+      }
       if (url.pathname === "/api/native/updates/check" && request.method === "POST") return json(await updates.check());
       if (url.pathname === "/api/native/updates/notified" && request.method === "POST") {
         const input = await body(request);
@@ -409,7 +431,9 @@ const server = Bun.serve({
 console.log(`ALPHA_SERVER_READY ${server.port}`);
 if (selfIssuedToken) console.log(`ALPHA_SERVER_TOKEN ${apiToken}`);
 void updates.start();
+scheduler.start();
 process.on("SIGINT", () => {
+  scheduler.stop();
   for (const terminal of terminals.values()) terminal.pty.kill();
   for (const pending of processes.values()) void pending.then(child => child.stop(), () => undefined);
   server.stop(true);

@@ -8,7 +8,9 @@ Alpha 的执行内核是 `@oh-my-pi/*` 18.4.3。桌面程序启动本地 sidecar
 
 边界：本地接口只服务 127.0.0.1 且校验 Host 与每次启动生成的令牌；模型进程读不到桥接令牌或调试端口，桌面界面不出现在任何 CDP 目标中；默认工作目录是 `<工作区>/workspace`，`.alpha/` 不在任何默认工作目录之下；OMP 进程上限 4 个、空闲 10 分钟自动回收，GET 不拉起进程（显式 `POST /open`）；更新检查在启动后后台进行，只提醒不自动升级。
 
-`bun run check` 与 `bun run test` 验收原生入口；`bun run validate:skills` 验收 Skill 包；`bun run package:portable` 只复制原生入口的可达源码、Alpha 插件、三个 ComfyUI 工作流、桌面界面、浏览器宿主和 Office 运行时。`Alpha.cmd` 是发行包入口，打包探针检查 UI 哈希、OMP RPC 启动与 Office 链路。旧任务系统（计划图、专家、调度器、旧服务与旧测试）已从工作树删除，历史保留在 Git（标签 `legacy-final`）。
+sidecar 另带轻量调度器（`src/native/scheduler.ts`）：定时任务以间隔或标准 cron 表达式定义，到点把提示词投递给指定会话或新建会话执行，复用会话通道、不叠加执行、失败记回执；计划表在 `.alpha/native/schedules.json`。
+
+`bun run check` 与 `bun run test` 验收原生入口；`bun run validate:skills` 验收 Skill 包；`bun run package:portable` 只复制原生入口的可达源码、Alpha 插件、三个 ComfyUI 工作流、桌面界面、浏览器宿主和 Office 运行时。`Alpha.cmd` 是发行包入口，打包探针检查 UI 哈希、OMP RPC 启动与 Office 链路。旧任务系统（计划图、专家、旧工作台调度、旧服务与旧测试）已从工作树删除，历史保留在 Git（标签 `legacy-final`）。
 
 ## 同日桌面体验纠偏
 

@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { Bot, Gauge, Info, MonitorCog, Sparkles, Wrench, X } from "lucide-react";
+import { Bot, Gauge, Info, MonitorCog, Sparkles, Timer, Wrench, X } from "lucide-react";
 import type { BrowserHostStatus } from "../api/types";
 import { Field, SectionTitle, Toggle } from "../components/settings/controls";
 import "../components/settings/settings.css";
@@ -26,9 +26,26 @@ const groups: Record<string, string> = { context: "上下文", model: "模型行
 
 function SettingRow({ item, save, busy }: { item: NativeSetting; save(input: Record<string, unknown>): Promise<void>; busy: boolean }) {
   const [draft, setDraft] = useState(String(item.value ?? ""));
+  const [json, setJson] = useState(() => (item.type === "array" || item.type === "record") ? JSON.stringify(item.value ?? (item.type === "array" ? [] : {}), null, 2) : "");
+  const [jsonError, setJsonError] = useState("");
   const change = (value: unknown) => void save({ id: item.id, value });
+  const structured = item.type === "array" || item.type === "record";
+  const saveJson = () => {
+    try {
+      const parsed: unknown = JSON.parse(json);
+      if (item.type === "array" && !Array.isArray(parsed)) { setJsonError("需要 JSON 数组"); return; }
+      if (item.type === "record" && (!parsed || typeof parsed !== "object" || Array.isArray(parsed))) { setJsonError("需要 JSON 对象"); return; }
+      setJsonError("");
+      change(parsed);
+    } catch { setJsonError("JSON 解析失败，请检查格式"); }
+  };
   return <Field label={names[item.id] ?? item.label} description={item.description || item.id}>
-    {item.type === "boolean" ? <Toggle label={names[item.id] ?? item.label} checked={item.value === true} disabled={busy} onChange={change} />
+    {structured ? <form className="native-setting-form" onSubmit={event => { event.preventDefault(); saveJson(); }}>
+      <textarea aria-label={names[item.id] ?? item.label} value={json} rows={6} spellCheck={false} onChange={event => setJson(event.target.value)} />
+      <button disabled={busy || json === JSON.stringify(item.value ?? (item.type === "array" ? [] : {}), null, 2)}>保存</button>
+      {jsonError && <span className="native-settings-error">{jsonError}</span>}
+    </form>
+    : item.type === "boolean" ? <Toggle label={names[item.id] ?? item.label} checked={item.value === true} disabled={busy} onChange={change} />
       : item.values ? <select aria-label={names[item.id] ?? item.label} disabled={busy} value={String(item.value ?? "")} onChange={event => change(event.target.value)}>{item.values.map(value => <option key={value}>{value}</option>)}</select>
       : <form className="native-setting-form" onSubmit={event => { event.preventDefault(); change(item.type === "number" ? Number(draft) : draft); }}>
         <input aria-label={names[item.id] ?? item.label} type={item.type === "number" ? "number" : "text"} step="any" value={draft} onChange={event => setDraft(event.target.value)} />
@@ -108,6 +125,90 @@ function SkillsPage() {
   </section>;
 }
 
+/** “定时任务”页：到点把提示词投递给指定会话或新建会话（sidecar 调度，不叠加执行）。 */
+function SchedulesPage() {
+  const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
+  const [sessions, setSessions] = useState<Array<{ id: string; title: string }>>([]);
+  const [name, setName] = useState("");
+  const [prompt, setPrompt] = useState("");
+  const [kind, setKind] = useState<"interval" | "cron">("interval");
+  const [intervalMinutes, setIntervalMinutes] = useState("30");
+  const [cron, setCron] = useState("0 9 * * 1-5");
+  const [targetKind, setTargetKind] = useState<"new" | "session">("new");
+  const [sessionId, setSessionId] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const refresh = () => {
+    void Promise.all([
+      nativeApi<{ schedules: Array<Record<string, unknown>> }>("schedules").then(result => setRows(result.schedules)),
+      nativeApi<{ sessions: Array<{ id: string; title: string }> }>("sessions").then(result => setSessions(result.sessions)),
+    ]).catch(cause => setError(String(cause)));
+  };
+  useEffect(() => { refresh(); }, []);
+  const submit = () => {
+    setBusy(true); setError("");
+    void nativeApi("schedules", {
+      name, prompt, kind,
+      ...(kind === "interval" ? { intervalMinutes: Number(intervalMinutes) } : { cron }),
+      target: targetKind === "new" ? { kind: "new" } : { kind: "session", sessionId },
+    }).then(() => { setName(""); setPrompt(""); refresh(); }, cause => setError(String(cause))).finally(() => setBusy(false));
+  };
+  const patch = (id: string, input: Record<string, unknown>) => {
+    setBusy(true);
+    void nativeApi(`schedules/${id}`, input).then(refresh, cause => setError(String(cause))).finally(() => setBusy(false));
+  };
+  const remove = (id: string) => {
+    if (!window.confirm("删除这个定时任务？")) return;
+    setBusy(true);
+    void nativeDelete(`schedules/${id}`).then(refresh, cause => setError(String(cause))).finally(() => setBusy(false));
+  };
+  return <section>
+    <SectionTitle title="定时任务" description="到点把提示词投递给指定会话，或自动新建会话执行；同一任务上一次未完成时不叠加。" />
+    <h3 className="settings-subheading">新建</h3>
+    <Field label="名称" description="显示在列表里的名字。">
+      <input aria-label="名称" value={name} onChange={event => setName(event.target.value)} placeholder="例如：每早日报" />
+    </Field>
+    <Field label="提示词" description="到点发给会话的完整提示词。">
+      <textarea aria-label="提示词" value={prompt} rows={4} spellCheck={false} onChange={event => setPrompt(event.target.value)} placeholder="例如：汇总昨天的进展并写一份日报。" />
+    </Field>
+    <Field label="计划" description="间隔（分钟）或标准 5 段 cron（分 时 日 月 周）。">
+      <select aria-label="计划类型" value={kind} onChange={event => setKind(event.target.value === "cron" ? "cron" : "interval")}>
+        <option value="interval">间隔</option>
+        <option value="cron">cron 表达式</option>
+      </select>
+      {kind === "interval"
+        ? <input aria-label="间隔分钟" type="number" min={1} value={intervalMinutes} onChange={event => setIntervalMinutes(event.target.value)} />
+        : <input aria-label="cron 表达式" value={cron} onChange={event => setCron(event.target.value)} />}
+    </Field>
+    <Field label="目标" description="投递给已有会话，或到点新建会话。">
+      <select aria-label="目标类型" value={targetKind} onChange={event => setTargetKind(event.target.value === "session" ? "session" : "new")}>
+        <option value="new">新建会话</option>
+        <option value="session">指定会话</option>
+      </select>
+      {targetKind === "session" && <select aria-label="目标会话" value={sessionId} onChange={event => setSessionId(event.target.value)}>
+        <option value="">选择会话…</option>
+        {sessions.map(session => <option key={session.id} value={session.id}>{session.title}</option>)}
+      </select>}
+      <button disabled={busy || !name.trim() || !prompt.trim() || (targetKind === "session" && !sessionId)} onClick={submit}>添加</button>
+    </Field>
+    {error && <p className="native-settings-error">{error}</p>}
+    <h3 className="settings-subheading">计划列表（{rows.length}）</h3>
+    {rows.length === 0 && <p className="native-muted">还没有定时任务。</p>}
+    {rows.map(row => {
+      const target = row.target as { kind?: string } | undefined;
+      return <div key={String(row.id)} className="native-file">
+        <span>{String(row.name)}</span>
+        <span className="native-muted">{row.kind === "interval" ? `每 ${String(row.intervalMinutes)} 分钟` : `cron ${String(row.cron)}`}</span>
+        <span className="native-muted">{target?.kind === "new" ? "新建会话" : "指定会话"}</span>
+        <span className="native-muted">下次 {row.nextRunAt ? new Date(String(row.nextRunAt)).toLocaleString() : "—"}</span>
+        <span className="native-muted">{row.lastResult ? `上次：${String(row.lastResult)}` : ""}</span>
+        <button disabled={busy} onClick={() => patch(String(row.id), { enabled: row.enabled !== true })}>{row.enabled === true ? "停用" : "启用"}</button>
+        <button disabled={busy} onClick={() => remove(String(row.id))}>删除</button>
+      </div>;
+    })}
+  </section>;
+}
+
 /** “关于”页：Alpha 版本、OMP 版本与许可、天枢来源与许可。 */
 function AboutPage({ update, onCheckUpdate }: { update: UpdateStatus | null; onCheckUpdate(): void }) {
   return <section>
@@ -171,6 +272,7 @@ export function NativeSettings({ config, catalog, onConfig, reload, onClose, fon
     { id: "runtime", title: "运行与工具", Icon: Gauge },
     { id: "capabilities", title: "本机能力", Icon: Wrench },
     { id: "skills", title: "技能", Icon: Sparkles },
+    { id: "schedules", title: "定时任务", Icon: Timer },
     { id: "interface", title: "界面", Icon: MonitorCog },
     { id: "about", title: "关于", Icon: Info },
   ];
@@ -184,6 +286,7 @@ export function NativeSettings({ config, catalog, onConfig, reload, onClose, fon
         {notice && <p role="status" className="native-settings-notice">{notice}</p>}
         {section === "capabilities" ? <CapabilityPage sessionId={sessionId} />
           : section === "skills" ? <SkillsPage />
+          : section === "schedules" ? <SchedulesPage />
           : section === "about" ? <AboutPage update={update} onCheckUpdate={onCheckUpdate} />
           : section === "interface" ? <section>
             <SectionTitle title="界面" description="只影响工作台本身。" />

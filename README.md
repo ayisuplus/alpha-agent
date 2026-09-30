@@ -10,7 +10,8 @@ Alpha = 原生 OMP 内核 + 天枢证据层 + Alpha 方法（Skill）+ 本机能
 - **天枢证据层**：`src/native/tianshu/` 扩展，读 OMP 原生事件、写 OMP 原生会话与面板；重复失败、改后未验证、宣称与证据不符等信号只作提醒，不拦截、不自行开启新一轮。`/tianshu` 展开当前证据帧。改编自 [Tianshu-harness v3.27.0](https://github.com/huiliyi37/Tianshu-harness/releases/tag/v3.27.0)（Apache-2.0，见 `licenses/`）。
 - **Alpha 方法**：30 个行业 Skill 随包发行（`presets/alpha-plugin/`），`--plugin-dir` 挂载；`bun run validate:skills` 校验。
 - **本机能力**：`alpha_office`（inspect/edit/create/convert/pdf/preview，读取用 OMP 原生 `read`）、`alpha_generate_image/voice/video`（ComfyUI，产出在 `outputs/media/`）、可见浏览器（OMP 原生 `browser` 连 Alpha 浏览器宿主，会话级授权）。
-- **桌面工作台**：Electron + React，纸墨风格；浏览器面板可实时查看、接管与交还。
+- **桌面工作台**：Electron + React，纸墨风格；浏览器面板可实时查看、接管与交还；设置直连 OMP 原生配置（含结构化设置的 JSON 编辑）。
+- **定时任务**：sidecar 调度器（间隔或 cron），到点把提示词投递给指定会话或自动新建会话执行；同一任务未完成时不叠加。管理入口在 设置 → 定时任务。
 
 ## 开发与验证
 

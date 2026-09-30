@@ -4,7 +4,11 @@ import "@oh-my-pi/pi-coding-agent/config/all-settings";
 import { all, lookup, type AnySetting } from "@oh-my-pi/pi-coding-agent/config/registry";
 
 const editable = (setting: AnySetting) => !setting.isCredential &&
-  ["boolean", "number", "string", "enum"].includes(setting.type) &&
+  // Scalars render as native controls; arrays/records with UI metadata render as JSON editing.
+  ["boolean", "number", "string", "enum", "array", "record"].includes(setting.type) &&
+  // browser.cdpUrl is Alpha's generated wiring to the browser host (per launch overlay);
+  // user edits there could never take effect, so it stays out of the settings surface.
+  setting.id !== "browser.cdpUrl" &&
   (!!setting.ui || ["retry.enabled", "defaultThinkingLevel", "compaction.enabled"].includes(setting.id));
 
 /** The desktop edits OMP's own settings and credential store, not an Alpha model whitelist. */
@@ -66,7 +70,11 @@ export class NativeConfiguration {
       const setting = typeof input.id === "string" ? lookup(input.id) : undefined;
       if (!setting || !editable(setting)) throw new Error("不支持编辑这个设置");
       if (input.reset === true) setting.unset(settings);
-      else setting.set(settings, input.value);
+      else {
+        if (setting.type === "array" && !Array.isArray(input.value)) throw new Error("这个设置需要 JSON 数组");
+        if (setting.type === "record" && (!input.value || typeof input.value !== "object" || Array.isArray(input.value))) throw new Error("这个设置需要 JSON 对象");
+        setting.set(settings, input.value);
+      }
     }
     await settings.flush();
     return this.read();
