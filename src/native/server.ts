@@ -332,6 +332,12 @@ const server = Bun.serve({
         if (request.method === "DELETE") { await schedules.remove(id); return json({ removed: true }); }
       }
       if (url.pathname === "/api/native/updates/check" && request.method === "POST") return json(await updates.check());
+      if (url.pathname === "/api/native/updates/dismiss" && request.method === "POST") {
+        const input = await body(request);
+        if (typeof input.version !== "string") throw new Error("Missing version");
+        await updates.dismiss(input.version);
+        return json(updates.status());
+      }
       if (url.pathname === "/api/native/updates/notified" && request.method === "POST") {
         const input = await body(request);
         if (typeof input.version !== "string") throw new Error("Update version required");

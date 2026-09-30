@@ -21,23 +21,33 @@ test("requires all four official npm packages to publish one coherent version", 
   expect(latestOmpVersion(partial)).rejects.toThrow("still publishing");
 });
 
-test("records a new release and remembers that the desktop announced it", async () => {
+test("remembers update announcements and dismissals across restart while newer releases remain visible", async () => {
   const root = await mkdtemp(join(tmpdir(), "alpha-omp-update-test-"));
   try {
     let calls = 0;
-    const fetcher = async () => { calls++; return Response.json({ version: "18.5.0" }); };
+    let latest = "18.5.0";
+    const fetcher = async () => { calls++; return Response.json({ version: latest }); };
     const monitor = new OmpUpdateMonitor("18.4.3", root, fetcher);
     await monitor.start();
     const available = monitor.status();
     expect(available.available).toBe(true);
     expect(available.latest).toBe("18.5.0");
     expect(calls).toBe(4);
+    expect(monitor.status().dismissedVersion).toBeNull();
+    await expect(monitor.dismiss("18.4.4")).rejects.toThrow("No matching OMP update");
     await monitor.markNotified("18.5.0");
+    await monitor.dismiss("18.5.0");
     expect(monitor.status().notifiedVersion).toBe("18.5.0");
     const resumed = new OmpUpdateMonitor("18.4.3", root, fetcher);
     await resumed.start();
     expect(resumed.status().notifiedVersion).toBe("18.5.0");
+    expect(resumed.status().dismissedVersion).toBe("18.5.0");
     expect(calls).toBe(8);
+    latest = "18.6.0";
+    await resumed.check();
+    expect(resumed.status().available).toBe(true);
+    expect(resumed.status().latest).toBe("18.6.0");
+    expect(resumed.status().dismissedVersion).toBe("18.5.0");
   } finally {
     const actual = await realpath(root);
     if (!actual.startsWith(resolve(tmpdir()) + sep)) throw new Error("Update test directory left temp root");

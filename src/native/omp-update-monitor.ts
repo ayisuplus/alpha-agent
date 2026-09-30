@@ -33,6 +33,7 @@ export interface UpdateStatus {
   checkedAt: string | null;
   available: boolean;
   notifiedVersion: string | null;
+  dismissedVersion: string | null;
   error: string | null;
 }
 
@@ -46,13 +47,13 @@ export class OmpUpdateMonitor {
   constructor(current: string, dataRoot: string, private readonly fetcher: RegistryFetch = fetch) {
     this.current = current;
     this.file = join(dataRoot, "native", "omp-update.json");
-    this.#status = { current, latest: null, checkedAt: null, available: false, notifiedVersion: null, error: null };
+    this.#status = { current, latest: null, checkedAt: null, available: false, notifiedVersion: null, dismissedVersion: null, error: null };
   }
 
   async start(): Promise<void> {
     const saved = await readFile(this.file, "utf8").then(text => JSON.parse(text) as Partial<UpdateStatus>, () => null).catch(() => null);
     if (saved) this.#status = { ...this.#status, latest: saved.latest ?? null, checkedAt: saved.checkedAt ?? null,
-      notifiedVersion: saved.notifiedVersion ?? null, available: saved.latest ? compareVersions(saved.latest, this.current) > 0 : false };
+      notifiedVersion: saved.notifiedVersion ?? null, dismissedVersion: saved.dismissedVersion ?? null, available: saved.latest ? compareVersions(saved.latest, this.current) > 0 : false };
     await this.check();
   }
 
@@ -76,6 +77,12 @@ export class OmpUpdateMonitor {
   async markNotified(version: string): Promise<void> {
     if (!this.#status.available || version !== this.#status.latest) throw new Error("No matching OMP update to acknowledge");
     this.#status.notifiedVersion = version;
+    await this.#persist();
+  }
+
+  async dismiss(version: string): Promise<void> {
+    if (!this.#status.available || version !== this.#status.latest) throw new Error("No matching OMP update to dismiss");
+    this.#status.dismissedVersion = version;
     await this.#persist();
   }
 

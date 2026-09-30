@@ -82,6 +82,7 @@ export interface UpdateStatus {
   checkedAt: string | null;
   available: boolean;
   notifiedVersion: string | null;
+  dismissedVersion: string | null;
   error: string | null;
 }
 

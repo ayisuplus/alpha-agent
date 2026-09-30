@@ -1,10 +1,13 @@
-.native-workbench { display: grid; grid-template-columns: 256px minmax(420px, 1fr) minmax(300px, 29%); width: 100%; height: 100%; min-height: 0; background: var(--bg-app); }
-.native-workbench:has(.browser-open) { grid-template-columns: 220px minmax(370px, 43%) minmax(390px, 1fr); }
+.native-workbench { display: grid; grid-template-columns: var(--native-sidebar-width, 256px) minmax(420px, 1fr) minmax(300px, 29%); width: 100%; height: 100%; min-height: 0; background: var(--bg-app); }
+.native-workbench:has(.browser-open) { grid-template-columns: var(--native-sidebar-width, 220px) minmax(370px, 43%) minmax(390px, 1fr); }
+.native-workbench.native-sidebar-collapsed { --native-sidebar-width: var(--sidebar-rail); }
 .native-workbench button { border: 0; background: transparent; }
 .native-sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--border-subtle); background: var(--bg-sidebar); }
 .native-brand { display: flex; align-items: center; gap: 10px; padding: 18px 18px 13px; line-height: 1.2; }
 .native-mark, .native-glyph { color: var(--ink); font: italic 700 30px Georgia, serif; }
-.native-brand span:last-child { display: flex; flex-direction: column; }
+.native-brand-label { display: flex; flex-direction: column; }
+.native-sidebar-toggle { display: grid; place-items: center; flex: 0 0 30px; height: 30px; margin-left: auto; border-radius: 6px; color: var(--text-muted); }
+.native-sidebar-toggle:hover { background: var(--bg-hover); color: var(--text); }
 .native-brand strong { font-size: 15px; }
 .native-brand small { color: var(--text-muted); font-size: 11px; }
 .native-new { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 38px; margin: 4px 12px 15px; padding: 0 14px; border-radius: 20px; background: var(--ink) !important; color: #fff; font-size: 13px; }
@@ -14,6 +17,13 @@
 .native-sidebar-links { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; padding: 0 12px 12px; }
 .native-sidebar-links button { display: flex; align-items: center; gap: 5px; padding: 7px 4px; border-radius: 6px; color: var(--text-secondary); font-size: 11px; }
 .native-sidebar-links button:hover { background: var(--bg-hover); }
+.native-sidebar-collapsed .native-sidebar :is(.native-mark, .native-brand-label, .native-sidebar-label, .native-project-choice, .native-session-search, .native-list-title, .native-session-list, kbd) { display: none; }
+.native-sidebar-collapsed .native-brand { justify-content: center; padding: 18px 0 13px; }
+.native-sidebar-collapsed .native-sidebar-toggle { margin-left: 0; }
+.native-sidebar-collapsed .native-new { margin-left: 10px; margin-right: 10px; padding: 0; }
+.native-sidebar-collapsed .native-sidebar-links { grid-template-columns: 1fr; padding: 0 10px 12px; }
+.native-sidebar-collapsed .native-sidebar-links button { justify-content: center; min-height: 36px; }
+.native-sidebar-collapsed .native-settings-entry { justify-content: center; margin-left: 10px; margin-right: 10px; padding-left: 0; padding-right: 0; }
 .native-session-search { min-width: 0; margin: 0 12px 7px; padding: 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-surface); color: var(--text); font-size: 12px; }
 .native-list-title + .native-project-choice { margin-top: 0; margin-bottom: 4px; text-align: left; }
 .native-list-title { padding: 7px 17px 5px; color: var(--text-muted); font-size: 11px; font-weight: 600; letter-spacing: .06em; }
@@ -37,6 +47,8 @@
 .native-update-banner strong { color: var(--accent); }
 .native-update-banner span { flex: 1; min-width: 170px; }
 .native-update-banner button { color: var(--accent); text-decoration: underline; font-size: 12px; }
+.native-update-banner .native-update-close { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; text-decoration: none; }
+.native-update-close:hover { background: var(--bg-hover); }
 .native-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 58px; padding: 8px 20px; border-bottom: 1px solid var(--border-subtle); background: var(--bg-app); }
 .native-header > div:first-child { display: flex; flex-direction: column; min-width: 0; }
 .native-header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
@@ -111,9 +123,9 @@
 .native-modal > div { display: flex; justify-content: flex-end; gap: 7px; margin-top: 16px; }
 .native-modal button { padding: 7px 12px; border-radius: 7px; }
 .native-modal .native-primary { background: var(--ink); color: white; }
-@media (max-width: 1050px) { .native-workbench { grid-template-columns: 208px minmax(360px, 1fr) 275px; } }
-@media (max-width: 820px) { .native-workbench { grid-template-columns: 185px minmax(300px, 1fr); } .native-workspace { display: none; } }
-.native-workbench.native-wide { grid-template-columns: 256px minmax(0, 1fr); }
+@media (max-width: 1050px) { .native-workbench { grid-template-columns: var(--native-sidebar-width, 208px) minmax(360px, 1fr) 275px; } }
+@media (max-width: 820px) { .native-workbench { grid-template-columns: var(--native-sidebar-width, 185px) minmax(300px, 1fr); } .native-workspace { display: none; } }
+.native-workbench.native-wide { grid-template-columns: var(--native-sidebar-width, 256px) minmax(0, 1fr); }
 .native-wide > .native-workspace { display: none; }
 .native-settings-entry { display: flex; align-items: center; gap: 9px; margin: auto 12px 0; padding: 12px 10px; border-radius: 9px; text-align: left; }
 .native-settings-entry:hover { background: var(--bg-surface); }
@@ -157,4 +169,4 @@
 .native-settings-notice { padding: 10px; background: var(--bg-hover); border-radius: 8px; font-size: 12px; }
 .native-settings-error { color: #ad3e35; }
 .native-markdown, .native-compose > textarea { font-size: var(--native-message-size); }
-@media (max-width: 820px) { .native-workbench.native-wide { grid-template-columns: 185px minmax(0, 1fr); } .native-home { padding: 20px; } }
+@media (max-width: 820px) { .native-workbench.native-wide { grid-template-columns: var(--native-sidebar-width, 185px) minmax(0, 1fr); } .native-home { padding: 20px; } }

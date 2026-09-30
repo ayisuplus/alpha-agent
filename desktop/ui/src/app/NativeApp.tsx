@@ -27,6 +27,7 @@ export function NativeApp() {
   const [update, setUpdate] = useState<UpdateStatus | null>(null);
   const [fontSize, setFontSize] = useState(() => Number(localStorage.getItem("alpha-native-font-size")) || 14);
   const [workspaceVisible, setWorkspaceVisible] = useState(() => localStorage.getItem("alpha-native-workspace") !== "false");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("alpha-native-sidebar-collapsed") === "true");
   const [diagnostics, setDiagnostics] = useState(() => localStorage.getItem("alpha-native-diagnostics") === "1");
   const [error, setError] = useState("");
   const alertedVersion = useRef<string | null>(null);
@@ -41,6 +42,7 @@ export function NativeApp() {
   }, []);
   useEffect(() => { localStorage.setItem("alpha-native-font-size", String(fontSize)); }, [fontSize]);
   useEffect(() => { localStorage.setItem("alpha-native-workspace", String(workspaceVisible)); }, [workspaceVisible]);
+  useEffect(() => { localStorage.setItem("alpha-native-sidebar-collapsed", String(sidebarCollapsed)); }, [sidebarCollapsed]);
   useEffect(() => { localStorage.setItem("alpha-native-diagnostics", diagnostics ? "1" : "0"); }, [diagnostics]);
 
   useEffect(() => {
@@ -48,7 +50,7 @@ export function NativeApp() {
   }, []);
   useEffect(() => {
     // 系统通知只报一次；文案与横幅一致（OMP 只在横幅与“关于”页出现）。
-    if (!update?.available || !update.latest || update.notifiedVersion === update.latest || alertedVersion.current === update.latest || !window.alpha?.notify) return;
+    if (!update?.available || !update.latest || update.dismissedVersion === update.latest || update.notifiedVersion === update.latest || alertedVersion.current === update.latest || !window.alpha?.notify) return;
     alertedVersion.current = update.latest;
     window.alpha.notify("OMP 内核有新版本", `OMP 内核有新版本 ${update.latest}（当前 ${update.current}），升级需在开发环境中进行。`, "omp-update");
     window.alpha.attention?.();
@@ -65,8 +67,10 @@ export function NativeApp() {
   }, []);
 
   const displayError = session.error || error;
-  return <div className={`native-workbench ${!session.current || settingsOpen || !workspaceVisible ? "native-wide" : ""}`} style={{ "--native-message-size": `${fontSize}px` } as React.CSSProperties}>
+  return <div className={`native-workbench ${!session.current || settingsOpen || !workspaceVisible ? "native-wide" : ""} ${sidebarCollapsed ? "native-sidebar-collapsed" : ""}`} style={{ "--native-message-size": `${fontSize}px` } as React.CSSProperties}>
     <NativeSidebar
+      collapsed={sidebarCollapsed}
+      onToggle={() => setSidebarCollapsed(value => !value)}
       sessions={session.sessions}
       legacy={session.legacy}
       selected={session.selected}
@@ -78,7 +82,7 @@ export function NativeApp() {
       onOpenSettings={openSettings}
     />
     <main className="native-main">
-      {update?.available && update.latest && <div className="native-update-banner" role="status">
+      {update?.available && update.latest && update.dismissedVersion !== update.latest && <div className="native-update-banner" role="status">
         <strong>OMP 内核有新版本 {update.latest}</strong>
         <span>（当前 {update.current}），升级需在开发环境中进行。</span>
         <button onClick={() => {
@@ -86,6 +90,9 @@ export function NativeApp() {
           if (window.alpha?.openExternal) void window.alpha.openExternal(url);
           else window.open(url, "_blank");
         }}>发布说明</button>
+        <button className="native-update-close" aria-label="关闭更新提醒" title="不再提醒这个版本" onClick={() => {
+          void request<UpdateStatus>("/api/native/updates/dismiss", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: update.latest }) }).then(setUpdate, cause => setError(String(cause)));
+        }}><X size={16} /></button>
       </div>}
       {settingsOpen ? <NativeSettings
         key={settingsSection}
