@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { verifyPayloadHashes, verifyUiHashes } from "./portable-ui";
+import { verifyUpdatePayload } from "./apply-app-update";
 
 const portable = resolve(Bun.argv[2] ?? "");
 if (!Bun.argv[2] || !await Bun.file(join(portable, "release.json")).exists()) throw new Error("Pass a built portable release directory");
@@ -11,6 +12,7 @@ if (release.format === 2 || release.format === 3) {
   await verifyUiHashes(join(portable, "desktop", "dist"), release.ui.files);
 }
 if (release.format === 3) {
+  await verifyUpdatePayload(portable);
   if (!release.sources || !release.gitSha) throw new Error("Portable source manifest is missing");
   await verifyPayloadHashes(portable, release.sources);
 }

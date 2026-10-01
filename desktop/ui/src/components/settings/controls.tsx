@@ -1,18 +1,19 @@
+import { t } from "../../app/ui-language";
 import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 
 /** `stacked` puts a wide control (text box, list) under its label instead of beside it. */
 export function Field({ label, description, children, disabled, stacked }: { label: string; description?: ReactNode; children: ReactNode; disabled?: boolean; stacked?: boolean }) {
   return <div className={["settings-field", disabled ? "disabled" : "", stacked ? "stacked" : ""].filter(Boolean).join(" ")}>
     <div className="settings-field-text">
-      <span className="settings-field-label">{label}</span>
-      {description && <span className="settings-field-description">{description}</span>}
+      <span className="settings-field-label">{t(label)}</span>
+      {description && <span className="settings-field-description">{typeof description === "string" ? t(description) : description}</span>}
     </div>
     <div className="settings-field-control">{children}</div>
   </div>;
 }
 
 export function Toggle({ checked, onChange, label, disabled }: { checked: boolean; onChange(value: boolean): void; label: string; disabled?: boolean }) {
-  return <button role="switch" aria-checked={checked} aria-label={label} className="settings-toggle" disabled={disabled} onClick={() => onChange(!checked)}>
+  return <button role="switch" aria-checked={checked} aria-label={t(label)} className="settings-toggle" disabled={disabled} onClick={() => onChange(!checked)}>
     <span className="settings-toggle-knob" />
   </button>;
 }
@@ -26,8 +27,8 @@ export function Segmented<T extends string | number>({ value, options, onChange,
     onChange(options[next].value);
     (event.currentTarget.querySelectorAll("button")[next] as HTMLButtonElement)?.focus();
   };
-  return <div className="settings-segmented" role="radiogroup" aria-label={label} onKeyDown={move}>
-    {options.map(option => <button key={String(option.value)} role="radio" aria-checked={option.value === value} tabIndex={option.value === value ? 0 : -1} onClick={() => onChange(option.value)}>{option.label}</button>)}
+  return <div className="settings-segmented" role="radiogroup" aria-label={t(label)} onKeyDown={move}>
+    {options.map(option => <button key={String(option.value)} role="radio" aria-checked={option.value === value} tabIndex={option.value === value ? 0 : -1} onClick={() => onChange(option.value)}>{t(option.label)}</button>)}
   </div>;
 }
 
@@ -44,7 +45,7 @@ export function NumberInput({ value, min, max, step = 1, unit, onCommit, label }
     if (next !== value) onCommit(next);
   };
   return <span className="settings-number">
-    <input type="number" inputMode="numeric" aria-label={label} value={draft} min={min} max={max} step={step}
+    <input type="number" inputMode="numeric" aria-label={t(label)} value={draft} min={min} max={max} step={step}
       onChange={event => setDraft(event.target.value)} onBlur={commit} onKeyDown={event => { if (event.key === "Enter") commit(); }} />
     {unit && <span>{unit}</span>}
   </span>;
@@ -52,7 +53,7 @@ export function NumberInput({ value, min, max, step = 1, unit, onCommit, label }
 
 export function SectionTitle({ title, description }: { title: string; description?: string }) {
   return <header className="settings-section-header">
-    <h2>{title}</h2>
-    {description && <p>{description}</p>}
+    <h2>{t(title)}</h2>
+    {description && <p>{typeof description === "string" ? t(description) : description}</p>}
   </header>;
 }

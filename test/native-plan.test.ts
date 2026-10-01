@@ -87,6 +87,21 @@ test("native plan guards, review edits, dismissal, pause, reentry and process re
   } finally { await f.close(); }
 }, 120_000);
 
+test("failed native plan compaction restores the execution model without dispatching execution", async () => {
+  const f = await fixture();
+  try {
+    await f.child.promptAndWait("Warm context. " + "Keep verified user constraints and implementation context. ".repeat(300));
+    const plan = await f.draft();
+    await f.child.hostCommand("configuration", { action: "save", id: "compaction.methodOrder", value: [] });
+    f.execute(); await f.child.hostCommand("plan", { action: "approve-compact" });
+    expect(f.executions.length).toBe(0);
+    expect((await f.mode()).error).toContain("execution was not started");
+    expect((await f.mode()).content).toBe(plan.content);
+    expect(JSON.stringify(await f.child.command({ type: "get_state" }))).toContain('"id":"executor"');
+    expect(await Bun.file(join(f.cwd, "execution-proof.txt")).exists()).toBe(false);
+  } finally { await f.close(); }
+}, 120_000);
+
 for (const action of ["approve-clear", "approve-keep", "approve-compact"] as const) test(`native ${action} dispatches approved content with restored tools and model`, async () => {
   const f = await fixture();
   try {

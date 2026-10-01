@@ -220,7 +220,7 @@ export class NativePlanHost {
           try { await this.session.compact(undefined, { internalGuidance: prompt.render(compactPrompt, { planFilePath: this.path }), suppressContinuation: true }); }
           catch (error) { compaction.outcome = error instanceof CompactionCancelledError ? "cancelled" : "failed"; this.fail(error); }
         }
-        if (compaction.outcome !== "failed") { if (execution) await this.session.applyRoleModel(execution); else await this.restoreModel(previous); }
+        if (compaction.outcome === "ok" && execution) await this.session.applyRoleModel(execution); else await this.restoreModel(previous);
         await this.session.restoreNonMCPToolPresentation([...new Set([...presentation.enabled, "read"])], presentation.mounted);
         this.session.setPlanReferencePath(this.path); this.previousModel = undefined; this.phase = "off";
         this.session.sessionManager.appendCustomEntry("alpha-approved-plan", { path: this.path, title: this.title, outcome: compaction.outcome });
@@ -228,6 +228,7 @@ export class NativePlanHost {
       } finally { this.session.clearPlanInternalAbortPending(); }
     });
     if (compaction.outcome === "cancelled") { this.failure = "Compaction cancelled; execution was not started. Submit a turn to continue."; this.notify(); return; }
+    if (compaction.outcome === "failed") { this.failure = "Compaction failed; execution was not started. " + (this.failure ?? ""); this.notify(); return; }
     if (!this.session.sessionName) await this.session.sessionManager.setSessionName(humanizePlanTitle(this.title), "auto");
     this.session.markPlanReferenceSent(); this.notify();
     this.dispatch(prompt.render(approvedPrompt, { planFilePath: this.path, planContent: content, contextPreserved: action !== "approve-clear" }), true);

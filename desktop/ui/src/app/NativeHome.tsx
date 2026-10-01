@@ -1,3 +1,4 @@
+import { t } from "./ui-language";
 /** 首页：问候、工作目录、任务描述与模型选择（方案 8.2：界面只出现 Alpha 一个产品名）。 */
 
 import { desktopStorage } from "./desktop-storage";
@@ -21,7 +22,7 @@ export function NativeHome({ session, catalog, config, projectPath, setProjectPa
   const chosenModel = model || defaultPreference.selector || catalog?.models.find(item => item.available)?.selector || "";
   const chosenThinking = thinking || (!model && defaultPreference.thinking) || String(config?.settings.find(item => item.id === "defaultThinkingLevel")?.value ?? "auto");
   return <div className="native-home" data-testid="new-task">
-    <div className="native-home-hero"><span className="native-home-wordmark">Alpha</span><h1>今天，想完成什么？</h1><p>从一个想法开始，把事情交给 Alpha。</p></div>
+    <div className="native-home-hero"><span className="native-home-wordmark">Alpha</span><h1>{t("今天，想完成什么？")}</h1><p>{t("从一个想法开始，把事情交给 Alpha。")}</p></div>
     <NativeComposer home session={session} models={catalog?.models ?? []} model={chosenModel} thinking={chosenThinking}
       onModel={value => { setModel(value); writeDraft("home", { ...readDraft("home", desktopStorage), model: value }, desktopStorage); }}
       onThinking={value => { setThinking(value); writeDraft("home", { ...readDraft("home", desktopStorage), thinking: value }, desktopStorage); }}

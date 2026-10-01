@@ -7,12 +7,13 @@
  */
 
 /** Alpha 发行版本；随发版更新（方案 10.1：本轮重构发版 0.2.0）。 */
-export const ALPHA_VERSION = "0.2.1";
+import packageInfo from "../../../../package.json";
+export const ALPHA_VERSION = packageInfo.version;
 
 export type NativeModel = { selector: string; provider: string; id: string; name: string; available: boolean; reasoning: boolean; contextWindow: number; input?: string[] };
-export type NativeCatalog = { models: NativeModel[]; providers: Array<{ id: string; origin: string | null; storedKey: boolean; oauth: boolean; available: number }>; error: string | null };
+export type NativeCatalog = { models: NativeModel[]; roleModels?: NativeModel[]; roles?: Array<{ id: string; name: string; candidates: string[] }>; providers: Array<{ id: string; origin: string | null; storedKey: boolean; oauth: boolean; available: number; login?: boolean }>; error: string | null };
 export type NativeSetting = { id: string; type: string; value: unknown; label: string; description: string; tab: string; group: string; values?: string[]; provenance: string };
-export type NativeConfig = { agentDir: string; modelRoles: Record<string, string>; settings: NativeSetting[] };
+export type NativeConfig = { agentDir: string; modelRoles: Record<string, string>; settings: NativeSetting[]; cwd?: string; projectRevision?: string; roles?: Array<{ id: string; name: string; provenance: string }> };
 
 export interface SessionItem {
   id: string;

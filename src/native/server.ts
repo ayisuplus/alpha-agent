@@ -22,6 +22,7 @@ import { Projects } from "./projects";
 import { projectSearch } from "./project-search";
 import { requireGit } from "@oh-my-pi/pi-natives/vcs";
 import { getConfigRootDir } from "@oh-my-pi/pi-utils";
+import { AppUpdates } from "./app-updates";
 
 interface SessionRecord {
   id: string;
@@ -41,6 +42,7 @@ interface SessionRecord {
 const appRoot = resolve(import.meta.dir, "../..");
 const workspaceRoot = resolve(process.env.ALPHA_WORKSPACE_ROOT ?? appRoot);
 const dataRoot = join(workspaceRoot, ".alpha");
+const appUpdates = new AppUpdates(appRoot, workspaceRoot, JSON.parse(await readFile(join(appRoot, "package.json"), "utf8")).version);
 const sessionCwd = defaultWorkspaceRoot(workspaceRoot);
 const nativeRoot = join(dataRoot, "native");
 const indexPath = join(nativeRoot, "sessions.json");
@@ -71,14 +73,14 @@ let extensionWrites: Promise<unknown> = Promise.resolve();
 let extensionRevision = 0;
 function touch(id: string): void { lastUsed.set(id, Date.now()); }
 
-async function stopProcess(id: string, reason: string): Promise<void> {
+async function stopProcess(id: string, reason: string, restarting = false): Promise<void> {
   const pending = processes.get(id);
   if (!pending) return;
   processes.delete(id);
   lastUsed.delete(id);
+  emit(id, { type: "host_exit", error: reason, restarting });
   const child = await pending.catch(() => null);
   await child?.stop();
-  emit(id, { type: "host_exit", error: reason });
 }
 
 async function enforceProcessCap(): Promise<void> {
@@ -140,7 +142,8 @@ async function deliverSchedule(schedule: Schedule): ReturnType<ScheduleDeliver> 
   const child = await host(item.id);
   await schedules.beginRun(schedule.id, new Date(), item.id);
   if (!await reclaimable(child)) throw new Error(`目标会话「${item.title}」正在工作，本次跳过`);
-  const receipt = await admittedTask(item.id, child, () => child.promptAndWait(schedule.prompt));
+  const accepted = await admittedTask(item.id, child, () => child.startPrompt(schedule.prompt));
+  const receipt = await accepted.completion;
   if (receipt.status !== "completed") {
     const error = receipt.error as { message?: string } | undefined;
     return receipt.status === "aborted" ? { result: "任务已中止", status: "aborted" } : { result: `失败：${error?.message ?? "原生会话执行失败"}`, status: "failed" };
@@ -218,7 +221,8 @@ function emit(id: string, frame: unknown): void {
     state.notice = error?.message;
   }
   if (event.type === "session_settled" && state.status === "工作中") state.status = "完成";
-  if (event.type === "host_exit") { state.status = "未打开"; delete state.uiRequest; }
+  if (event.type === "host_exit") { state.status = event.restarting ? "重新加载" : "未打开"; delete state.uiRequest; }
+  if (event.type === "host_ready") state.status = "就绪";
   if (event.type === "extension_ui_request") {
     if (["select", "confirm", "input", "editor"].includes(String(event.method))) { state.uiRequest = event; state.status = "等待输入"; }
     if (event.method === "cancel") { delete state.uiRequest; state.status = "工作中"; }
@@ -267,6 +271,7 @@ async function openHost(id: string): Promise<RpcProcess> {
     child.on("protocol_error", error => emit(id, { type: "host_error", error: String(error) }));
     await child.ready;
     await child.command({ type: "negotiate_protocol", protocolVersion: 2 });
+    await child.command({ type: "set_subagent_subscription", level: "progress" });
     if (loadedRevision === extensionRevision) pendingReloads.delete(id);
     if (!ompSessionId) {
       const state = await child.command({ type: "get_state" });
@@ -280,11 +285,12 @@ async function openHost(id: string): Promise<RpcProcess> {
         void saveRecords();
       }
     }
+    emit(id, { type: "host_ready" });
     return child;
   })();
   processes.set(id, pending);
   try { return await pending; }
-  catch (error) { processes.delete(id); throw error; }
+  catch (error) { processes.delete(id); emit(id, { type: "host_exit", error: String(error) }); throw error; }
 }
 /** Terminal sessions own their OMP process; recover the OMP session id from the session file header. */
 async function captureTerminalSession(id: string, sessionDir: string, since: number, once = false): Promise<void> {
@@ -363,7 +369,24 @@ const server = Bun.serve({
     if (url.pathname.startsWith("/ui")) return uiFile(url.pathname);
     if (url.pathname.startsWith("/api") && !authorized(request, url)) return json({ error: "Forbidden" }, 403);
     try {
-      if (url.pathname === "/api/native/configuration" && request.method === "GET") return json(await configuration.read());
+      if (url.pathname === "/api/native/app-updates" && request.method === "GET") return json(await appUpdates.status());
+      if (url.pathname === "/api/native/app-updates" && request.method === "POST") {
+        const input = await body(request);
+        if (input.action === "source") return json(await appUpdates.configure(input.source));
+        if (input.action === "check") return json(await appUpdates.check());
+        if (input.action === "cancel") return json(await appUpdates.cancel());
+        if (input.action === "prepare") { nativeServer.timeout(request, 0); return json(await appUpdates.prepare({ path: typeof input.path === "string" ? input.path : undefined })); }
+        if (input.action === "install") {
+          for (const child of processes.values()) if (!await reclaimable(await child)) throw new Error("Wait for all native sessions to settle before restarting");
+          if (!process.env.ALPHA_DESKTOP_PID || !process.env.ALPHA_DESKTOP_EXECUTABLE) throw new Error("Update installation requires the desktop app");
+          return json(await appUpdates.handoff(input.id, { parentPid: Number(process.env.ALPHA_DESKTOP_PID), executable: process.env.ALPHA_DESKTOP_EXECUTABLE, args: JSON.parse(process.env.ALPHA_DESKTOP_ARGS ?? "[]") }));
+        }
+        throw new Error("Unknown application update action");
+      }
+      if (url.pathname === "/api/native/configuration" && request.method === "GET") {
+        const id = url.searchParams.get("sessionId");
+        return json(id ? await (await host(id)).hostCommand("configuration") : await configuration.read());
+      }
       if (url.pathname === "/api/native/projects") {
         if (request.method === "GET") return json({ projects: await projects.list() });
         if (request.method === "POST") {
@@ -387,11 +410,49 @@ const server = Bun.serve({
           throw new Error("Unsupported project operation");
         }
       }
-      if (url.pathname === "/api/native/models" && request.method === "GET") return json(await configuration.catalog());
-      if (url.pathname === "/api/native/settings" && request.method === "POST") return json(await configuration.update(await body(request)));
+      if (url.pathname === "/api/native/models" && request.method === "GET") {
+        const id = url.searchParams.get("sessionId");
+        return json(id ? await (await host(id)).hostCommand("configuration", { action: "models" }) : await configuration.catalog());
+      }
+      if (url.pathname === "/api/native/provider-config") {
+        if (request.method === "GET") return json(await configuration.providers());
+        if (request.method === "POST") {
+          const input = await body(request);
+          const operation = extensionWrites.then(async () => {
+            const result = await configuration.providers(input);
+            for (const id of processes.keys()) pendingReloads.add(id);
+            return json({ ...result, pendingReload: processes.size > 0 });
+          });
+          extensionWrites = operation.catch(() => undefined);
+          return await operation;
+        }
+      }
+      if (url.pathname === "/api/native/settings" && request.method === "POST") {
+        const input = await body(request);
+        const operation = extensionWrites.then(async () => {
+          const result = typeof input.sessionId === "string"
+            ? await (await host(input.sessionId)).hostCommand("configuration", { ...input, action: "save" })
+            : await configuration.update(input);
+          for (const id of processes.keys()) if (id !== input.sessionId && (input.scope !== "project" || record(id).cwd === record(String(input.sessionId)).cwd)) pendingReloads.add(id);
+          return json(result);
+        });
+        extensionWrites = operation.catch(() => undefined);
+        return await operation;
+      }
       if (url.pathname === "/api/native/credentials" && request.method === "POST") {
-        await configuration.credential(await body(request));
-        return json({ saved: true });
+        const input = await body(request);
+        const operation = extensionWrites.then(async () => {
+          await configuration.credential(input);
+          const pending: string[] = [];
+          for (const [id, process] of processes) {
+            const child = await process;
+            if (await reclaimable(child)) await child.hostCommand("configuration", { action: "reload" });
+            else { pendingReloads.add(id); pending.push(id); }
+          }
+          return json({ saved: true, pendingReload: pending.length > 0 });
+        });
+        extensionWrites = operation.catch(() => undefined);
+        return await operation;
       }
       if (url.pathname === "/api/native/updates" && request.method === "GET") return json(updates.status());
       if (url.pathname === "/api/native/capabilities" && request.method === "GET") {
@@ -487,22 +548,22 @@ const server = Bun.serve({
         await child.command({ type: "export_html", outputPath: path });
         return json({ name: `${item.title.replace(/[<>:"/\\|?*]/g, "_")}.html`, content: await readFile(path, "utf8") });
       }
-      const controls = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/host\/(catalog|extension|mode|plan|tree|navigate|usage|reload|session|worktree)$/.exec(url.pathname);
+      const controls = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/host\/(catalog|extension|mode|plan|tree|navigate|usage|reload|session|worktree|configuration|definitions)$/.exec(url.pathname);
       if (controls) {
         const [, id, method] = controls;
         record(id);
         let child = await host(id);
         if (method === "reload" && request.method === "POST") {
           if (!await reclaimable(child)) return json({ pendingReload: true });
-          await stopProcess(id, "正在重新加载扩展"); child = await host(id);
+          await stopProcess(id, "正在重新加载扩展", true); child = await host(id);
           pendingReloads.delete(id);
           return json(await child.hostCommand("catalog"));
         }
-        if (request.method === "GET" && ["catalog", "mode", "tree", "usage"].includes(method)) {
+        if (request.method === "GET" && ["catalog", "mode", "tree", "usage", "configuration"].includes(method)) {
           const result = await child.hostCommand(method as HostMethod);
           return json(method === "catalog" ? { ...result as ExtensionCatalog, pendingReload: pendingReloads.has(id) } : result);
         }
-        if (request.method === "POST" && ["extension", "plan", "navigate", "session", "worktree"].includes(method)) {
+        if (request.method === "POST" && ["extension", "plan", "navigate", "session", "worktree", "definitions"].includes(method)) {
           const input = await body(request);
           const execute = async () => {
             child = await host(id);
@@ -514,18 +575,18 @@ const server = Bun.serve({
               if ("data" in state) { const current = state.data as { sessionId: string; sessionName?: string }; syncIdentity(record(id), current.sessionId, current.sessionName); }
               await saveRecords();
             }
-            if (method === "extension" && result.pendingReload) {
+            if (["extension", "definitions"].includes(method) && result.pendingReload) {
               extensionRevision++;
               for (const target of processes.keys()) if (input.scope !== "project" || input.kind === "plugin" || record(target).cwd === record(id).cwd) pendingReloads.add(target);
               if (await reclaimable(child)) {
-                await stopProcess(id, "正在重新加载扩展"); child = await host(id);
+                await stopProcess(id, "正在重新加载扩展", true); child = await host(id);
                 const catalog = await child.hostCommand("catalog") as ExtensionCatalog;
                 return json({ ...result, pendingReload: false, catalog });
               }
             }
             return json(result);
           };
-          if (method !== "extension") return await execute();
+          if (!["extension", "definitions"].includes(method)) return await execute();
           const operation = extensionWrites.then(execute);
           extensionWrites = operation.catch(() => undefined);
           return await operation;

@@ -1,3 +1,4 @@
+import { tf, t, setUiLanguage } from "./ui-language";
 /**
  * 桌面工作台外壳（方案 8.2）：拆分为 Sidebar / Home / Thread / Workspace / Dialogs 与 useSession。
  * Alpha 工作台：按需展开工作区，保留原生会话与配置契约。
@@ -17,11 +18,15 @@ import { nativeImages, useSession } from "./useSession";
 import { NativeCommands } from "./NativeCommands";
 import { NativeSessionTools } from "./NativeSessionTools";
 import { NativeProjects } from "./NativeProjects";
-import { invokeDesktopCommand, shortcutCommand, type DesktopCommandEvent } from "./desktop-commands";
+import { desktopCommands, invokeDesktopCommand, shortcutCommand, type DesktopCommandEvent, type DesktopCommandId } from "./desktop-commands";
 import "./NativeApp.css";
 import { errorHelp, readDraft } from "./workbench-state";
+import { useDesktopPreferences } from "./desktop-preferences";
 
 export function NativeApp() {
+  const preferences = useDesktopPreferences();
+  setUiLanguage(preferences.language);
+  useEffect(() => window.alpha?.onCommand?.(id => { if (desktopCommands.some(command => command.id === id)) void invokeDesktopCommand(id as DesktopCommandId); }), []);
   const session = useSession();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -77,6 +82,16 @@ export function NativeApp() {
   }, []);
   useEffect(() => { desktopStorage.setItem("alpha-native-font-size", String(fontSize)); }, [fontSize]);
   useEffect(() => { desktopStorage.setItem("alpha-theme", theme); document.documentElement.dataset.alphaTheme = theme; }, [theme]);
+  useEffect(() => {
+    document.documentElement.lang = preferences.language === "en" ? "en" : "zh-CN";
+    const fonts = { segoe: '"Segoe UI", "Microsoft YaHei UI", sans-serif', yahei: '"Microsoft YaHei UI", "Segoe UI", sans-serif', system: "" };
+    if (preferences.font === "system") document.documentElement.style.removeProperty("--font-sans");
+    else document.documentElement.style.setProperty("--font-sans", fonts[preferences.font]);
+  }, [preferences]);
+  useEffect(() => window.alpha?.onStorageChanged?.(change => {
+    if (change.key === "alpha-theme") setTheme(change.value ?? "light");
+    if (change.key === "alpha-native-font-size") setFontSize(Number(change.value) || 15);
+  }), []);
   useEffect(() => { desktopStorage.setItem("alpha-workspace-width", String(workspaceWidth)); }, [workspaceWidth]);
   useEffect(() => { desktopStorage.setItem("alpha-native-workspace-tab", workspaceTab); }, [workspaceTab]);
   useEffect(() => { desktopStorage.setItem("alpha-native-sidebar-collapsed", String(sidebarCollapsed)); }, [sidebarCollapsed]);
@@ -102,9 +117,10 @@ export function NativeApp() {
         const { id, args, image } = command.detail;
         if (id === "palette") setPaletteOpen(true);
         else if (id === "new") selectSession(null);
+        else if (id === "window") { if (!window.alpha?.newWindow) throw new Error("新窗口只在桌面应用中可用"); await window.alpha.newWindow(); }
         else if (id === "settings") openSettings();
         else if (id === "projects") setProjectsOpen(true);
-        else if (["skills", "mcp", "plugins"].includes(id)) openSettings(id);
+        else if (["skills", "mcp", "plugins", "definitions", "permissions", "lsp"].includes(id)) openSettings(id);
         else if (["files", "review", "terminal"].includes(id)) { if (id === "files" && args) openFile(args); else openWorkspace(id as WorkspaceTab); }
         else {
           if (!session.selected || !session.opened) throw new Error("请先打开会话");
@@ -149,11 +165,11 @@ export function NativeApp() {
 
   const displayError = session.error || error;
   const showWorkspace = workspaceVisible && !settingsOpen;
-  const workspaceActions = <nav className="native-workspace-actions" aria-label="工作区入口">
-    <button onClick={() => void invokeDesktopCommand("palette")} aria-label="命令面板" title="命令面板 · Ctrl+K"><Command size={17} /></button>
-    {showWorkspace ? <button onClick={closeWorkspace} aria-label="收起工作区" title="收起工作区" aria-controls="native-workspace" aria-expanded><PanelRightClose size={18} /></button>
+  const workspaceActions = <nav className="native-workspace-actions" aria-label={t("工作区入口")}>
+    <button onClick={() => void invokeDesktopCommand("palette")} aria-label={t("命令面板")} title={t("命令面板 · Ctrl+K")}><Command size={17} /></button>
+    {showWorkspace ? <button onClick={closeWorkspace} aria-label={t("收起工作区")} title={t("收起工作区")} aria-controls="native-workspace" aria-expanded><PanelRightClose size={18} /></button>
       : [{ id: "files" as const, label: "文件", Icon: FolderOpen }, { id: "browser" as const, label: "浏览器", Icon: Globe2 }, { id: "review" as const, label: "审查", Icon: ClipboardCheck }, { id: "terminal" as const, label: "终端", Icon: Terminal }].map(({ id, label, Icon }) =>
-        <button key={id} onClick={() => id === "browser" ? openWorkspace(id) : void invokeDesktopCommand(id)} aria-label={`打开${label}栏`} title={label} aria-controls="native-workspace" aria-expanded={false}><Icon size={17} /><span>{label}</span></button>)}
+        <button key={id} onClick={() => id === "browser" ? openWorkspace(id) : void invokeDesktopCommand(id)} aria-label={tf`打开${t(label)}栏`} title={t(label)} aria-controls="native-workspace" aria-expanded={false}><Icon size={17} /><span>{t(label)}</span></button>)}
   </nav>;
   const help = errorHelp(displayError);
   return <div className={`native-workbench ${!showWorkspace ? "native-wide" : ""} ${sidebarCollapsed ? "native-sidebar-collapsed" : ""}`} style={{ "--native-message-size": `${fontSize}px`, "--ui-font-size": `${fontSize}px`, "--native-workspace-width": `${workspaceWidth}px` } as React.CSSProperties}>
@@ -171,10 +187,10 @@ export function NativeApp() {
     />
     <main className="native-main">
       {update?.available && update.latest && update.dismissedVersion !== update.latest && <div className="native-update-banner" role="status">
-        <strong>运行组件有更新</strong>
-        <span>查看版本与升级说明。</span>
-        <button onClick={() => openSettings("about")}>查看详情</button>
-        <button className="native-update-close" aria-label="关闭更新提醒" title="不再提醒这个版本" onClick={() => {
+        <strong>{t("运行组件有更新")}</strong>
+        <span>{t("查看版本与升级说明。")}</span>
+        <button onClick={() => openSettings("about")}>{t("查看详情")}</button>
+        <button className="native-update-close" aria-label={t("关闭更新提醒")} title={t("不再提醒这个版本")} onClick={() => {
           void request<UpdateStatus>("/api/native/updates/dismiss", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ version: update.latest }) }).then(setUpdate, cause => setError(String(cause)));
         }}><X size={16} /></button>
       </div>}
@@ -202,7 +218,7 @@ export function NativeApp() {
         sessionId={session.selected}
       />
         : session.current ? <NativeThread session={session} sessionInfo={session.current} models={catalog?.models ?? []} onOpenFile={openFile} onOpenSettings={openSettings} workspaceActions={workspaceActions} />
-        : <><header className="native-header native-home-header"><strong>新会话</strong>{workspaceActions}</header><NativeHome
+        : <><header className="native-header native-home-header"><strong>{t("新会话")}</strong>{workspaceActions}</header><NativeHome
           session={session}
           catalog={catalog}
           config={config}
@@ -212,10 +228,10 @@ export function NativeApp() {
         /></>}
     </main>
     {showWorkspace && <NativeWorkspace session={session} diagnostics={diagnostics} tab={workspaceTab} setTab={setWorkspaceTab} onClose={closeWorkspace} previewPath={previewPath} onPreviewPath={setPreviewPath} onOpenFile={openFile} onResize={width => setWorkspaceWidth(Math.max(320, Math.min(width, 560)))} />}
-    {displayError && <div className="native-error" role="alert"><strong>{help.title}</strong><p>{help.hint}</p><details><summary>具体原因</summary><p>{displayError}</p></details>
-      {help.section && <button onClick={() => openSettings(help.section)}>打开相关设置</button>}
-      <button onClick={() => { session.refresh(); void session.reloadList().then(() => { if (!session.selected) return loadConfiguration().then(loaded => { setCatalog(loaded.catalog); setConfig(loaded.config); }); }).catch(cause => setError(String(cause))); }}>刷新状态</button>
-      <button onClick={() => { session.setError(""); setError(""); }}>关闭</button></div>}
+    {displayError && <div className="native-error" role="alert"><strong>{t(help.title)}</strong><p>{t(help.hint)}</p><details><summary>{t("具体原因")}</summary><p>{displayError}</p></details>
+      {help.section && <button onClick={() => openSettings(help.section)}>{t("打开相关设置")}</button>}
+      <button onClick={() => { session.refresh(); void session.reloadList().then(() => { if (!session.selected) return loadConfiguration().then(loaded => { setCatalog(loaded.catalog); setConfig(loaded.config); }); }).catch(cause => setError(String(cause))); }}>{t("刷新状态")}</button>
+      <button onClick={() => { session.setError(""); setError(""); }}>{t("关闭")}</button></div>}
     <NativeDialogs session={session} />
     {paletteOpen && <NativeCommands session={session} onClose={() => setPaletteOpen(false)} />}
     {projectsOpen && <NativeProjects session={session} onClose={() => setProjectsOpen(false)} />}

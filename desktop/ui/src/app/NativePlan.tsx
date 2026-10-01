@@ -1,3 +1,4 @@
+import { tf, t } from "./ui-language";
 import { useEffect, useState } from "react";
 import type { PlanView } from "../../../../src/native/host-types";
 import { sessionRequest } from "./native-api";
@@ -46,27 +47,27 @@ export function NativePlan({ session }: { session: SessionController }) {
   const saveDraft = (body: string, annotations: Record<string, string>) => { try { desktopStorage.setItem(draftKey, JSON.stringify({ path: plan?.planFilePath, content: body, previous, feedback: annotations })); } catch (cause) { session.setError(String(cause)); } };
   const dismiss = async () => { if (!await run("edit")) return; await run("dismiss"); };
   return <div className="native-plan-bar">
-    <button disabled={busy || !session.opened} onClick={() => void run("toggle", { content: undefined })}>{plan?.phase === "active" || review ? "暂停计划" : plan?.phase === "paused" ? "退出计划" : "进入计划"}</button>
-    {plan?.phase === "paused" && <button disabled={busy} onClick={() => void run("resume")}>继续原计划</button>}
+    <button disabled={busy || !session.opened} onClick={() => void run("toggle", { content: undefined })}>{plan?.phase === "active" || review ? t("暂停计划") : plan?.phase === "paused" ? t("退出计划") : t("进入计划")}</button>
+    {plan?.phase === "paused" && <button disabled={busy} onClick={() => void run("resume")}>{t("继续原计划")}</button>}
     {plan?.content && <button className="native-muted" onClick={() => void invokeDesktopCommand("files", plan.planFilePath)}>{plan.planFilePath}</button>}
-    {(plan?.phase === "active" || review) && <button disabled={busy} onClick={() => void run("review")}>审阅计划</button>}
+    {(plan?.phase === "active" || review) && <button disabled={busy} onClick={() => void run("review")}>{t("审阅计划")}</button>}
     {plan?.error && <span role="alert">{plan.error}</span>}
-    {(review || plan?.phase === "compacting") && <NativeModal title={plan.phase === "compacting" ? "正在压缩计划上下文" : "审阅计划"} onCancel={() => { if (!busy) void dismiss(); }}>
-      {plan.phase === "compacting" ? <><p>完成前不会开始执行。取消后可手动继续任务。</p><button onClick={() => void run("cancel-compaction")}>取消压缩</button></> : <div className="native-plan-editor">
-        <p className="native-muted">{plan.planFilePath} · {plan.contextUsage ? `${plan.contextUsage.tokens} / ${plan.contextUsage.contextWindow} tokens` : "上下文占用未知"}</p>
-        <textarea aria-label="计划正文" rows={14} spellCheck={false} value={content} disabled={busy} onChange={event => { setContent(event.target.value); saveDraft(event.target.value, feedback); }} />
-        <div className="native-plan-actions"><button disabled={busy} onClick={() => void run("edit")}>保存修改</button><button disabled={busy} onClick={() => void load().catch(cause => session.setError(String(cause)))}>重新读取</button>
-          {window.alpha?.openEditor && <button disabled={busy} onClick={() => void run("edit").then(ok => ok ? window.alpha?.openEditor?.(plan.physicalPath) : undefined).then(error => { if (typeof error === "string" && error) session.setError(error); })}>外部编辑器</button>}
+    {(review || plan?.phase === "compacting") && <NativeModal title={plan.phase === "compacting" ? t("正在压缩计划上下文") : t("审阅计划")} onCancel={() => { if (!busy) void dismiss(); }}>
+      {plan.phase === "compacting" ? <><p>{t("完成前不会开始执行。取消后可手动继续任务。")}</p><button onClick={() => void run("cancel-compaction")}>{t("取消压缩")}</button></> : <div className="native-plan-editor">
+        <p className="native-muted">{plan.planFilePath} · {plan.contextUsage ? `${plan.contextUsage.tokens} / ${plan.contextUsage.contextWindow} tokens` : t("上下文占用未知")}</p>
+        <textarea aria-label={t("计划正文")} rows={14} spellCheck={false} value={content} disabled={busy} onChange={event => { setContent(event.target.value); saveDraft(event.target.value, feedback); }} />
+        <div className="native-plan-actions"><button disabled={busy} onClick={() => void run("edit")}>{t("保存修改")}</button><button disabled={busy} onClick={() => void load().catch(cause => session.setError(String(cause)))}>{t("重新读取")}</button>
+          {window.alpha?.openEditor && <button disabled={busy} onClick={() => void run("edit").then(ok => ok ? window.alpha?.openEditor?.(plan.physicalPath) : undefined).then(error => { if (typeof error === "string" && error) session.setError(error); })}>{t("外部编辑器")}</button>}
         </div>
-        <details><summary>分节反馈</summary>{["整体", ...new Set([...content.matchAll(/^#{1,3}\s+(.+)$/gm)].map(match => match[1]))].map(section => <label key={section}>{section}<textarea aria-label={`反馈：${section}`} rows={2} value={feedback[section] ?? ""} onChange={event => { const next = { ...feedback, [section]: event.target.value }; setFeedback(next); saveDraft(content, next); }} /></label>)}</details>
-        {plan.models.length > 1 && <label>执行模型<select aria-label="计划执行模型" value={role} onChange={event => setRole(event.target.value)}>{plan.models.map(model => <option key={model.role} value={model.role}>{model.role} · {model.provider}/{model.id} {model.thinking}</option>)}</select></label>}
+        <details><summary>{t("分节反馈")}</summary>{["整体", ...new Set([...content.matchAll(/^#{1,3}\s+(.+)$/gm)].map(match => match[1]))].map(section => <label key={section}>{section}<textarea aria-label={tf`反馈：${section}`} rows={2} value={feedback[section] ?? ""} onChange={event => { const next = { ...feedback, [section]: event.target.value }; setFeedback(next); saveDraft(content, next); }} /></label>)}</details>
+        {plan.models.length > 1 && <label>{t("执行模型")}<select aria-label={t("计划执行模型")} value={role} onChange={event => setRole(event.target.value)}>{plan.models.map(model => <option key={model.role} value={model.role}>{model.role} · {model.provider}/{model.id} {model.thinking}</option>)}</select></label>}
         <div className="native-plan-actions">
-          <button className="native-primary" disabled={busy} onClick={() => void run("approve-clear")}>批准并清空上下文执行</button>
-          <button disabled={busy} onClick={() => void run("approve-compact")}>批准并压缩上下文</button>
-          <button disabled={busy || plan.keepContextDisabled} title={plan.keepContextDisabled ? "执行上下文超过原生 95% 限制" : undefined} onClick={() => void run("approve-keep")}>批准并保留上下文</button>
-          <button disabled={busy} onClick={() => void run("refine")}>继续修改</button>
-          <button disabled={busy || !window.alpha?.saveText} onClick={() => void run("edit").then(async ok => { if (ok && await window.alpha?.saveText?.(`${plan.title}.md`, content)) await run("save-new", { saved: true }); })}>另存并开始新会话</button>
-          <button disabled={busy} onClick={() => void dismiss()}>关闭审阅</button>
+          <button className="native-primary" disabled={busy} onClick={() => void run("approve-clear")}>{t("批准并清空上下文执行")}</button>
+          <button disabled={busy} onClick={() => void run("approve-compact")}>{t("批准并压缩上下文")}</button>
+          <button disabled={busy || plan.keepContextDisabled} title={plan.keepContextDisabled ? t("执行上下文超过原生 95% 限制") : undefined} onClick={() => void run("approve-keep")}>{t("批准并保留上下文")}</button>
+          <button disabled={busy} onClick={() => void run("refine")}>{t("继续修改")}</button>
+          <button disabled={busy || !window.alpha?.saveText} onClick={() => void run("edit").then(async ok => { if (ok && await window.alpha?.saveText?.(`${plan.title}.md`, content)) await run("save-new", { saved: true }); })}>{t("另存并开始新会话")}</button>
+          <button disabled={busy} onClick={() => void dismiss()}>{t("关闭审阅")}</button>
         </div>
       </div>}
     </NativeModal>}

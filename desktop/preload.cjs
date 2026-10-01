@@ -48,6 +48,10 @@ contextBridge.exposeInMainWorld("alpha", {
   serverToken() {
     return ipcRenderer.invoke("alpha:server-token");
   },
+  newWindow() { return ipcRenderer.invoke("alpha:new-window"); },
+  installUpdate(id) { return ipcRenderer.invoke("alpha:install-update", id); },
+  onCommand(callback) { return onEvent("alpha:command", callback); },
+  onStorageChanged(callback) { return onEvent("alpha:storage-changed", callback); },
   openFolder(path) {
     return ipcRenderer.invoke("alpha:open-folder", path);
   },
@@ -57,8 +61,10 @@ contextBridge.exposeInMainWorld("alpha", {
   revealItem(path) {
     return ipcRenderer.invoke("alpha:reveal-item", path);
   },
-  openEditor(path) {
-    return ipcRenderer.invoke("alpha:open-editor", path);
+  async openEditor(path) {
+    const error = await ipcRenderer.invoke("alpha:open-editor", path);
+    if (error) throw new Error(error);
+    return "";
   },
   openExternal(url) {
     return ipcRenderer.invoke("alpha:open-external", url);

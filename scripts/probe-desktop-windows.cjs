@@ -1,0 +1,83 @@
+/** Real production main/preload, two windows and one native sidecar. Uses an isolated loopback-model profile. */
+const { app, BaseWindow, webContents } = require("electron");
+const { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } = require("node:fs");
+const { randomBytes } = require("node:crypto");
+const path = require("node:path");
+const evidence = path.resolve(process.env.ALPHA_EVIDENCE_DIR || "artifacts/parity-desktop-windows");
+const fixture = JSON.parse(readFileSync(process.env.ALPHA_FIXTURE_STARTUP, "utf8"));
+mkdirSync(evidence, { recursive: true });
+const workspace = mkdtempSync(path.join(evidence, "windows-"));
+const agentDir = path.join(workspace, "omp"), project = path.join(workspace, "project");
+mkdirSync(agentDir); mkdirSync(project);
+for (const name of ["models.yml", "config.yml"]) cpSync(path.join(fixture.workspace, "omp", name), path.join(agentDir, name));
+Object.assign(process.env, { HOME: workspace, USERPROFILE: workspace, ALPHA_WORKSPACE_ROOT: workspace, PI_CODING_AGENT_DIR: agentDir, ALPHA_SERVER_TOKEN: randomBytes(24).toString("hex") });
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const pages = () => webContents.getAllWebContents().filter(page => /\/ui\//.test(page.getURL()));
+const evaluate = (page, code) => {
+  writeFileSync(path.join(evidence, "desktop-windows-progress.txt"), new Date().toISOString() + " " + code.slice(0, 180) + "\n", { flag: "a" });
+  return Promise.race([page.executeJavaScript(`(async () => { ${code} })()`), sleep(15000).then(() => { throw new Error("Renderer evaluation timed out: " + code.slice(0, 180)); })]);
+};
+async function until(condition, detail) { for (let count = 0; count < 600; count++) { BaseWindow.getAllWindows().forEach(window => window.hide()); if (await condition()) return; await sleep(100); } throw new Error("Timed out: " + detail); }
+const click = (page, label) => evaluate(page, `const node = [...document.querySelectorAll('button')].find(node => !node.disabled && node.textContent.trim() === ${JSON.stringify(label)}); if (!node) throw new Error('Missing button: ' + ${JSON.stringify(label)}); node.click();`);
+const english = require("../desktop/ui/src/app/ui-english.json");
+const input = (page, label, text) => evaluate(page, `const node=document.querySelector('[aria-label='+${JSON.stringify(JSON.stringify(label))}+']'); if (!node) throw new Error('Missing field: '+${JSON.stringify(label)}); Object.getOwnPropertyDescriptor(node.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(node,${JSON.stringify(text)}); node.dispatchEvent(new Event('input',{bubbles:true}));`);
+const result = { electron: process.versions.electron, productionMain: true, windows: false, sharedSession: false, language: false, preferences: false, restart: false, definitions: false, skillEditor: false, lspConfiguration: false, logs: false, closeOne: false };
+require("../desktop/main.cjs");
+app.whenReady().then(async () => {
+  try {
+    await until(async () => pages().length && await evaluate(pages()[0], "return !!document.querySelector('.native-new');"), "initial window");
+    const first = pages()[0]; first.setBackgroundThrottling(false);
+    const created = await evaluate(first, `const response = await fetch('/api/native/sessions', { method:'POST', headers:{'content-type':'application/json', 'x-alpha-token':await window.alpha.serverToken()}, body:JSON.stringify({cwd:${JSON.stringify(project)},title:'WINDOW_SESSION_PROOF'})}); if (!response.ok) throw new Error(await response.text()); return (await response.json()).session;`);
+    await until(() => evaluate(first, "return [...document.querySelectorAll('button')].some(node => node.textContent.includes('WINDOW_SESSION_PROOF'));"), "session catalog");
+    await evaluate(first, "[...document.querySelectorAll('button')].find(node => node.textContent.includes('WINDOW_SESSION_PROOF')).click();");
+    await until(() => evaluate(first, "return !!document.querySelector('.native-plan-bar button:not(:disabled)');"), "native session");
+    await evaluate(first, "await window.alpha.newWindow();");
+    await until(() => pages().length === 2, "second window");
+    const second = pages().find(page => page.id !== first.id); second.setBackgroundThrottling(false);
+    await until(() => evaluate(second, "return !!document.querySelector('.native-new');"), "second renderer");
+    result.windows = first.getURL() === second.getURL() && BaseWindow.getAllWindows().length === 2;
+    const state = page => evaluate(page, `const response = await fetch('/api/native/sessions/${created.id}/command', {method:'POST', headers:{'content-type':'application/json','x-alpha-token':await window.alpha.serverToken()},body:JSON.stringify({type:'get_state'})}); if (!response.ok) throw new Error(await response.text()); return response.json();`);
+    const [a, b] = await Promise.all([state(first), state(second)]);
+    result.sharedSession = !!a.data?.sessionId && a.data.sessionId === b.data?.sessionId;
+    await evaluate(first, "window.dispatchEvent(new CustomEvent('alpha-command',{detail:{id:'settings'},cancelable:true}));"); await click(first, "界面");
+    await evaluate(first, "const node=document.querySelector('select[aria-label=\"界面语言\"]'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(node,'en'); node.dispatchEvent(new Event('change',{bubbles:true}));");
+    await until(() => evaluate(first, "return document.documentElement.lang === 'en' && document.body.textContent.includes('Make Alpha work your way');"), "English first window");
+    await until(() => evaluate(second, "return document.documentElement.lang === 'en' && document.body.textContent.includes('New session');"), "English second window"); result.language = true;
+    await evaluate(first, "const node=document.querySelector('select[aria-label=\"Interface font\"]'); Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value').set.call(node,'segoe'); node.dispatchEvent(new Event('change',{bubbles:true}));");
+    await until(() => evaluate(second, "return document.documentElement.style.getPropertyValue('--font-sans').includes('Segoe UI');"), "font synchronization"); result.preferences = true;
+    first.reload();
+    await until(() => evaluate(first, "return document.documentElement.lang === 'en' && document.body.textContent.includes('New session') && document.documentElement.style.getPropertyValue('--font-sans').includes('Segoe UI');"), "persistent preferences"); result.restart = true;
+    await evaluate(first, "window.dispatchEvent(new CustomEvent('alpha-command',{detail:{id:'settings'},cancelable:true}));"); await click(first, english["规则与命令"]);
+    await until(() => evaluate(first, `return !!document.querySelector('textarea[aria-label="${english["原生定义正文"]}"]');`), "definition editor");
+    await input(first, english["原生定义名称"], "desktop-proof-rule"); await input(first, english["原生定义正文"], "---\nalwaysApply: true\n---\nDESKTOP_RULE_PROOF\n"); await click(first, english["保存"]);
+    const readDefinitions = () => evaluate(first, `const response=await fetch('/api/native/sessions/${created.id}/host/definitions',{method:'POST',headers:{'content-type':'application/json','x-alpha-token':await window.alpha.serverToken()},body:JSON.stringify({action:'list'})}); if(!response.ok)return false; return (await response.json()).entries.some(row=>row.name==='desktop-proof-rule'&&row.loaded);`);
+    await until(readDefinitions, "native rule actually loaded");
+    await until(() => evaluate(first, `return [...document.querySelectorAll('button')].some(node=>!node.disabled&&node.textContent.trim()===${JSON.stringify(english["保存"])});`), "definition saved");
+    await input(first, english["原生定义正文"], "---\nalwaysApply: true\n---\nDESKTOP_RULE_SECOND_SAVE\n"); await click(first, english["保存"]);
+    await until(() => readFileSync(path.join(project,".omp/rules/desktop-proof-rule.md"),"utf8").includes("SECOND_SAVE"), "second save preserves conflict revision"); result.definitions = true;
+    await click(first, english["技能"]); await until(() => evaluate(first, `return !!document.querySelector('textarea[aria-label="${english["扩展内容"]}"]');`), "Skill editor");
+    await input(first, english["扩展名称"], "desktop-method"); await input(first, english["扩展内容"], "---\nname: desktop-method\ndescription: Desktop native skill proof\n---\nDESKTOP_SKILL_PROOF\n"); await click(first, english["保存"]);
+    await until(() => { try { return readFileSync(path.join(project,".omp/skills/desktop-method/SKILL.md"),"utf8").includes("DESKTOP_SKILL_PROOF"); } catch { return false; } }, "Skill saved");
+    await until(() => evaluate(first, `return [...document.querySelectorAll('button')].some(node=>!node.disabled&&node.textContent.trim()===${JSON.stringify(english["保存"])});`), "Skill refreshed");
+    await input(first, english["扩展内容"], "---\nname: desktop-method\ndescription: Desktop native skill proof\n---\nDESKTOP_SKILL_SECOND_SAVE\n"); await click(first, english["保存"]);
+    await until(() => readFileSync(path.join(project,".omp/skills/desktop-method/SKILL.md"),"utf8").includes("SECOND_SAVE"), "Skill second save"); result.skillEditor = true;
+    await click(first, english["语言服务"]); await until(() => evaluate(first, `return !!document.querySelector('textarea[aria-label="${english["语言服务配置正文"]}"]');`), "LSP native config");
+    await until(() => evaluate(first, `const editor=document.querySelector('textarea[aria-label="${english["语言服务配置正文"]}"]');return !!editor&&[...editor.closest('details').querySelectorAll('button')].some(node=>!node.disabled&&node.textContent.trim()===${JSON.stringify(english["保存配置"])});`), "LSP configuration loaded");
+    await input(first, english["语言服务配置正文"], '{"servers":{}}');
+    await evaluate(first, `const editor=document.querySelector('textarea[aria-label="${english["语言服务配置正文"]}"]'); const node=[...editor.closest('details').querySelectorAll('button')].find(node=>!node.disabled&&node.textContent.trim()===${JSON.stringify(english["保存配置"])});if(!node)throw new Error('Missing LSP save');node.click();`);
+    await until(() => { try { return JSON.parse(readFileSync(path.join(project,".omp/lsp.json"),"utf8")).servers !== undefined; } catch { return false; } }, "native LSP file saved"); result.lspConfiguration = true;
+    await click(first, english["关于"]); await click(first, english["读取日志目录"]);
+    await until(() => evaluate(first, "return [...document.querySelectorAll('.settings-content button')].some(node=>/^omp\\.[\\d-]+\\.\\d+\\.log$/.test(node.textContent));"), "native persistent logs"); result.logs = true;
+    await until(() => evaluate(second, "return !!document.querySelector('.native-plan-bar button:not(:disabled)') && !document.body.textContent.includes('Operation incomplete') && !document.body.textContent.includes('Session not open');"), "shared renderer recovers native runtime reloads without an error");
+    const visible = BaseWindow.getAllWindows().find(window => window.contentView.children.some(view => view.webContents?.id === second.id)); visible.show();
+    await evaluate(second, "await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); return document.body.textContent.includes('New session');"); await sleep(1200);
+    const image = await Promise.race([second.capturePage(), sleep(10000).then(() => { throw new Error("Screenshot timed out"); })]); writeFileSync(path.join(evidence, "desktop-windows-english.png"), image.toPNG()); visible.hide();
+    const latest = await state(first);
+    const owner = BaseWindow.getAllWindows().find(window => window.contentView.children.some(view => view.webContents?.id === first.id)); owner.close();
+    await until(() => pages().length === 1 && !second.isDestroyed(), "close one window");
+    const remaining = await state(second); result.closeOne = remaining.data?.sessionId === latest.data?.sessionId;
+    if (Object.values(result).some(value => value === false)) throw new Error("Desktop assertions failed");
+    writeFileSync(path.join(evidence, "desktop-windows-result.json"), JSON.stringify(result, null, 2)); console.log("ALPHA_DESKTOP_WINDOWS_OK " + JSON.stringify(result));
+  } catch (error) { writeFileSync(path.join(evidence, "desktop-windows-failure.txt"), String(error.stack || error)); console.error(error); process.exitCode = 1; }
+  finally { app.quit(); }
+});

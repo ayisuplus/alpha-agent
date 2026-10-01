@@ -1,3 +1,4 @@
+import { t } from "./ui-language";
 /** 打开网页与扩展交互请求。工作目录由首页输入区选择。 */
 
 import type { SessionController } from "./useSession";
@@ -28,13 +29,13 @@ export function NativeDialogs({ session }: {
   if (request) return <NativeModal key={request.id} title={request.title ?? "Alpha 需要输入"} onCancel={() => void session.respond(false)}>
     {request.message && <p>{request.message}</p>}
     {request.method === "select"
-      ? <select aria-label={request.title ?? "选择选项"} value={session.uiValue} onChange={event => session.setUiValue(event.target.value)}><option value="">请选择</option>{request.options?.map(option => <option key={option}>{option}</option>)}</select>
+      ? <select aria-label={request.title ?? "选择选项"} value={session.uiValue} onChange={event => session.setUiValue(event.target.value)}><option value="">{t("请选择")}</option>{request.options?.map(option => <option key={option}>{option}</option>)}</select>
       : request.method !== "confirm" ? <textarea aria-label={request.title ?? "补充说明"} value={session.uiValue} placeholder={request.placeholder} onChange={event => session.setUiValue(event.target.value)} /> : null}
-    <div><button onClick={() => void session.respond(false)}>取消</button><button className="native-primary" disabled={request.method === "select" && !session.uiValue} onClick={() => void session.respond(true)}>确认</button></div>
+    <div><button onClick={() => void session.respond(false)}>{t("取消")}</button><button className="native-primary" disabled={request.method === "select" && !session.uiValue} onClick={() => void session.respond(true)}>{t("确认")}</button></div>
   </NativeModal>;
-  if (session.externalUrl) return <NativeModal title="Alpha 请求打开网页" onCancel={() => session.setExternalUrl("")}>
+  if (session.externalUrl) return <NativeModal title={t("Alpha 请求打开网页")} onCancel={() => session.setExternalUrl("")}>
     <p className="native-muted">{session.externalUrl}</p>
-    <div><button onClick={() => session.setExternalUrl("")}>稍后</button><button className="native-primary" onClick={openExternal}>在系统浏览器打开</button></div>
+    <div><button onClick={() => session.setExternalUrl("")}>{t("稍后")}</button><button className="native-primary" onClick={openExternal}>{t("在系统浏览器打开")}</button></div>
   </NativeModal>;
   return null;
 }

@@ -1,3 +1,4 @@
+import { tf, t } from "./ui-language";
 import { desktopStorage } from "./desktop-storage";
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, CircleStop, FolderOpen, MoreHorizontal, Paperclip, X } from "lucide-react";
@@ -102,12 +103,12 @@ export function NativeComposer({ session, models, model, thinking, onModel, onTh
     onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }}
     onDrop={event => { event.preventDefault(); void (async () => { for (const file of event.dataTransfer.files) await attach(file); })(); }}>
     {session.widgets.filter(block => block.key !== "alpha-header").map(block => block.lines.map((line, index) => <div className="native-tool-call" key={`${block.key}:${index}`}>{line}</div>))}
-    {(images.length > 0 || draft.paths.length > 0) && <div className="native-attachments" aria-label="已添加材料">
-      {images.map((image, index) => <span key={index}><img src={`data:${image.mimeType};base64,${image.data}`} alt="已添加图片" />{image.name}<button aria-label={`移除图片 ${image.name}`} onClick={() => update({ ...draft, image: undefined, images: images.filter((_, position) => position !== index) })}><X size={14} /></button></span>)}
-      {draft.paths.map(path => <span key={path} title={path}>{path.split(/[\\/]/).at(-1)}<button aria-label={`移除 ${path.split(/[\\/]/).at(-1)}`} onClick={() => update({ ...draft, paths: draft.paths.filter(item => item !== path) })}><X size={14} /></button></span>)}
-      {images.length > 0 && <small className="native-muted">图片与草稿一起保存在本机。</small>}
+    {(images.length > 0 || draft.paths.length > 0) && <div className="native-attachments" aria-label={t("已添加材料")}>
+      {images.map((image, index) => <span key={index}><img src={`data:${image.mimeType};base64,${image.data}`} alt={t("已添加图片")} />{image.name}<button aria-label={tf`移除图片 ${image.name}`} onClick={() => update({ ...draft, image: undefined, images: images.filter((_, position) => position !== index) })}><X size={14} /></button></span>)}
+      {draft.paths.map(path => <span key={path} title={path}>{path.split(/[\\/]/).at(-1)}<button aria-label={tf`移除 ${path.split(/[\\/]/).at(-1)}`} onClick={() => update({ ...draft, paths: draft.paths.filter(item => item !== path) })}><X size={14} /></button></span>)}
+      {images.length > 0 && <small className="native-muted">{t("图片与草稿一起保存在本机。")}</small>}
     </div>}
-    <textarea ref={input} data-testid={home ? "brief" : "composer"} aria-label={home ? "描述任务目标" : "向 Alpha 说明任务"}
+    <textarea ref={input} data-testid={home ? "brief" : "composer"} aria-label={home ? t("描述任务目标") : t("向 Alpha 说明任务")}
       value={draft.text} onChange={event => update({ ...draft, text: event.target.value })}
       onKeyDown={event => {
         if (!event.nativeEvent.isComposing && completions.length && ["ArrowDown", "ArrowUp", "Tab"].includes(event.key)) {
@@ -115,26 +116,26 @@ export function NativeComposer({ session, models, model, thinking, onModel, onTh
         } else if (shouldSubmit({ ...event, isComposing: event.nativeEvent.isComposing })) { event.preventDefault(); void send(); }
       }}
       onPaste={event => { const file = [...event.clipboardData.files].find(item => item.type.startsWith("image/")); if (file) { event.preventDefault(); void attach(file); } }}
-      placeholder={session.state?.isStreaming ? "补充要求，实时送给正在工作的 Alpha…" : "描述要完成的任务，也可以粘贴或拖入图片…"} rows={home ? 5 : 3} />
+      placeholder={session.state?.isStreaming ? t("补充要求，实时送给正在工作的 Alpha…") : t("描述要完成的任务，也可以粘贴或拖入图片…")} rows={home ? 5 : 3} />
     <div className="native-compose-toolbar">
-      <button className="native-icon-button" aria-label="添加材料" title={window.alpha?.choosePaths ? "添加文件" : "添加图片"} onClick={() => void pickFiles()}><Paperclip size={17} /></button>
-      <input hidden multiple ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="选择图片" onChange={event => { const selected = [...event.target.files ?? []]; event.target.value = ""; void (async () => { for (const file of selected) await attach(file); })(); }} />
+      <button className="native-icon-button" aria-label={t("添加材料")} title={window.alpha?.choosePaths ? t("添加文件") : t("添加图片")} onClick={() => void pickFiles()}><Paperclip size={17} /></button>
+      <input hidden multiple ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label={t("选择图片")} onChange={event => { const selected = [...event.target.files ?? []]; event.target.value = ""; void (async () => { for (const file of selected) await attach(file); })(); }} />
       <NativeModelPicker models={models} value={model} onChange={onModel} thinking={thinking} onThinkingChange={onThinking} onOpenSettings={onOpenSettings} disabled={sending} allowAuto={!!home} />
       {home && <div className="native-home-directory" title={projectPath || "Alpha 工作区"}>
-        {window.alpha?.choosePaths ? <button className="native-icon-button" aria-label="选择工作目录" title="选择文件夹" onClick={() => void window.alpha!.choosePaths!("directory").then(paths => { if (paths[0]) setProjectPath?.(paths[0]); }, cause => session.setError(String(cause)))}><FolderOpen size={16} /></button> : <FolderOpen size={16} />}
-        <input aria-label="工作目录" value={projectPath} onChange={event => setProjectPath?.(event.target.value)} placeholder="Alpha 工作区" />
+        {window.alpha?.choosePaths ? <button className="native-icon-button" aria-label={t("选择工作目录")} title={t("选择文件夹")} onClick={() => void window.alpha!.choosePaths!("directory").then(paths => { if (paths[0]) setProjectPath?.(paths[0]); }, cause => session.setError(String(cause)))}><FolderOpen size={16} /></button> : <FolderOpen size={16} />}
+        <input aria-label={t("工作目录")} value={projectPath} onChange={event => setProjectPath?.(event.target.value)} placeholder={t("Alpha 工作区")} />
       </div>}
-      {!home && <details className="native-more"><summary aria-label="更多输入操作" title="更多操作"><MoreHorizontal size={18} /></summary><div onClick={event => event.currentTarget.parentElement?.removeAttribute("open")}>
-        <button onClick={onOpenSettings}>模型与账号设置</button>
-        <button onClick={() => void invokeDesktopCommand("compact")}>压缩上下文</button>
-        <button onClick={() => void invokeDesktopCommand("palette")}>命令与技能</button>
+      {!home && <details className="native-more"><summary aria-label={t("更多输入操作")} title={t("更多操作")}><MoreHorizontal size={18} /></summary><div onClick={event => event.currentTarget.parentElement?.removeAttribute("open")}>
+        <button onClick={onOpenSettings}>{t("模型与账号设置")}</button>
+        <button onClick={() => void invokeDesktopCommand("compact")}>{t("压缩上下文")}</button>
+        <button onClick={() => void invokeDesktopCommand("palette")}>{t("命令与技能")}</button>
       </div></details>}
-      {session.state?.isStreaming && <select aria-label="消息发送方式" value={queueMode} onChange={event => setQueueMode(event.target.value as typeof queueMode)}><option value="steer">中途补充</option><option value="follow_up">下一轮排队</option></select>}
+      {session.state?.isStreaming && <select aria-label={t("消息发送方式")} value={queueMode} onChange={event => setQueueMode(event.target.value as typeof queueMode)}><option value="steer">{t("中途补充")}</option><option value="follow_up">{t("下一轮排队")}</option></select>}
       <span className="native-send-hint">Ctrl + Enter</span>
-      {session.state?.isStreaming && <button className="native-stop" aria-label="停止生成" title="停止生成" onClick={() => void session.command({ type: "abort" })}><CircleStop size={17} /></button>}
-      <button className="native-primary" disabled={!ready} onClick={() => void send()} aria-label={home ? "开始任务" : "发送"}>{home && (sending ? "正在启动…" : "开始任务")}<ArrowUp size={17} /></button>
+      {session.state?.isStreaming && <button className="native-stop" aria-label={t("停止生成")} title={t("停止生成")} onClick={() => void session.command({ type: "abort" })}><CircleStop size={17} /></button>}
+      <button className="native-primary" disabled={!ready} onClick={() => void send()} aria-label={home ? t("开始任务") : t("发送")}>{home && (sending ? "正在启动…" : "开始任务")}<ArrowUp size={17} /></button>
     </div>
-    {completions.length > 0 && <div className="native-command-results native-completions" role="listbox" aria-label="输入补全">{completions.slice(0, 40).map((item, index) => <button key={item.label} role="option" aria-selected={index === completionIndex} onClick={() => complete(index)}><span>{item.label}</span><small>{item.description}</small></button>)}</div>}
-    {savingError && <p role="alert" className="native-muted">此窗口仍保留草稿，但无法保存到本机；关闭或刷新前请复制内容。</p>}
+    {completions.length > 0 && <div className="native-command-results native-completions" role="listbox" aria-label={t("输入补全")}>{completions.slice(0, 40).map((item, index) => <button key={item.label} role="option" aria-selected={index === completionIndex} onClick={() => complete(index)}><span>{item.label}</span><small>{item.description && t(item.description)}</small></button>)}</div>}
+    {savingError && <p role="alert" className="native-muted">{t("此窗口仍保留草稿，但无法保存到本机；关闭或刷新前请复制内容。")}</p>}
   </div>;
 }

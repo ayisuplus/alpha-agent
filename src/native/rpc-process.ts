@@ -131,6 +131,10 @@ export class RpcProcess extends EventEmitter {
 
   /** Acceptance is not completion: correlate the native receipt, then wait for async work. */
   async promptAndWait(message: string): Promise<Frame> {
+    return (await this.startPrompt(message)).completion;
+  }
+  /** Release admission after the native acknowledgement, while the receipt keeps tracking completion. */
+  async startPrompt(message: string): Promise<{ completion: Promise<Frame> }> {
     const id = `alpha-${++this.#sequence}`;
     let receipt: Frame | undefined;
     const completion = Promise.withResolvers<Frame>();
@@ -143,13 +147,13 @@ export class RpcProcess extends EventEmitter {
     this.on("exit", onExit);
     // A child can exit while the acceptance command is still pending.
     void completion.promise.catch(() => undefined);
+    const cleanup = () => { this.off("frame", onFrame); this.off("exit", onExit); };
     try {
       await this.#command({ type: "prompt", message }, id, 30_000);
-      return await completion.promise;
-    } finally {
-      this.off("frame", onFrame);
-      this.off("exit", onExit);
-    }
+      const result = completion.promise.finally(cleanup);
+      void result.catch(() => undefined);
+      return { completion: result };
+    } catch (error) { cleanup(); throw error; }
   }
 
   sendFrame(frame: Record<string, unknown>): void {

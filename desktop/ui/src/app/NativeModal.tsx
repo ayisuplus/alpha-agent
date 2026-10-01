@@ -1,3 +1,4 @@
+import { t } from "./ui-language";
 import { useEffect, useId, useRef, type ReactNode } from "react";
 
 export function NativeModal({ title, onCancel, children }: { title: string; onCancel(): void; children: ReactNode }) {
@@ -24,5 +25,5 @@ export function NativeModal({ title, onCancel, children }: { title: string; onCa
     document.addEventListener("focusin", focus);
     return () => { document.removeEventListener("keydown", key, true); document.removeEventListener("focusin", focus); if (previous?.isConnected) previous.focus(); };
   }, []);
-  return <div className="native-modal-backdrop"><div className="native-modal" ref={root} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}><h2 id={titleId}>{title}</h2>{children}</div></div>;
+  return <div className="native-modal-backdrop"><div className="native-modal" ref={root} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}><h2 id={titleId}>{t(title)}</h2>{children}</div></div>;
 }

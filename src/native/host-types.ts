@@ -1,4 +1,4 @@
-export type HostMethod = "catalog" | "extension" | "mode" | "plan" | "tree" | "navigate" | "usage" | "session" | "worktree";
+export type HostMethod = "catalog" | "extension" | "mode" | "plan" | "tree" | "navigate" | "usage" | "session" | "worktree" | "configuration" | "definitions";
 export interface HostRequest { type: "alpha_request"; id: string; method: HostMethod; input: Record<string, unknown> }
 export interface ExtensionRow {
   kind: "skill" | "mcp" | "plugin"; id: string; name: string; description?: string;

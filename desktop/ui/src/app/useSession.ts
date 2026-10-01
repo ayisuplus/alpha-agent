@@ -113,6 +113,8 @@ export function useSession(): SessionController {
   const planStop = useRef(false);
 
   const selectedRef = useRef<string | null>(null);
+  const hostStopped = useRef(true);
+  const loadRevision = useRef(0);
   const restoreSelection = useRef(true);
   const toolStarts = useRef<Map<string, number>>(new Map());
   const completedLive = useRef<NativeMessage | null>(null);
@@ -147,30 +149,36 @@ export function useSession(): SessionController {
   }, []);
 
   const loadSelected = useCallback(async (id: string) => {
-    const terminal = await sessionRequest<{ active: boolean; output: string }>(id, "terminal");
-    if (selectedRef.current !== id) return;
-    setTerminalActive(terminal.active);
-    setTerminalOutput(terminal.output);
-    if (terminal.active) return;
-    // 契约：state/messages/models 要求进程已打开（POST /open 之后才读）。
-    const completed = completedLive.current;
-    const [nextState, history, available, directory] = await Promise.all([
-      sessionRequest<NativeState>(id, "state"),
-      sessionRequest<{ messages: NativeMessage[] }>(id, "messages"),
-      sessionRequest<{ models: Array<{ provider: string; id: string; name?: string }> }>(id, "models"),
-      sessionRequest<{ files: Array<{ name: string; type: string; size?: number }> }>(id, "files"),
-    ]);
-    if (selectedRef.current !== id) return;
-    setState(nextState);
-    setOpened(true); setHostNotice(null);
-    setMessages(history.messages ?? []);
-    setLiveMessage(current => reconcileLiveMessage(current, history.messages ?? [], current === completed));
-    setModels(available.models ?? []);
-    setFiles(directory.files ?? []);
-    setPendingCalls(current => {
-      const settled = new Set((history.messages ?? []).map(message => message.toolCallId).filter(Boolean));
-      return current.filter(call => !settled.has(call.toolCallId));
-    });
+    if (hostStopped.current) return;
+    const revision = loadRevision.current;
+    try {
+      const terminal = await sessionRequest<{ active: boolean; output: string }>(id, "terminal");
+      if (selectedRef.current !== id || revision !== loadRevision.current || hostStopped.current) return;
+      setTerminalActive(terminal.active);
+      setTerminalOutput(terminal.output);
+      if (terminal.active) return;
+      // 契约：state/messages/models 要求进程已打开（POST /open 之后才读）。
+      const completed = completedLive.current;
+      const [nextState, history, available, directory] = await Promise.all([
+        sessionRequest<NativeState>(id, "state"),
+        sessionRequest<{ messages: NativeMessage[] }>(id, "messages"),
+        sessionRequest<{ models: Array<{ provider: string; id: string; name?: string }> }>(id, "models"),
+        sessionRequest<{ files: Array<{ name: string; type: string; size?: number }> }>(id, "files"),
+      ]);
+      if (selectedRef.current !== id || revision !== loadRevision.current || hostStopped.current) return;
+      setState(nextState);
+      setOpened(true); setHostNotice(null);
+      setMessages(history.messages ?? []);
+      setLiveMessage(current => reconcileLiveMessage(current, history.messages ?? [], current === completed));
+      setModels(available.models ?? []);
+      setFiles(directory.files ?? []);
+      setPendingCalls(current => {
+        const settled = new Set((history.messages ?? []).map(message => message.toolCallId).filter(Boolean));
+        return current.filter(call => !settled.has(call.toolCallId));
+      });
+    } catch (cause) {
+      if (selectedRef.current === id && revision === loadRevision.current && !hostStopped.current) throw cause;
+    }
   }, []);
 
   useEffect(() => {
@@ -180,6 +188,8 @@ export function useSession(): SessionController {
   }, [reloadList]);
 
   useEffect(() => {
+    hostStopped.current = true;
+    loadRevision.current++;
     if (!selected) {
       setState(null); setMessages([]); setModels([]); setFiles([]); setLogs([]); setWidgets([]);
       setPendingCalls([]); setToolTiming({}); setLiveNotes([]); setTianshuStatus(null);
@@ -196,6 +206,7 @@ export function useSession(): SessionController {
     setError(startupError.current?.id === selected ? startupError.current.message : "");
     startupError.current = null;
     const refresh = () => {
+      if (hostStopped.current) return;
       clearTimeout(timer);
       timer = setTimeout(() => void loadSelected(selected).catch(cause => { if (!cancelled) setError(String(cause)); }), 180);
     };
@@ -204,6 +215,7 @@ export function useSession(): SessionController {
         const terminal = await sessionRequest<{ active: boolean }>(selected, "terminal");
         if (!terminal.active) await openSession(selected);
         if (cancelled) return;
+        hostStopped.current = false;
         setOpened(true);
         void reloadList().catch(() => undefined);
         feed = new EventSource(await sessionEventsUrl(selected));
@@ -230,7 +242,7 @@ export function useSession(): SessionController {
           }
           if (type === "command_output") setLiveNotes(current => [...current.filter(note => note.id !== "command"), { id: "command", text: String(frame.text ?? "") }]);
           const at = new Date().toLocaleTimeString();
-          if (type === "terminal_start") setTerminalActive(true);
+          if (type === "terminal_start") { hostStopped.current = true; loadRevision.current++; clearTimeout(timer); setTerminalActive(true); }
           if (type === "terminal_chunk") setTerminalOutput(current => (current + String(frame.chunk ?? "")).slice(-100_000));
           if (type === "terminal_exit") { setTerminalActive(false); refresh(); }
           if (type === "terminal_error") setError(String(frame.error ?? "Alpha 终端启动失败"));
@@ -268,8 +280,17 @@ export function useSession(): SessionController {
           if (type === "auto_retry_start") setLiveNotes(current => [...current.filter(note => note.id !== "retry"), { id: "retry", text: `自动重试（第 ${Number(frame.attempt ?? 1)} 次）…` }]);
           if (type === "auto_retry_end") setLiveNotes(current => current.filter(note => note.id !== "retry"));
           if (type === "host_exit") {
+            hostStopped.current = true;
+            loadRevision.current++;
+            clearTimeout(timer);
             setOpened(false);
-            setHostNotice(String(frame.error ?? "Alpha 已停止这个会话的进程。"));
+            setHostNotice(frame.restarting ? null : String(frame.error ?? "Alpha 已停止这个会话的进程。"));
+            setUiRequest(null);
+          }
+          if (type === "host_ready") {
+            hostStopped.current = false;
+            loadRevision.current++;
+            setOpened(true); setHostNotice(null);
             refresh();
           }
           if (type === "host_error") setLogs(items => [...items.slice(-149), { at, text: `host_error: ${String(frame.error ?? "")}` }]);

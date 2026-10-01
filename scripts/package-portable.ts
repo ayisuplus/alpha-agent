@@ -3,6 +3,7 @@ import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/p
 import { basename, join, resolve } from "node:path";
 import ts from "typescript";
 import { uiHashes, verifyPayloadHashes, verifyUiHashes } from "./portable-ui";
+import { payloadHashes } from "./apply-app-update";
 
 const root = resolve(import.meta.dir, "..");
 const stamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
@@ -55,7 +56,7 @@ await mkdir(join(output, "presets"), { recursive: true });
 for (const name of ["flux2-image.api.json", "voxcpm2-voice.api.json", "h3-video.api.json"]) await cp(join(root, "presets", name), join(output, "presets", name));
 for (const source of ["presets/alpha-plugin", "presets/terminal-themes"]) await cp(join(root, source), join(output, source), { recursive: true });
 await cp(join(root, "presets", "alpha-identity.md"), join(output, "presets", "alpha-identity.md"));
-for (const source of ["desktop/main.cjs", "desktop/preload.cjs", "desktop/browser-host.cjs", "desktop/state-storage.cjs", "scripts/start-desktop.ts", "scripts/probe-portable.ts", "scripts/portable-ui.ts", "src/native/capabilities/office/office-worker.py", "scripts/probe-office-runtime.ts", "package.json", "package-lock.json", "LICENSE", "NOTICE"]) {
+for (const source of ["desktop/main.cjs", "desktop/preload.cjs", "desktop/browser-host.cjs", "desktop/state-storage.cjs", "desktop/commands.json", "scripts/start-desktop.ts", "scripts/probe-portable.ts", "scripts/portable-ui.ts", "scripts/apply-app-update.ts", "scripts/extract-app-update.ps1", "src/native/capabilities/office/office-worker.py", "scripts/probe-office-runtime.ts", "package.json", "package-lock.json", "LICENSE", "NOTICE"]) {
   const target = join(output, source);
   await mkdir(resolve(target, ".."), { recursive: true });
   await cp(join(root, source), target);
@@ -94,7 +95,7 @@ async function hashSources(name: string): Promise<void> {
     for (const child of await readdir(path)) await hashSources(`${name}/${child}`);
   } else sources[name] = createHash("sha256").update(await readFile(path)).digest("hex");
 }
-for (const name of ["src", "presets", "scripts", "desktop/main.cjs", "desktop/preload.cjs", "desktop/browser-host.cjs", "package.json", "package-lock.json", "LICENSE", "NOTICE"]) await hashSources(name);
+for (const name of ["src", "presets", "scripts", "desktop/main.cjs", "desktop/preload.cjs", "desktop/browser-host.cjs", "desktop/state-storage.cjs", "desktop/commands.json", "package.json", "package-lock.json", "LICENSE", "NOTICE"]) await hashSources(name);
 await verifyPayloadHashes(root, sources);
 await writeFile(join(output, "release.json"), JSON.stringify({
   format: 3,
@@ -125,6 +126,10 @@ await writeFile(join(output, "README.txt"), [
   "定时任务仅在 Alpha 运行时执行；浏览器标签页与登录状态在所有会话间共享。",
   "",
 ].join("\r\n"));
+const updateManifestPath = join(output, "release.json");
+const updateManifest = JSON.parse(await readFile(updateManifestPath, "utf8"));
+updateManifest.payload = await payloadHashes(output);
+await writeFile(updateManifestPath, JSON.stringify(updateManifest, null, 2));
 const officeProbe = Bun.spawn([join(output, "runtime", "bun.exe"), "run", "scripts/probe-office-runtime.ts"], { cwd: output, env: { ...process.env, ProgramFiles: "C:\\OfficeNotInstalled" }, stdout: "pipe", stderr: "pipe", windowsHide: true });
 const [probeOutput, probeError, probeExit] = await Promise.all([new Response(officeProbe.stdout).text(), new Response(officeProbe.stderr).text(), officeProbe.exited]);
 if (probeExit !== 0 || !probeOutput.includes('"status":"pass"')) throw new Error(`Bundled Office smoke failed: ${probeError || probeOutput}`);

@@ -2,13 +2,14 @@ import { cp, lstat, mkdir, readFile, readdir, realpath, stat, writeFile } from "
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { getAgentDir, type CreateAgentSessionResult } from "@oh-my-pi/pi-coding-agent";
 import { loadSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
-import { scanSkillsFromDir } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
-import { getMCPConfigPath, getPluginsNodeModules, parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { scanSkillsFromDir, clearPluginRootsAndCaches, resolveOrDefaultProjectRegistryPath, resolveActiveProjectRegistryPath } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
+import { getMCPConfigPath, getPluginsNodeModules, getProjectPluginOverridesPath, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { loadAllMCPConfigs, validateServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/config";
 import { addMCPServer, updateMCPServer, removeMCPServer, setMcpServerEnabled, validateServerName, readMCPConfigFile } from "@oh-my-pi/pi-coding-agent/mcp/config-writer";
 import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
-import { PluginManager } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/manager";
+import { PluginManager, validateSetting } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/manager";
 import { getEnabledPlugins } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/loader";
+import { MarketplaceManager, getMarketplacesRegistryPath, getInstalledPluginsRegistryPath, getMarketplacesCacheDir, getPluginsCacheDir, parsePluginId } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/marketplace";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { isRpcSessionSettled } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-session-settle";
 import { NativeMcpOAuth } from "./mcp-oauth";
@@ -18,31 +19,52 @@ import type { ExtensionCatalog, ExtensionRow, HostMethod } from "./host-types";
 import { NativePlanHost } from "./plan-host";
 import { createSessionWorktree } from "@oh-my-pi/pi-coding-agent/session/session-worktree";
 import { requireGit } from "@oh-my-pi/pi-natives/vcs";
+import { NativeConfiguration, replaceNativeConfiguration, assertProjectConfigurationScope } from "./configuration";
+import { popQueueDraft, queueDrafts } from "./queue-drafts";
+import { NativeDefinitions } from "./definitions";
+import { nativeLogs } from "./logs";
+import type { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, type SubagentLifecyclePayload } from "@oh-my-pi/pi-coding-agent/task";
+import { readRpcSubagentTranscript } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents";
+import { redact, preserveRedacted, safeUrl } from "./config-redaction";
+export { redact, preserveRedacted } from "./config-redaction";
 
-export function redact(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redact);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, /token|secret|password|authorization|api.?key|^env$|^headers$/i.test(key) ? "••••" : key === "url" && typeof item === "string" && item !== safeUrl(item) ? "••••" : redact(item)]));
-}
-function safeUrl(value: string): string { try { const url = new URL(value); url.username = ""; url.password = ""; url.search = ""; url.hash = ""; return url.toString(); } catch { return "••••"; } }
 function needsAdaptation(pkg: Record<string, unknown>): boolean { return !pkg.omp && !pkg.pi && (!!pkg.opencode || Object.keys({ ...pkg.dependencies as object, ...pkg.peerDependencies as object }).some(name => name.startsWith("@opencode-ai/"))); }
-export function preserveRedacted(input: unknown, previous: unknown): unknown {
-  if (input === "••••") return previous;
-  if (Array.isArray(input)) return input.map((item, index) => preserveRedacted(item, Array.isArray(previous) ? previous[index] : undefined));
-  if (!input || typeof input !== "object") return input;
-  return Object.fromEntries(Object.entries(input).map(([key, value]) => [key, preserveRedacted(value, previous && typeof previous === "object" ? (previous as Record<string, unknown>)[key] : undefined)]));
-}
 const text = (input: Record<string, unknown>, key: string) => { const value = input[key]; if (typeof value !== "string" || !value.trim()) throw new Error("Missing " + key); return value.trim(); };
 const contained = (root: string, path: string) => { const part = relative(root, path); return part !== ".." && !part.startsWith(".." + sep) && !isAbsolute(part); };
 
 export class NativeHostControl {
   private oauth = new NativeMcpOAuth();
   readonly plan: NativePlanHost;
-  constructor(readonly runtime: CreateAgentSessionResult, emit: (frame: Record<string, unknown>) => void = () => {}) { this.plan = new NativePlanHost(runtime.session, emit); }
+  constructor(readonly runtime: CreateAgentSessionResult, emit: (frame: Record<string, unknown>) => void = () => {}, subagentBus?: EventBus) {
+    this.plan = new NativePlanHost(runtime.session, emit);
+    (subagentBus ?? runtime.subagentEventBus)?.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, value => {
+      const lifecycle = value as SubagentLifecyclePayload;
+      this.session.sessionManager.appendCustomEntry("alpha-subagent-lifecycle", lifecycle);
+    });
+  }
   private get session() { return this.runtime.session; }
   private get cwd() { return this.session.sessionManager.getCwd(); }
+  private async marketplace() {
+    return new MarketplaceManager({ marketplacesRegistryPath: getMarketplacesRegistryPath(), installedRegistryPath: getInstalledPluginsRegistryPath(), projectInstalledRegistryPath: await resolveOrDefaultProjectRegistryPath(this.cwd), marketplacesCacheDir: getMarketplacesCacheDir(), pluginsCacheDir: getPluginsCacheDir(), clearPluginRootsCache: clearPluginRootsAndCaches });
+  }
   async request(method: HostMethod, input: Record<string, unknown> = {}): Promise<unknown> {
     if (method === "catalog") return this.catalog();
+    if (method === "definitions") return new NativeDefinitions(this.session).request(input);
+    if (method === "configuration") {
+      const configuration = new NativeConfiguration();
+      if (input.action === "models") return configuration.catalog(this.session.settings, this.session.modelRegistry);
+      if (input.action === "save") {
+        if (!isRpcSessionSettled(this.session)) throw new Error("Wait for the session to settle before changing runtime settings");
+        await configuration.update(input, this.session.settings, this.cwd);
+      }
+      if (input.action === "reload" || input.action === "save") {
+        await this.session.settings.reloadFromDisk();
+        await this.session.modelRegistry.authStorage.credentials.reload();
+        await this.session.modelRegistry.refresh("offline");
+      }
+      return { ...await configuration.read(this.session.settings), projectRevision: await configuration.projectRevision(this.cwd), cwd: this.cwd };
+    }
     if (method === "mode") return this.plan.view();
     if (method === "plan") return this.plan.request(input);
     if (method === "tree") return this.session.sessionManager.getTree();
@@ -62,7 +84,17 @@ export class NativeHostControl {
       return result;
     }
     if (method === "session") {
+      if (input.action === "logs") return nativeLogs(input);
+      if (input.action === "subagent-history" || input.action === "subagent-transcript") {
+        const rows = new Map<string, SubagentLifecyclePayload>();
+        for (const entry of this.session.sessionManager.getBranch()) if (entry.type === "custom" && entry.customType === "alpha-subagent-lifecycle") { const row = entry.data as SubagentLifecyclePayload; rows.set(row.id, row); }
+        if (input.action === "subagent-history") return [...rows.values()];
+        const row = rows.get(String(input.subagentId)); if (!row?.sessionFile) throw new Error("No persisted transcript for this native subagent");
+        return readRpcSubagentTranscript(row.sessionFile);
+      }
       if (input.action === "queues") return this.session.getQueuedMessages();
+      if (input.action === "queue-drafts") return queueDrafts(this.session);
+      if (input.action === "pop-queue") return popQueueDraft(this.session);
       if (input.action === "clear-queue") return this.session.clearQueue();
       if (input.action === "branch") {
         if (!isRpcSessionSettled(this.session)) throw new Error("Wait for the session to settle");
@@ -98,6 +130,16 @@ export class NativeHostControl {
     const plugins = new PluginManager(this.cwd);
     const enabledPlugins = await getEnabledPlugins(this.cwd);
     const allPlugins = new Map((await plugins.list()).map(plugin => [plugin.name, { ...plugin, scope: "user" }]));
+    const projectRegistry = await resolveActiveProjectRegistryPath(this.cwd);
+    if (projectRegistry) {
+      const root = dirname(projectRegistry);
+      const read = (name: string) => readFile(join(root, name), "utf8").then(JSON.parse).catch(error => { if (error.code === "ENOENT") return {}; throw error; });
+      const [pkg, lock] = await Promise.all([read("package.json"), read("omp-plugins.lock.json")]);
+      for (const name of new Set<string>([...Object.keys(pkg.dependencies ?? {}), ...Object.keys(lock.plugins ?? {})])) {
+        const plugin = await plugins.getPlugin(name, { path: join(root, "node_modules", name) });
+        if (plugin) allPlugins.set(name, { ...plugin, enabled: plugin.enabled && lock.plugins?.[name]?.enabled !== false, scope: "project" });
+      }
+    }
     for (const plugin of enabledPlugins) if (plugin.scope === "project") allPlugins.set(plugin.name, plugin);
     for (const plugin of allPlugins.values()) {
       const pkg = await readFile(join(plugin.path, "package.json"), "utf8").then(JSON.parse).catch(() => ({}));
@@ -106,6 +148,29 @@ export class NativeHostControl {
       const manifest = structuredClone(plugin.manifest);
       for (const [key, schema] of Object.entries(manifest.settings ?? {})) if (schema.secret) { if (key in settings) settings[key] = "••••"; delete schema.default; }
       entries.push({ kind: "plugin", id: plugin.name, name: plugin.name, version: plugin.version, license: pkg.license, source: plugin.path, path: plugin.path, scope: plugin.scope, enabled: plugin.enabled, loaded, status: needsAdaptation(pkg) ? "needs_adaptation" : loaded ? "loaded" : plugin.enabled ? "configured" : "disabled", details: { manifest, settings: redact(settings), features: plugin.enabledFeatures } });
+    }
+    for (const plugin of await (await this.marketplace()).listInstalledPlugins()) {
+      for (const installation of plugin.entries) {
+        const path = installation.installPath;
+        let diagnostic: string | undefined;
+        const physical = await realpath(path).catch(error => { diagnostic = String(error); return path; });
+        for (let index = entries.length - 1; index >= 0; index--) {
+          const entry = entries[index]!;
+          if (entry.kind === "plugin" && !(entry.details as { nativeMarketplace?: boolean })?.nativeMarketplace && entry.path && await realpath(entry.path).catch(() => entry.path) === physical) entries.splice(index, 1);
+        }
+        const pkg = await readFile(join(path, "package.json"), "utf8").then(JSON.parse).catch(() => ({}));
+        const metadata = await readFile(join(path, ".claude-plugin/plugin.json"), "utf8").then(JSON.parse).catch(() => ({}));
+        const packageName = pkg.name ?? parsePluginId(plugin.id)?.name;
+        const nativePlugin = await plugins.getPlugin(packageName, { path }).catch(error => { diagnostic = String(error); return undefined; });
+        const settings = await plugins.getPluginSettings(packageName);
+        const manifest = structuredClone(nativePlugin?.manifest ?? pkg.omp ?? pkg.pi ?? metadata);
+        for (const [key, schema] of Object.entries(manifest.settings ?? {})) if ((schema as { secret?: boolean }).secret) { if (key in settings) settings[key] = "••••"; delete (schema as { default?: unknown }).default; }
+        const loaded = this.session.skills.some(skill => contained(path, skill.filePath)) || this.runtime.extensionsResult.extensions.some(extension => contained(path, extension.path));
+        // Marketplace summaries include disabled project installs, unlike getEnabledPlugins().
+        entries.push({ kind: "plugin", id: plugin.scope + ":" + plugin.id + ":" + path, name: plugin.id, scope: plugin.scope, source: plugin.id, path, enabled: installation.enabled !== false, loaded, version: installation.version, license: pkg.license ?? metadata.license, description: pkg.description ?? metadata.description,
+          status: diagnostic ? "error" : needsAdaptation(pkg) ? "needs_adaptation" : plugin.shadowedBy ? "overridden" : loaded ? "loaded" : installation.enabled === false ? "disabled" : "configured", error: diagnostic,
+          details: { manifest, settings: redact(settings), features: nativePlugin?.enabledFeatures, source: plugin.id, nativeMarketplace: true } });
+      }
     }
     const bundled = resolve(import.meta.dir, "../../presets/alpha-plugin");
     const manifest = JSON.parse(await readFile(join(bundled, ".claude-plugin/plugin.json"), "utf8"));
@@ -136,6 +201,7 @@ export class NativeHostControl {
         await this.session.settings.flush(); return;
       }
       const name = text(input, "name"); if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) throw new Error("Invalid skill name");
+      if (input.scope === "project") await assertProjectConfigurationScope(this.cwd);
       const root = this.target(input.scope, "skills"); const destination = join(root, name);
       if (action === "import") {
         if (await stat(destination).then(() => true, () => false)) throw new Error("Skill destination already exists");
@@ -155,7 +221,7 @@ export class NativeHostControl {
         const previous = await readFile(file, "utf8").catch(() => null);
         if (previous !== null && input.previous !== previous) throw new Error("Skill changed since opening; reload before saving");
         if (previous !== null && !contained(realRoot, await realpath(file))) throw new Error("Skill file escapes its directory");
-        await writeFile(file, content, "utf8"); return;
+        await replaceNativeConfiguration(file, content, previous); return;
       }
       throw new Error("Unsupported skill action");
     }
@@ -189,7 +255,33 @@ export class NativeHostControl {
     }
     if (kind === "plugin") {
       const manager = new PluginManager(this.cwd);
+      const marketplace = await this.marketplace();
+      if (action === "marketplace") return marketplace.addMarketplace(text(input, "path"));
+      if (action === "marketplaces") return marketplace.listMarketplaces();
+      const parsed = typeof input.name === "string" ? parsePluginId(input.name) : null;
+      const installed = parsed && (await marketplace.listInstalledPlugins()).find(plugin => plugin.id === input.name && plugin.scope === input.scope);
+      const knownMarketplace = parsed && (await marketplace.listMarketplaces()).some(marketplace => marketplace.name === parsed.marketplace);
+      if (parsed && (action === "install" && knownMarketplace || installed)) {
+        const scope = input.scope === "project" ? "project" : "user";
+        if (action === "install") await marketplace.installPlugin(parsed.name, parsed.marketplace, { scope });
+        else if (action === "upgrade") { await marketplace.updateMarketplace(parsed.marketplace); await marketplace.upgradePlugin(String(input.name), scope); }
+        else if (action === "remove") { await marketplace.uninstallPlugin(String(input.name), scope); return; }
+        else if (action === "toggle") await marketplace.setPluginEnabled(String(input.name), input.enabled === true, scope);
+        else if (action === "setting" || action === "features") {
+          const entry = installed?.entries[0]; if (!entry) throw new Error("Plugin installation unavailable");
+          const pkg = await readFile(join(entry.installPath, "package.json"), "utf8").then(JSON.parse).catch(() => ({}));
+          await this.pluginConfiguration(manager, pkg.name ?? parsed.name, entry.installPath, input);
+        } else throw new Error("Unsupported marketplace plugin operation");
+        const current = (await marketplace.listInstalledPlugins()).find(plugin => plugin.id === input.name && plugin.scope === scope);
+        for (const entry of current?.entries ?? []) {
+          const pkg = await readFile(join(entry.installPath, "package.json"), "utf8").then(JSON.parse).catch(() => ({}));
+          if (needsAdaptation(pkg)) { await marketplace.setPluginEnabled(String(input.name), false, scope); throw new Error("OpenCode plugin installed disabled: native interface adaptation required"); }
+        }
+        return;
+      }
       if (action === "install" || action === "upgrade" || action === "link") {
+        // OMP supports project-scoped marketplace installs; npm and links are user-scoped.
+        if (input.scope === "project") throw new Error("Native npm/link plugins are user-scoped; use name@marketplace for a project install");
         const name = action !== "link" ? text(input, "name") : "";
         const linked = action === "upgrade" && await lstat(join(getPluginsNodeModules(), name)).then(item => item.isSymbolicLink(), () => false);
         const plugin = action === "link" || linked ? await manager.link(action === "link" ? text(input, "path") : await realpath(join(getPluginsNodeModules(), name))) : await manager.install(name);
@@ -207,11 +299,35 @@ export class NativeHostControl {
         if (input.enabled === true && needsAdaptation(pkg)) throw new Error("OpenCode plugin requires native interface adaptation");
         await manager.setEnabled(name, input.enabled === true);
       }
-      else if (action === "features") await manager.setEnabledFeatures(name, input.features as string[] | null);
-      else if (action === "setting") await manager.setPluginSetting(name, text(input, "key"), input.value);
+      else if (action === "features" || action === "setting") {
+        const plugin = await manager.getPlugin(name); if (!plugin) throw new Error("Native plugin not found");
+        await this.pluginConfiguration(manager, name, plugin.path, input);
+      }
       else throw new Error("Unsupported plugin action");
       return;
     }
     throw new Error("Unknown extension kind");
+  }
+  private async pluginConfiguration(manager: PluginManager, name: string, path: string, input: Record<string, unknown>) {
+    const plugin = await manager.getPlugin(name, { path }); if (!plugin) throw new Error("Native plugin not found");
+    const action = String(input.action);
+    if (action === "setting") {
+      const key = text(input, "key"), schema = plugin.manifest.settings?.[key];
+      if (!schema) throw new Error("Unknown native plugin setting");
+      if (input.value === "••••") return;
+      const validation = validateSetting(input.value, schema); if (!validation.valid) throw new Error(validation.error);
+      if (input.scope !== "project") { await manager.setPluginSetting(name, key, input.value); return; }
+    } else {
+      if (input.features !== null && (!Array.isArray(input.features) || input.features.some(feature => typeof feature !== "string" || !plugin.manifest.features?.[feature]))) throw new Error("Unknown native plugin feature");
+      if (input.scope !== "project") { await manager.setEnabledFeatures(name, input.features as string[] | null); return; }
+    }
+    await assertProjectConfigurationScope(this.cwd);
+    const file = getProjectPluginOverridesPath(this.cwd);
+    const previous = await readFile(file, "utf8").catch(error => { if (error.code === "ENOENT") return null; throw error; });
+    const value = previous === null ? {} : JSON.parse(previous);
+    if (action === "setting") { value.settings ??= {}; value.settings[name] ??= {}; value.settings[name][text(input, "key")] = input.value; }
+    else { value.features ??= {}; if (input.features === null) delete value.features[name]; else value.features[name] = input.features; }
+    await replaceNativeConfiguration(file, JSON.stringify(value, null, 2), previous);
+    clearPluginRootsAndCaches([file]);
   }
 }

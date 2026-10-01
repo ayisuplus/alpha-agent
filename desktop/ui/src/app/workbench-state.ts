@@ -1,5 +1,6 @@
 import type { NativeMessage, SessionItem } from "./native-api";
 import type { AttachedImage } from "./useSession";
+import { t } from "./ui-language";
 
 export interface ComposerDraft { text: string; paths: string[]; image?: AttachedImage; images?: AttachedImage[]; model?: string; thinking?: string; cwd?: string }
 type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
@@ -88,7 +89,7 @@ export function toolTarget(args: unknown): string {
 
 /** Display only: never rewrite messages, tool records, or third-party content. */
 export function evidenceLabel(text: string): string {
-  return text.replace(/^▌\s*/, "").replace(/^【(?:天枢|检查建议)】\s*/, "").replace(/^天枢(?=\s|$)/, "运行检查");
+  return text.replace(/^▌\s*/, "").replace(/^【(?:天枢|检查建议)】\s*/, "").replace(/^天枢(?=\s|$)/, "运行检查").replace(/^运行检查(?=\s|$)/, () => t("运行检查"));
 }
 
 export function errorHelp(message: string): { title: string; hint: string; section?: string } {

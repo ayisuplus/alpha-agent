@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { verifyPayloadHashes, verifyUiHashes } from "./portable-ui";
+import { verifyUpdatePayload } from "./apply-app-update";
 
 const root = resolve(import.meta.dir, "..");
 const portable = resolve(Bun.argv[2] ?? "");
@@ -11,6 +12,7 @@ const manifest = JSON.parse(await readFile(join(portable, "release.json"), "utf8
 if (manifest.format !== 3 || !manifest.ui?.files || !manifest.sources || !manifest.gitSha) throw new Error("Installer requires a verified format-3 portable release");
 await verifyUiHashes(join(portable, "desktop", "dist"), manifest.ui.files);
 await verifyPayloadHashes(portable, manifest.sources);
+await verifyUpdatePayload(portable);
 await verifyPayloadHashes(root, manifest.sources);
 for (const file of ["desktop/main.cjs", "desktop/preload.cjs", "desktop/browser-host.cjs", "runtime/bun.exe", "runtime/libreoffice/program/soffice.bin", "src/native/server.ts", "node_modules/@oh-my-pi/pi-coding-agent/package.json", "node_modules/@oh-my-pi/pi-natives/package.json"]) {
   if (!(await stat(join(portable, file))).isFile()) throw new Error(`Portable component missing: ${file}`);
@@ -29,6 +31,7 @@ const command = Bun.spawn([builder, "--win", "nsis", "--x64", "--config", join(r
 });
 if (await command.exited !== 0) throw new Error("Windows installer build failed");
 const bundled = join(output, "win-unpacked", "resources", "alpha");
+await verifyUpdatePayload(bundled);
 await verifyUiHashes(join(bundled, "desktop", "dist"), manifest.ui.files);
 await verifyPayloadHashes(bundled, manifest.sources);
 for (const file of ["src/native/server.ts", "desktop/browser-host.cjs", "runtime/bun.exe", "node_modules/@oh-my-pi/pi-coding-agent/package.json", "node_modules/@oh-my-pi/pi-natives/package.json"]) {

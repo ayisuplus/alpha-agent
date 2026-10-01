@@ -9,7 +9,7 @@ const args = process.argv.slice(2);
 await runRootCommand(parseArgs(args), args, {
   createAgentSession: async options => {
     const result = await createAgentSession(options);
-    const control = new NativeHostControl(result, frame => process.send?.({ ...frame, type: "alpha_event", event: frame }));
+    const control = new NativeHostControl(result, frame => process.send?.({ ...frame, type: "alpha_event", event: frame }), options?.subagentEventBus);
     await control.plan.restore();
     let writes = Promise.resolve();
     process.on("message", (message: unknown) => {

@@ -437,6 +437,10 @@ declare global {
     alpha?: {
       storage?(operation: "getItem" | "setItem" | "removeItem", key: string, value?: string): { value?: string | null; error?: string };
       serverToken?(): Promise<string>;
+      newWindow?(): Promise<{ windowId: number }>;
+      installUpdate?(id: string): Promise<boolean>;
+      onCommand?(callback: (id: string) => void): () => void;
+      onStorageChanged?(callback: (change: { key: string; value: string | null }) => void): () => void;
       openFolder?(path: string): Promise<string>;
       choosePaths?(kind: "directory" | "files"): Promise<string[]>;
       revealItem?(path: string): Promise<string>;

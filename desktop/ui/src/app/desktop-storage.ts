@@ -5,6 +5,7 @@ export const desktopStorage = {
     const result = window.alpha.storage("getItem", key); if (result.error) throw new Error(result.error); return result.value ?? null;
   },
   setItem(key: string, value: string): void {
+    if (this.getItem(key) === value) return;
     if (!window.alpha?.storage) { localStorage.setItem(key, value); return; }
     const result = window.alpha.storage("setItem", key, value); if (result.error) throw new Error(result.error);
   },

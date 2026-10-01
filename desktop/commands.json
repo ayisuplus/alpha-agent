@@ -1,0 +1,134 @@
+[
+  {
+    "id": "palette",
+    "name": "commands",
+    "description": "命令面板",
+    "key": "Ctrl+K",
+    "en": "Command palette"
+  },
+  {
+    "id": "new",
+    "name": "new",
+    "description": "新会话",
+    "key": "Ctrl+N",
+    "en": "New session"
+  },
+  {
+    "id": "window",
+    "name": "window",
+    "description": "打开新窗口",
+    "key": "Ctrl+Shift+N",
+    "en": "New window"
+  },
+  {
+    "id": "settings",
+    "name": "settings",
+    "description": "设置",
+    "key": "Ctrl+,",
+    "en": "Settings"
+  },
+  {
+    "id": "projects",
+    "name": "projects",
+    "description": "项目与工作树",
+    "en": "Projects and worktrees"
+  },
+  {
+    "id": "files",
+    "name": "files",
+    "description": "项目文件",
+    "key": "Ctrl+Shift+F",
+    "en": "Project files"
+  },
+  {
+    "id": "review",
+    "name": "review",
+    "description": "改动审查",
+    "en": "Review changes"
+  },
+  {
+    "id": "terminal",
+    "name": "terminal",
+    "description": "项目终端",
+    "en": "Project terminal"
+  },
+  {
+    "id": "history",
+    "name": "history",
+    "description": "会话树与历史导航",
+    "session": true,
+    "en": "Session tree and history"
+  },
+  {
+    "id": "progress",
+    "name": "progress",
+    "description": "Todo、子任务与消息队列",
+    "session": true,
+    "en": "Todo, subtasks and queues"
+  },
+  {
+    "id": "plan",
+    "name": "plan",
+    "description": "切换原生计划模式",
+    "session": true,
+    "key": "Ctrl+Shift+P",
+    "en": "Toggle plan mode"
+  },
+  {
+    "id": "planreview",
+    "name": "planreview",
+    "description": "审阅当前计划",
+    "session": true,
+    "en": "Review current plan"
+  },
+  {
+    "id": "compact",
+    "name": "compact",
+    "description": "压缩上下文",
+    "session": true,
+    "en": "Compact context"
+  },
+  {
+    "id": "export",
+    "name": "export",
+    "description": "导出原生会话 HTML",
+    "session": true,
+    "en": "Export session as HTML"
+  },
+  {
+    "id": "skills",
+    "name": "skills",
+    "description": "技能管理",
+    "en": "Skills"
+  },
+  {
+    "id": "mcp",
+    "name": "mcp",
+    "description": "MCP 管理",
+    "en": "MCP"
+  },
+  {
+    "id": "plugins",
+    "name": "plugins",
+    "description": "插件管理",
+    "en": "Plugins"
+  },
+  {
+    "id": "definitions",
+    "name": "rules",
+    "description": "规则、自定义命令与任务定义",
+    "en": "Rules, commands and task definitions"
+  },
+  {
+    "id": "permissions",
+    "name": "permissions",
+    "description": "项目工具权限",
+    "en": "Project tool permissions"
+  },
+  {
+    "id": "lsp",
+    "name": "lsp",
+    "description": "语言服务与格式化",
+    "en": "Language services and formatting"
+  }
+]

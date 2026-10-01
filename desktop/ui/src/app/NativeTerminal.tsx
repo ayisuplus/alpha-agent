@@ -1,3 +1,4 @@
+import { t } from "./ui-language";
 import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -63,5 +64,5 @@ export function NativeTerminal({ id, output, onError, channel = "terminal" }: { 
     else { terminal.current.reset(); terminal.current.write(output); }
     written.current = output;
   }, [output]);
-  return <div ref={element} className="native-terminal" aria-label="Alpha 终端" />;
+  return <div ref={element} className="native-terminal" aria-label={t("Alpha 终端")} />;
 }

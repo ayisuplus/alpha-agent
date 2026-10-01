@@ -1,3 +1,4 @@
+import { tf, t } from "./ui-language";
 import { useState } from "react";
 import { NativeModal } from "./NativeModal";
 import type { SessionController } from "./useSession";
@@ -18,8 +19,8 @@ export function NativeDiffFeedback({ session, path, lines, source }: { session: 
   const [error, setError] = useState("");
   const update = (value: Feedback | null) => { setFeedback(value); try { if (value) desktopStorage.setItem(key, JSON.stringify(value)); else desktopStorage.removeItem(key); } catch (cause) { setError(String(cause)); } };
   return <><pre className="native-diff-lines">{diffRows(lines).map((row, number) => <span key={number} className={row.text.startsWith("+") && !row.text.startsWith("+++") ? "added" : row.text.startsWith("-") && !row.text.startsWith("---") ? "removed" : row.text.startsWith("@@") ? "hunk" : ""}>
-    {(row.before !== undefined || row.after !== undefined) && <button className="native-diff-line-comment" aria-label={`反馈 ${path}:${row.after ?? row.before}`} title="添加行级反馈" onClick={() => update({ path, line: row.after ?? row.before!, side: row.after ? "当前文件" : "原文件", excerpt: row.text, text: "" })}>{row.before ?? ""} · {row.after ?? ""}</button>}{row.text || " "}{"\n"}
+    {(row.before !== undefined || row.after !== undefined) && <button className="native-diff-line-comment" aria-label={tf`反馈 ${path}:${row.after ?? row.before}`} title={t("添加行级反馈")} onClick={() => update({ path, line: row.after ?? row.before!, side: row.after ? "当前文件" : "原文件", excerpt: row.text, text: "" })}>{row.before ?? ""} · {row.after ?? ""}</button>}{row.text || " "}{"\n"}
   </span>)}</pre>
-    {feedback && <NativeModal title={`反馈 · ${feedback.path}:${feedback.line}`} onCancel={() => update(null)}><p className="native-muted">{feedback.side}</p><pre className="native-review-output">{feedback.excerpt}</pre><textarea aria-label="行级反馈" value={feedback.text} onChange={event => update({ ...feedback, text: event.target.value })} placeholder="说明需要调整的内容…" />{error && <p role="alert">{error}</p>}<div className="native-dialog-actions"><button onClick={() => update(null)}>取消</button><button disabled={!feedback.text.trim()} onClick={() => { session.prefill(`请根据以下审查反馈修改 ${JSON.stringify(feedback.path)}（${feedback.side}，第 ${feedback.line} 行）：\n${feedback.excerpt}\n\n${feedback.text}`); update(null); }}>加入输入框</button></div></NativeModal>}
+    {feedback && <NativeModal title={tf`反馈 · ${feedback.path}:${feedback.line}`} onCancel={() => update(null)}><p className="native-muted">{feedback.side}</p><pre className="native-review-output">{feedback.excerpt}</pre><textarea aria-label={t("行级反馈")} value={feedback.text} onChange={event => update({ ...feedback, text: event.target.value })} placeholder={t("说明需要调整的内容…")} />{error && <p role="alert">{t(error)}</p>}<div className="native-dialog-actions"><button onClick={() => update(null)}>{t("取消")}</button><button disabled={!feedback.text.trim()} onClick={() => { session.prefill(tf`请根据以下审查反馈修改 ${JSON.stringify(feedback.path)}（${feedback.side}，第 ${feedback.line} 行）：\n${feedback.excerpt}\n\n${feedback.text}`); update(null); }}>{t("加入输入框")}</button></div></NativeModal>}
   </>;
 }
