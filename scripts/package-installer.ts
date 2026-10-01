@@ -65,7 +65,10 @@ try {
 } finally {
   for (const pid of [desktopPid, launcher.exitCode === null ? launcher.pid : undefined].filter((pid): pid is number => !!pid)) await Bun.spawn(["taskkill.exe", "/T", "/F", "/PID", String(pid)], { stdout: "ignore", stderr: "ignore", windowsHide: true }).exited;
   const probeRoot = await realpath(workspace); if (!probeRoot.startsWith(await realpath(tmpdir()) + sep)) throw new Error("Installer probe cleanup leaves temporary directory");
-  await rm(probeRoot, { recursive: true, force: true });
+  await rm(probeRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(error => {
+    // Windows can retain a killed Electron profile briefly; cleanup does not change the smoke result.
+    console.warn(`Installer probe temporary directory retained: ${probeRoot} (${error.code})`);
+  });
 }
 
 const version = JSON.parse(await readFile(join(root, "installer", "package.json"), "utf8")).version;
