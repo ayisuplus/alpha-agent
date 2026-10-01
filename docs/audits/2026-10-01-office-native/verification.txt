@@ -1,0 +1,28 @@
+bun test v1.3.14 (0d9b296a)
+
+2026-10-01 Windows LibreOffice 26.2.5.2
+Command: bun test ./test/native-office-view.test.ts
+Captured final result from the tool output (Bun writes detailed results to stderr):
+(pass) native Writer view keeps tracked revisions, renders original document pixels and closes without saving [3232.14ms]
+(pass) native Office open honors cancellation before launching a worker [0.23ms]
+(pass) unverified Windows Writer formats fail immediately with an explicit original-app choice [0.25ms]
+(pass) native Calc view exposes original sheets, formula and comment and renders outside the print area [4586.50ms]
+(pass) native Writer view reads original comment body and author [3034.39ms]
+(pass) canceling a native Office load exits its worker and removes its private document copy [2385.62ms]
+(pass) native Impress view renders each original slide and returns its native text and complete notes [5068.12ms]
+
+7 pass
+0 fail
+53 expect() calls
+Ran 7 tests across 1 file. [18.84s]
+
+Command: bun run check
+tsc --noEmit -p tsconfig.native.json
+Exit 0; no diagnostics.
+
+Command: bun docs/audits/2026-10-01-office-native/probe-api.ts
+DOCX / XLSX / ODS / PPTX / ODP native images: passed, viewed.
+ODT / RTF: explicit unavailable result; no native success claimed.
+8 original input hashes remained unchanged. See backend-evidence/observations.json.
+
+This subtask did not run the complete project suite or portable packaging. Those are owned by the root task.

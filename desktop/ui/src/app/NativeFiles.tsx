@@ -7,6 +7,7 @@ import { serverToken, sessionRequest } from "./native-api";
 import type { SessionController } from "./useSession";
 import { OfficePdfPreview } from "./OfficePdfPreview";
 import { desktopStorage } from "./desktop-storage";
+import { NativeOfficePreview } from "./NativeOfficePreview";
 
 type Directory = { path: string; relative: string; files: Array<{ name: string; path: string; type: string; size?: number }> };
 type Preview = { path: string; name: string; size: number; kind: string; text?: string; truncated?: boolean; reason?: string };
@@ -58,7 +59,8 @@ function FilePreview({ id, path, onBack, session, initialLine = 1 }: { id: strin
       {file.kind === "image" && <img className="native-file-image" src={url} alt={file.name} onError={() => setError("图片无法预览，请下载或在系统应用中打开。")} />}
       {file.kind === "video" && <video src={url} controls preload="metadata" onError={() => setError("此视频格式无法在浏览器播放，请下载或在系统应用中打开。")} />}
       {file.kind === "audio" && <audio src={url} controls preload="metadata" onError={() => setError("此音频格式无法在浏览器播放，请下载或在系统应用中打开。")} />}
-      {(file.kind === "pdf" || file.kind === "office") && <OfficePdfPreview key={`${path}:${refresh}`} url={`${url}&preview=1`} label={t("文档页面")} />}
+      {file.kind === "pdf" && <OfficePdfPreview key={`${path}:${refresh}`} url={`${url}&preview=1`} label={t("文档页面")} />}
+      {file.kind === "office" && <NativeOfficePreview key={`${path}:${refresh}`} id={id} path={path} staticUrl={`${url}&preview=1`} />}
     </>}
   </div>;
 }

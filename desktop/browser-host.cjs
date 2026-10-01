@@ -15,15 +15,17 @@
 //       “隐藏”＝窗口移到屏幕外 + 鼠标穿透 + 不进任务栏/Alt-Tab，窗口保持出帧，面板在接管前也能实时显示。
 //
 // CDP：remote-debugging-port=0（Chromium 只绑定 127.0.0.1 随机端口），端口读 userData/DevToolsActivePort。
-// 页面：窗口内预置 PAGE_COUNT 个空白页面视图作为可被 OMP 采用的 CDP page 目标——Electron 的 CDP 不支持
-// Target.createTarget，OMP 的 connected 模式（browser.cdpUrl）只能复用已有的 page 目标（每页一个）。
+// 页面：每个会话按需创建独立视图；CDP 代理将 Target.createTarget 与弹出页接入同一所有权模型。
 // profile：`<workspaceRoot>/.alpha/browser-profile/`（与桌面界面配置分开；登录态随 profile 持久化）。
 
-const { app, BaseWindow, WebContentsView } = require("electron");
+const { app, BaseWindow, WebContentsView, webContents } = require("electron");
 const { mkdirSync, readFileSync } = require("node:fs");
 const { createServer } = require("node:net");
 const { createInterface } = require("node:readline");
 const path = require("node:path");
+const { createBrowserProxy } = require("./browser-proxy.cjs");
+// A failed isolated host reports to its parent and exits; Electron must not leave a modal error dialog.
+process.on("uncaughtException", error => { console.error(`ALPHA_BROWSER_HOST_ERROR ${error.stack || error}`); app.exit(1); });
 
 const root = path.resolve(__dirname, "..");
 const workspaceRoot = path.resolve(process.env.ALPHA_WORKSPACE_ROOT || root);
@@ -35,11 +37,10 @@ const cdpPortArg = cdpPortIndex >= 0 ? process.argv[cdpPortIndex + 1] : null;
 const cdpPort = cdpPortArg && /^\d+$/.test(cdpPortArg) ? cdpPortArg : "0";
 app.setName("AlphaBrowserHost");
 app.setPath("userData", profile);
-app.commandLine.appendSwitch("remote-debugging-port", cdpPort);
+app.commandLine.appendSwitch("remote-debugging-port", "0");
 // 后台视图继续出帧：接管前窗口隐藏、截屏流订阅时页面在后台，都不能停帧。
 app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 
-const PAGE_COUNT = 3;
 const OFFSCREEN = -32000; // 隐身位置：任何常规显示器布局之外（Windows 虚拟屏下限附近）
 const pages = [];
 const targetIds = new Map(); // webContents.id → CDP targetId（稳定不变）
@@ -47,6 +48,7 @@ let hostWindow = null;
 let controlSession = null;
 let frontView = null;
 let quitting = false;
+let manualTakeover = false;
 
 function readCdpPort() {
   const file = path.join(profile, "DevToolsActivePort");
@@ -105,9 +107,26 @@ function bringToFront(targetId) {
   frontView = front.view;
 }
 
+function resolveTarget(targetId) {
+  const known = pages.find(page => page.targetId === targetId);
+  if (known) return known;
+  let contents; try { contents = webContents.fromDevToolsTargetId(targetId); } catch { return undefined; }
+  const page = contents && pages.find(page => page.view.webContents === contents);
+  if (page) page.targetId = targetId;
+  return page;
+}
+
+function closePage(targetId) {
+  const page = resolveTarget(targetId);
+  if (!page) return false;
+  page.view.webContents.close({ waitForBeforeUnload: false });
+  return true;
+}
+
 /** 隐身（交还）：窗口移出所有显示器（用户看不见、点不到、不进任务栏），但保持出帧，截屏流实时。
  *  不用 win.hide()/最小化/透明度：Chromium 对这些状态的窗口停止出帧，Page.startScreencast 会冻结。 */
 function enterHiddenMode() {
+  manualTakeover = false;
   hostWindow.setIgnoreMouseEvents(true);
   hostWindow.setSkipTaskbar(true);
   const [width, height] = hostWindow.getSize();
@@ -124,6 +143,7 @@ function applyShow(message) {
   if (!numbers.every(Number.isFinite)) return;
   const [x, y, width, height] = numbers.map(Math.round);
   if (width < 120 || height < 80) return;
+  manualTakeover = true;
   hostWindow.setBounds({ x, y, width, height });
   for (const page of pages) page.view.setBounds(pageFrame());
   bringToFront(typeof message.targetId === "string" ? message.targetId : undefined);
@@ -131,6 +151,46 @@ function applyShow(message) {
   hostWindow.show();
   hostWindow.focus();
   hostWindow.moveTop();
+}
+
+function managePage(owner, view) {
+  hostWindow.contentView.addChildView(view); view.setBounds(pageFrame());
+  frontView = view;
+  const contentsId = view.webContents.id;
+  const page = { view, owner, targetId: null };
+  pages.push(page);
+  view.webContents.once("destroyed", () => { const index = pages.indexOf(page); if (index >= 0) pages.splice(index, 1); targetIds.delete(contentsId); if (frontView === view) frontView = null; if (!hostWindow.isDestroyed()) hostWindow.contentView.removeChildView(view); });
+  view.webContents.setWindowOpenHandler(details => ({ action: "allow", createWindow: options => {
+    const popup = new WebContentsView({ webContents: options.webContents, webPreferences: { ...options.webPreferences, backgroundThrottling: false, contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    const entry = managePage(owner, popup);
+    void targetIdForPage(popup).then(id => { entry.targetId = id; });
+    if (details.disposition === "background-tab") void popup.webContents.loadURL(details.url);
+    return popup.webContents;
+  } }));
+  return page;
+}
+
+async function createPage(owner, url) {
+  const view = new WebContentsView({ webPreferences: { backgroundThrottling: false, contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  const page = managePage(owner, view);
+  page.targetId = await targetIdForPage(view);
+  await view.webContents.loadURL(url);
+  return page;
+}
+
+async function checkInput(targetId, x, y) {
+  const page = pages.find(page => page.targetId === targetId);
+  if (!page || !Number.isFinite(x) || !Number.isFinite(y)) throw Error("Input requires a valid owned page point");
+  const disabled = await page.view.webContents.executeJavaScript(`(() => {
+    function hit(doc,x,y) {
+      let element=doc.elementFromPoint(x,y);
+      while(element?.shadowRoot) { const child=element.shadowRoot.elementFromPoint(x,y); if(!child||child===element)break; element=child; }
+      if(element?.tagName==='IFRAME' && element.contentDocument) { const box=element.getBoundingClientRect(); return hit(element.contentDocument,x-box.left-element.clientLeft,y-box.top-element.clientTop); }
+      return !!element && (element.matches(':disabled') || !!element.closest('[aria-disabled="true"],[inert]'));
+    }
+    return hit(document,${x},${y});
+  })()`);
+  if (disabled) throw Error("Click target is disabled");
 }
 
 function handleCommand(message) {
@@ -142,13 +202,7 @@ function handleCommand(message) {
 
 app.whenReady().then(async () => {
   hostWindow = new BaseWindow({ show: false, width: 1280, height: 800, title: "Alpha 浏览器" });
-  for (let index = 0; index < PAGE_COUNT; index++) {
-    const view = new WebContentsView({ webPreferences: { backgroundThrottling: false, contextIsolation: true, nodeIntegration: false, sandbox: true } });
-    hostWindow.contentView.addChildView(view);
-    view.setBounds(pageFrame());
-    view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    pages.push({ view, targetId: null });
-  }
+  // Session allocation creates pages on demand; no unowned page can be adopted by two OMP processes.
   hostWindow.on("resize", () => { for (const page of pages) page.view.setBounds(pageFrame()); });
   // 关闭按钮等于“交还”：窗口转隐身、页面与登录态保活；只有 quit/控制连接断开才真正结束。
   hostWindow.on("close", event => {
@@ -156,8 +210,6 @@ app.whenReady().then(async () => {
     event.preventDefault();
     enterHiddenMode();
   });
-  for (const page of pages) await page.view.webContents.loadURL("about:blank");
-  for (const page of pages) page.targetId = await targetIdForPage(page.view);
   bringToFront(undefined); // 默认前置第一页（此后换层才重新加入视图）
   // 启动即隐身出帧：面板在首次“接管”前就能实时显示页面。
   enterHiddenMode();
@@ -165,6 +217,8 @@ app.whenReady().then(async () => {
 
   const port = readCdpPort();
   await waitForCdp(port);
+  const proxy = await createBrowserProxy({ rawPort: port, port: Number(cdpPort), registryFile: path.join(profile, "session-ports.json"), pages: () => pages, resolveTarget,
+    createPage, closePage, activate: bringToFront, checkInput, manual: () => manualTakeover });
 
   // 控制面：仅 127.0.0.1。父进程（desktop/main.cjs）保持一条连接；连接断开即视为父进程退出。
   const control = createServer(socket => {
@@ -181,7 +235,7 @@ app.whenReady().then(async () => {
     control.once("error", reject);
     control.listen(0, "127.0.0.1", () => { control.off("error", reject); resolve(); });
   });
-  console.log(`ALPHA_BROWSER_HOST_READY ${port} ${control.address().port}`);
+  console.log(`ALPHA_BROWSER_HOST_READY ${proxy.port} ${control.address().port}`);
 }).catch(error => {
   console.error(error instanceof Error ? error.message : String(error));
   app.exit(1);

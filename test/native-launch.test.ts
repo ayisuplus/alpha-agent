@@ -101,9 +101,21 @@ describe("Alpha launch construction", () => {
   test("generated config points the native browser tool at the local host only", async () => {
     const dataRoot = await mkdtemp(join(tmpdir(), "alpha-launch-"));
     created.push(dataRoot);
-    const configPath = await writeLaunchConfig(options({ dataRoot, browserCdpUrl: "http://127.0.0.1:9222" }));
-    expect(configPath).toBe(join(dataRoot, "native", "alpha-settings.yml"));
-    expect(await readFile(configPath, "utf8")).toContain("  cdpUrl: http://127.0.0.1:9222");
+    const requested: string[] = [];
+    const broker = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      requested.push(`${request.method} ${new URL(request.url).pathname}`);
+      return Response.json({ cdpUrl: "http://127.0.0.1:9223" });
+    } });
+    try {
+      const first = options({ dataRoot, browserCdpUrl: broker.url.origin });
+      const second = { ...first, sessionId: "00000000-0000-4000-8000-000000000002" };
+      const [configPath, other] = await Promise.all([writeLaunchConfig(first), writeLaunchConfig(second)]);
+      expect(configPath).not.toBe(other);
+      expect(configPath).toBe(join(dataRoot, "native", "launch", first.sessionId, "alpha-settings.yml"));
+      expect(await readFile(configPath, "utf8")).toContain("  cdpUrl: http://127.0.0.1:9223");
+      expect(requested).toContain(`POST /sessions/${first.sessionId}`);
+      expect(requested).toContain(`POST /sessions/${second.sessionId}`);
+    } finally { broker.stop(true); }
     const unsafe = await writeLaunchConfig(options({ dataRoot, browserCdpUrl: "http://10.0.0.5:9222" }));
     expect(await readFile(unsafe, "utf8")).not.toContain("cdpUrl");
   });

@@ -16,6 +16,7 @@ import {
   officePreview,
   officeRuntimeStatus,
 } from "../src/native/capabilities/office/office-runtime";
+import { openOfficeView, renderOfficeView, closeOfficeView } from "../src/native/capabilities/office/office-view";
 
 const root = await mkdtemp(join(tmpdir(), "alpha-office-probe-"));
 const projectRoot = join(root, "project");
@@ -105,7 +106,24 @@ try {
   const sheetEdit = await officeEdit({ projectRoot }, "outputs/probe-totals.xlsx", [{ op: "set_cells", sheet: "Data", range: "B2", values: [[10]] }]);
   keep(sheetEdit.artifacts[0].path);
 
-  console.log(JSON.stringify({ status: "pass", engine: status.location, artifacts }));
+  // Exercise the packaged original-format worker, interpreter and native DLLs, not only PDF conversion.
+  for (const [path, kind] of [[createdPath, "text"], [xlsxPath, "spreadsheet"], [deckPath, "presentation"]] as const) {
+    const before = await readFile(path);
+    const view = await openOfficeView(path);
+    try {
+      assert.equal(view.kind, kind);
+      assert.equal(view.readOnly, true);
+      const tile = await renderOfficeView(view.id, { width: 320, height: 240 });
+      const png = Buffer.from(tile.image, "base64");
+      assert.equal(png.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+      assert.equal(png.readUInt32BE(16), 320);
+      assert.equal(png.readUInt32BE(20), 240);
+      if (kind === "presentation") assert.equal((await renderOfficeView(view.id, { part: 1, width: 320, height: 240 })).part, 1);
+    } finally { await closeOfficeView(view.id); }
+    assert.deepEqual(await readFile(path), before, "original preview must not save into its source");
+  }
+
+  console.log(JSON.stringify({ status: "pass", engine: status.location, originalPreview: ["docx", "xlsx", "pptx"], artifacts }));
 } finally {
   delete process.env.ALPHA_OFFICE_NO_LIBREOFFICE;
   await rm(root, { recursive: true, force: true });

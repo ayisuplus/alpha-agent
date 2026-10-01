@@ -167,7 +167,7 @@ function BrowserPanel({ visible }: { visible: boolean }) {
   };
 
   return <div className="native-browser">
-    <p className="native-muted">{t("共享浏览器 · 所有会话共用标签页与登录状态；接管期间暂停新的浏览器与代码求值调用。")}</p>
+    <p className="native-muted">{t("会话各自拥有页面，共用登录状态；接管期间暂停自动操作。")}</p>
     <div className="native-browser-tabs">
       {tabs.map(tab => <button key={tab.targetId} className={target === tab.targetId ? "active" : ""} onClick={() => setTarget(tab.targetId)} title={`${tab.title}\n${tab.url}`}>{tab.title || tab.url || "页面"}</button>)}
       {host?.available && (taken

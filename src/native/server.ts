@@ -23,6 +23,7 @@ import { projectSearch } from "./project-search";
 import { requireGit } from "@oh-my-pi/pi-natives/vcs";
 import { getConfigRootDir } from "@oh-my-pi/pi-utils";
 import { AppUpdates } from "./app-updates";
+import { openOfficeView, renderOfficeView, selectOfficeView, getOfficeView, closeOfficeView, isOfficeViewOpen } from "./capabilities/office/office-view";
 
 interface SessionRecord {
   id: string;
@@ -69,6 +70,8 @@ const MAX_PROCESSES = 4;
 const IDLE_STOP_MS = 10 * 60_000;
 const lastUsed = new Map<string, number>();
 const pendingReloads = new Set<string>();
+const officeViews = new Map<string, { owner: string; used: number }>();
+let openingOfficeViews = 0;
 let extensionWrites: Promise<unknown> = Promise.resolve();
 let extensionRevision = 0;
 function touch(id: string): void { lastUsed.set(id, Date.now()); }
@@ -121,6 +124,7 @@ async function projectIdle(cwd: string) {
 
 async function reapIdleProcesses(): Promise<void> {
   const now = Date.now();
+  for (const [id, view] of officeViews) if (now - view.used > IDLE_STOP_MS) { officeViews.delete(id); await closeOfficeView(id).catch(() => undefined); }
   for (const id of [...processes.keys()]) {
     if ((streams.get(id)?.size ?? 0) > 0) continue;
     if (now - (lastUsed.get(id) ?? 0) < IDLE_STOP_MS) continue;
@@ -205,6 +209,17 @@ function record(id: string): SessionRecord {
   const found = records.get(id);
   if (!found) throw new Error("Session not found");
   return found;
+}
+async function sessionFile(id: string, input: string) {
+  let root = record(id).cwd, path = input;
+  if (path.startsWith("local://")) {
+    const item = record(id), directory = join(nativeRoot, "sessions", item.sessionDirId ?? item.id);
+    const file = item.ompSessionId && (await readdir(directory)).find(name => name.endsWith(`_${item.ompSessionId}.jsonl`));
+    if (!file) throw new Error("Native session artifact directory unavailable");
+    const options = { getArtifactsDir: () => join(directory, file.slice(0, -6)), getSessionId: () => item.ompSessionId! };
+    root = resolveLocalRoot(options); path = resolveLocalUrlToPath(path, options);
+  }
+  return { root, path };
 }
 function emit(id: string, frame: unknown): void {
   const event = frame as Record<string, unknown>;
@@ -691,22 +706,44 @@ const server = Bun.serve({
         await writeFile(file, JSON.stringify(entries, null, 2), "utf8");
         return json({ revoked: true });
       }
+      const officeMatch = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/office-view$/.exec(url.pathname);
+      if (officeMatch && request.method === "POST") {
+        const id = officeMatch[1]!; record(id);
+        const input = await body(request);
+        if (input.action === undefined || input.action === "open") {
+          if (typeof input.path !== "string") throw new Error("缺少 Office 文件路径");
+          const { root, path } = await sessionFile(id, input.path);
+          const file = await projectFilePreview(root, path);
+          if (file.kind !== "office") throw new Error("请选择 50 MB 以内的 Office 文档");
+          for (const key of officeViews.keys()) if (!isOfficeViewOpen(key)) officeViews.delete(key);
+          if (officeViews.size + openingOfficeViews >= 4) throw new Error("请先关闭一个 Office 预览，再打开新文档");
+          openingOfficeViews++;
+          try {
+            nativeServer.timeout(request, 40);
+            const info = await openOfficeView(file.path, request.signal);
+            officeViews.set(info.id, { owner: id, used: Date.now() }); return json(info);
+          } finally { openingOfficeViews--; }
+        }
+        const viewId = typeof input.viewId === "string" ? input.viewId : "";
+        const view = officeViews.get(viewId);
+        if (!view || view.owner !== id) throw new Error("此原格式预览不属于当前会话，或已经关闭");
+        view.used = Date.now();
+        if (input.action === "close") { officeViews.delete(viewId); await closeOfficeView(viewId); return json({ closed: true }); }
+        if (input.action === "info") return json(await getOfficeView(viewId));
+        // Worker validates types, bounds and part indices; only its read-only actions are exposed.
+        const { action, viewId: ignored, ...options } = input;
+        if (action === "render") return json(await renderOfficeView(viewId, options));
+        if (action === "select") return json(await selectOfficeView(viewId, options as unknown as Parameters<typeof selectOfficeView>[1]));
+        throw new Error("Unsupported Office preview action");
+      }
       const match = /^\/api\/native\/sessions\/([0-9a-f-]{36})\/(state|messages|models|files|file|review|events|command|ui-response|open)$/.exec(url.pathname);
       if (match) {
         const [, id, action] = match;
         record(id);
         if (action === "file" && request.method === "GET") {
-          let path = url.searchParams.get("path"), root = record(id).cwd;
-          if (!path) throw new Error("缺少文件路径");
-          if (path.startsWith("local://")) {
-            const item = record(id), directory = join(nativeRoot, "sessions", item.sessionDirId ?? item.id);
-            const file = item.ompSessionId && (await readdir(directory)).find(name => name.endsWith(`_${item.ompSessionId}.jsonl`));
-            if (!file) throw new Error("Native session artifact directory unavailable");
-            // SessionManager uses the journal path without .jsonl as its artifact directory.
-            // The native local resolver retains Windows short-root and traversal behavior.
-            const options = { getArtifactsDir: () => join(directory, file.slice(0, -6)), getSessionId: () => item.ompSessionId! };
-            root = resolveLocalRoot(options); path = resolveLocalUrlToPath(path, options);
-          }
+          const input = url.searchParams.get("path");
+          if (!input) throw new Error("缺少文件路径");
+          const { root, path } = await sessionFile(id, input);
           return url.searchParams.has("raw")
             ? await projectFileContent(root, path, request, url.searchParams.has("preview"))
             : json(await projectFilePreview(root, path));
@@ -797,6 +834,7 @@ void updates.start();
 await schedules.recoverInterrupted();
 scheduler.start();
 process.on("SIGINT", () => {
+  for (const id of officeViews.keys()) void closeOfficeView(id);
   scheduler.stop();
   for (const terminal of terminals.values()) terminal.pty.kill();
   shells.stop();

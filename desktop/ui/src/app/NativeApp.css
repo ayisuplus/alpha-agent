@@ -222,6 +222,15 @@
 .office-pdf-canvas { overflow: auto; margin-top: 12px; }
 .office-pdf-canvas canvas { display: block; height: auto; background: white; }
 .office-pdf-pages { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; font-size: var(--ui-caption); }
+.native-office-preview { display: grid; gap: 12px; min-width: 0; }
+.native-office-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: var(--ui-caption); }
+.native-office-toolbar strong { margin-right: auto; }
+.native-office-toolbar button, .native-office-toolbar select { padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-secondary); }
+.native-office-viewport { height: min(60vh, 600px); min-height: 280px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-md); background: #fff; box-shadow: 0 4px 16px rgb(35 55 78 / 8%); }
+.native-office-viewport img { display: block; max-width: none; }
+.native-office-selection { display: grid; gap: 6px; padding: 10px; background: var(--surface); border-radius: var(--radius-sm); }
+.native-office-selection textarea { width: 100%; min-height: 56px; resize: vertical; color: var(--text-primary); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.native-office-notes { font-size: var(--ui-caption); overflow-wrap: anywhere; }
 .native-diff-file { margin: 8px 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .native-diff-file summary { display: flex; gap: 8px; padding: 8px 12px; background: var(--bg-inset); font-size: var(--ui-caption); }
 .native-diff-file summary > span:first-child { min-width: 0; flex: 1; overflow-wrap: anywhere; }

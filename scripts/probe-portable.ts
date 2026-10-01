@@ -1,6 +1,10 @@
 import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { connect } from "node:net";
+import puppeteer, { type Browser } from "puppeteer-core";
 import { verifyPayloadHashes, verifyUiHashes } from "./portable-ui";
 import { verifyUpdatePayload } from "./apply-app-update";
 
@@ -25,6 +29,42 @@ const child = Bun.spawn([join(portable, "runtime", "bun.exe"), "run", "src/nativ
   stdout: "pipe",
   stderr: "pipe",
 });
+async function probeBrowser(): Promise<void> {
+  const env: NodeJS.ProcessEnv = { ...process.env, ALPHA_WORKSPACE_ROOT: workspace }; delete env.ELECTRON_RUN_AS_NODE;
+  const host = spawn(join(portable, "node_modules", "electron", "dist", "electron.exe"), [join(portable, "desktop", "browser-host.cjs")], { env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  const browsers: Browser[] = [];
+  let control: ReturnType<typeof connect> | undefined;
+  try {
+    const ready = await new Promise<{ port: number; controlPort: number }>((done, fail) => {
+      let output = "", errors = "";
+      const timer = setTimeout(() => fail(Error(`Packaged browser startup timed out: ${errors}`)), 25_000);
+      host.stderr!.on("data", value => { errors += String(value); });
+      host.once("exit", code => { clearTimeout(timer); fail(Error(`Packaged browser exited ${code}: ${errors}`)); });
+      host.stdout!.on("data", value => { output += String(value); const hit = /ALPHA_BROWSER_HOST_READY (\d+) (\d+)/.exec(output); if (hit) { clearTimeout(timer); done({ port: Number(hit[1]), controlPort: Number(hit[2]) }); } });
+    });
+    control = connect({ host: "127.0.0.1", port: ready.controlPort }); await once(control, "connect");
+    for (const owner of ["portable-a", "portable-b"]) {
+      const allocation = await fetch(`http://127.0.0.1:${ready.port}/sessions/${owner}`, { method: "POST" });
+      if (!allocation.ok) throw Error("Packaged browser session allocation failed");
+      const { cdpUrl } = await allocation.json() as { cdpUrl: string };
+      browsers.push(await puppeteer.connect({ browserURL: cdpUrl, defaultViewport: null }));
+    }
+    const pages = await Promise.all(browsers.map(async browser => (await browser.pages())[0]!));
+    await Promise.all(pages.map(page => page.setContent('<button id="click" onclick="window.count++;window.trusted=event.isTrusted">Click</button><script>window.count=0;window.trusted=false;</script>')));
+    await Promise.all(pages.map(page => page.click("#click")));
+    for (const page of pages) {
+      const result = await page.evaluate("({count,trusted})") as { count: number; trusted: boolean };
+      if (result.count !== 1 || !result.trusted) throw Error("Packaged browser input did not reach its owned native page");
+    }
+  } finally {
+    await Promise.all(browsers.map(browser => browser.disconnect()));
+    if (host.exitCode === null && host.signalCode === null) {
+      const exited = once(host, "exit"); control?.end('{"op":"quit"}\n');
+      const timeout = setTimeout(() => host.kill(), 3000); await exited; clearTimeout(timeout);
+    }
+    control?.destroy();
+  }
+}
 try {
   const reader = child.stdout.getReader();
   let output = "";
@@ -62,7 +102,8 @@ try {
   if (!opened.ok) throw new Error(`Portable session open failed: ${await opened.text()}`);
   const state = await fetch(`http://127.0.0.1:${port}/api/native/sessions/${id}/state`, { headers: auth });
   if (!state.ok || !(await state.json() as { sessionId?: string }).sessionId) throw new Error("Bundled OMP RPC did not start");
-  console.log(JSON.stringify({ portable, port, health: "ok", ui: "ok", omp: "ok", assets: assets.length, manifest: release.format === 3 ? "source-and-ui-verified" : release.format === 2 ? "ui-verified" : "legacy", gitSha: release.gitSha, credentials: "isolated-fake-key" }));
+  await probeBrowser();
+  console.log(JSON.stringify({ portable, port, health: "ok", ui: "ok", omp: "ok", browser: "owned-native-clicks-ok", assets: assets.length, manifest: release.format === 3 ? "source-and-ui-verified" : release.format === 2 ? "ui-verified" : "legacy", gitSha: release.gitSha, credentials: "isolated-fake-key" }));
 } finally {
   if (process.platform === "win32") {
     const kill = Bun.spawn(["taskkill.exe", "/T", "/F", "/PID", String(child.pid)], { stdout: "ignore", stderr: "ignore", windowsHide: true });
