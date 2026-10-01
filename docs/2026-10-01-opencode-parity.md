@@ -41,7 +41,7 @@
 | 2.6 | todo、子 agent、待处理请求 | 原生 RPC / lifecycle bus / readRpcSubagentTranscript | 非空 Todo、两个实际并行子任务、完成和重启后读取真实原生日志通过；待处理请求沿用原生 RPC UI |
 | 2.7 | 原生计划入口、修订和重进恢复 | 原生 plan 状态、产物和模式日志；薄桌面审阅控制器 | native-plan.test：write/edit 限制、持续修订、暂停/重进、审阅重启恢复通过；local:// 使用原生 resolver 预览 |
 | 2.8 | 计划五种审阅与分节反馈 | 原生 preparePlanForReview、compact、newSession、模型转换和产物复制 | 五种选择、旧内容冲突、关闭不批准、压缩取消不执行通过；分节反馈已接；外部编辑器/系统另存待人工验收 |
-| 2.9 | 计划模型工具恢复、互斥、内部停止 | 原生 model-transition、tool partition、mode exit teardown | 模型恢复、计划角色实时更改、批准后实际 write 恢复通过；内部停止独立显示；goal/vibe 互斥及异常失败专项仍待做 |
+| 2.9 | 计划模型工具恢复、互斥、内部停止 | 原生 model-transition、tool partition、mode exit teardown | 模型恢复、计划角色实时更改、批准后实际 write 恢复通过；内部停止独立显示；goal/goal_paused/vibe 冷恢复后拒绝进入计划通过，真实原生压缩失败不执行通过 |
 | 3.1 | 项目、worktree、保留既有改动 | 原生 createSessionWorktree 与 vcs，Alpha 注册自建工作树 | 原生与 Electron 创建通过；保留暂存/未暂存/新文件、拒绝脏清理通过 |
 | 3.2 | 文件树、搜索、标签与行引用 | 现有安全文件 API + 原生 fuzzyFind/grep | Unicode 路径、字面内容搜索通过；Electron 双标签与真实行范围回填通过 |
 | 3.3 | 修改审查和行级反馈 | projectReview + 原生 diff 行号，反馈回填输入框 | Electron 选择差异行、输入反馈、回填保留草稿通过 |
@@ -105,5 +105,6 @@
 - Windows 更新助手曾出现 Bun detach 后子进程随助手退出的问题，现使用 Node `child_process.spawn({detached:true})` 并等待生产启动握手。专项验证正常升级后新进程存活、启动失败恢复旧版并再次运行、部分替换恢复、下载取消、恶意 ZIP 与完整 SHA256 校验。
 - `scripts/probe-desktop-windows.cjs` 使用生产 main、preload、实际原生 server：双窗口共用会话、英文/字体同步与冷恢复、规则和 Skill 连续两次保存、LSP 配置及原生日志入口均通过。扩展重载以明确的 host_exit(restarting)→host_ready 告知两窗，旧请求不能覆盖新状态；截图已检查，无 Operation incomplete 或会话断开横幅。系统文件对话框、编辑器、通知声音仍待人工验收。
 - `bun run check`、`bun run build:desktop-ui`、`bun run validate:skills` 通过，30 个 Skill、4833 description 字符；没有修改 Skill 正文。UI 构建的 bundle 大小提示保留，未把它当构建失败。
+- 最终发行前全套复核：137 pass/0 fail、970 assertions、349.41 秒，包含新增 goal/goal_paused/vibe 的实际原生会话模式冷恢复互斥专项。安装包保留完整可校验 payload；安装入口启动随包 Electron，使浏览器宿主及后续升级使用随包运行时。
 
 核对路径均为当前依赖 `node_modules/@oh-my-pi/pi-coding-agent/src/`；SDK 结果为权威运行状态，配置目录只表示已配置。忙碌时的配置修改必须显示待生效，真正刷新并确认后才标记已生效。

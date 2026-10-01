@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { RpcProcess } from "../src/native/rpc-process";
 import type { PlanView } from "../src/native/host-types";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "alpha-plan-proof-"));
@@ -84,6 +85,25 @@ test("native plan guards, review edits, dismissal, pause, reentry and process re
     await f.child.command({ type: "abort" });
     await f.child.hostCommand("plan", { action: "toggle" }); await f.child.hostCommand("plan", { action: "toggle" }); expect((await f.mode()).phase).toBe("off");
     expect(JSON.stringify(await f.child.command({ type: "get_state" }))).toContain("executor");
+  } finally { await f.close(); }
+}, 120_000);
+
+test("native persisted goal and vibe modes prevent desktop plan entry after restart", async () => {
+  const f = await fixture();
+  try {
+    await f.child.promptAndWait("Persist the native session before checking mode exclusivity.");
+    const { data } = await f.child.command({ type: "get_state" }) as { data: { sessionId: string; sessionFile: string } };
+    for (const mode of ["goal", "goal_paused", "vibe"]) {
+      await f.child.stop();
+      const manager = await SessionManager.open(data.sessionFile);
+      manager.appendModeChange(mode, { goal: "Preserve the current native mode" }); await manager.flush();
+      await f.start(data.sessionId);
+      const rejection = await f.child.hostCommand("plan", { action: "resume" }).catch(error => error.message);
+      expect(rejection).toContain("Exit goal/vibe mode");
+      expect((await f.mode()).phase).toBe("off");
+      expect((await SessionManager.open(data.sessionFile)).buildSessionContext().mode).toBe(mode);
+      expect(await readFile(join(f.cwd, "keep.txt"), "utf8")).toBe("USER_WORK_MUST_SURVIVE\n");
+    }
   } finally { await f.close(); }
 }, 120_000);
 
