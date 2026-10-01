@@ -1,6 +1,6 @@
 /** Standalone helper: copied with Bun outside managed payload directories before the desktop exits. */
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
@@ -21,17 +21,28 @@ export function payloadPath(root: string, name: string) {
 }
 export async function payloadHashes(root: string) {
   const files: Record<string, string> = {};
+  const names: string[] = [];
   async function visit(directory: string, prefix: string) {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const name = prefix ? prefix + "/" + entry.name : entry.name;
       if (name === "release.json") continue;
       const path = payloadPath(root, name);
       if (entry.isDirectory()) await visit(path, name);
-      else if (entry.isFile()) files[name] = createHash("sha256").update(await readFile(path)).digest("hex");
+      else if (entry.isFile()) names.push(name);
       else throw new Error("Release contains a link or unsupported entry: " + name);
     }
   }
-  await visit(root, ""); return files;
+  await visit(root, "");
+  let next = 0;
+  await Promise.all(Array.from({ length: 8 }, async () => {
+    while (next < names.length) {
+      const name = names[next++]!;
+      const hash = createHash("sha256");
+      for await (const chunk of createReadStream(payloadPath(root, name))) hash.update(chunk);
+      files[name] = hash.digest("hex");
+    }
+  }));
+  return files;
 }
 export async function verifyUpdatePayload(root: string) {
   const release = JSON.parse(await readFile(join(root, "release.json"), "utf8")) as { format: number; version: string; payload?: Record<string, string> };

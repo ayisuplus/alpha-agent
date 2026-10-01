@@ -212,7 +212,7 @@ async function runUnoJob(job: Record<string, unknown>, signal?: AbortSignal): Pr
     const connection = `alpha_${Math.random().toString(36).slice(2, 12)}`;
     const server = Bun.spawn(
       [install.office, `-env:UserInstallation=${pathToFileURL(profile).href}`, "--headless", "--nologo", "--nodefault", "--norestore", `--accept=pipe,name=${connection};urp;StarOffice.ServiceManager`],
-      { stdin: "ignore", stdout: "ignore", stderr: "pipe", windowsHide: true },
+      { stdin: "ignore", stdout: "ignore", stderr: "pipe", windowsHide: true, env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } },
     );
     await Bun.sleep(800);
     if (server.exitCode !== null) throw new OfficeError(`${LIBREOFFICE_GAP}（LibreOffice 启动失败：${(await new Response(server.stderr).text()).trim()}）`);
@@ -265,7 +265,7 @@ async function sofficeConvert(input: string, to: ConvertFormat | "pdf", outDir: 
         // HTML auto-detects as Writer/Web, which lacks the docx export filter; load it as a Writer document.
         ...(/\.html?$/i.test(input) ? ["--infilter=HTML (StarWriter)"] : []),
         "--convert-to", to, "--outdir", outDir, input],
-      { stdin: "ignore", stdout: "pipe", stderr: "pipe", windowsHide: true },
+      { stdin: "ignore", stdout: "pipe", stderr: "pipe", windowsHide: true, env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" } },
     );
     const stop = () => {
       if (process.platform === "win32") Bun.spawn(["taskkill", "/T", "/F", "/PID", String(server.pid)], { stdout: "ignore", stderr: "ignore", windowsHide: true });

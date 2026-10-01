@@ -106,5 +106,6 @@
 - `scripts/probe-desktop-windows.cjs` 使用生产 main、preload、实际原生 server：双窗口共用会话、英文/字体同步与冷恢复、规则和 Skill 连续两次保存、LSP 配置及原生日志入口均通过。扩展重载以明确的 host_exit(restarting)→host_ready 告知两窗，旧请求不能覆盖新状态；截图已检查，无 Operation incomplete 或会话断开横幅。系统文件对话框、编辑器、通知声音仍待人工验收。
 - `bun run check`、`bun run build:desktop-ui`、`bun run validate:skills` 通过，30 个 Skill、4833 description 字符；没有修改 Skill 正文。UI 构建的 bundle 大小提示保留，未把它当构建失败。
 - 最终发行前全套复核：137 pass/0 fail、970 assertions、349.41 秒，包含新增 goal/goal_paused/vibe 的实际原生会话模式冷恢复互斥专项。安装包保留完整可校验 payload；安装入口启动随包 Electron，使浏览器宿主及后续升级使用随包运行时。
+- 首次全包校验拒绝了 Office 探针生成的 LibreOffice 内嵌 Python 字节码缓存（只有新增缓存，无修改或丢失）；给两个 soffice 子进程设置 `PYTHONDONTWRITEBYTECODE=1`，避免运行时修改发行文件。完整校验改为 8 个流式 SHA256 读取，保留逐文件覆盖并限制内存；相关更新/办公/导入边界复核 29 pass/0 fail、218 assertions、82.09 秒。失败的 staging 包不作为交付物。
 
 核对路径均为当前依赖 `node_modules/@oh-my-pi/pi-coding-agent/src/`；SDK 结果为权威运行状态，配置目录只表示已配置。忙碌时的配置修改必须显示待生效，真正刷新并确认后才标记已生效。

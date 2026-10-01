@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 import { verifyPayloadHashes, verifyUiHashes } from "./portable-ui";
 import { verifyUpdatePayload } from "./apply-app-update";
@@ -45,6 +46,27 @@ const probe = Bun.spawn([join(bundled, "runtime", "bun.exe"), "run", "scripts/pr
 const [probeOutput, probeError, probeExit] = await Promise.all([new Response(probe.stdout).text(), new Response(probe.stderr).text(), probe.exited]);
 if (probeExit !== 0) throw new Error(`Installer payload smoke failed: ${probeError || probeOutput}`);
 
+// Exercise the actual installer launcher and its independent bundled Electron process.
+const workspace = await mkdtemp(join(tmpdir(), "alpha-installer-desktop-"));
+const readyFile = join(workspace, ".alpha", "updates", "probe-ready.json"), probeId = randomUUID();
+const launcher = Bun.spawn([join(output, "win-unpacked", "Alpha.exe")], {
+  env: { ...process.env, HOME: workspace, USERPROFILE: workspace, ALPHA_WORKSPACE_ROOT: workspace, PI_CODING_AGENT_DIR: join(workspace, "profile"), ALPHA_UPDATE_READY_FILE: readyFile, ALPHA_UPDATE_READY_TOKEN: probeId, ALPHA_UPDATE_TRANSACTION_ID: probeId },
+  stdout: "ignore", stderr: "ignore", windowsHide: true,
+});
+let desktopPid: number | undefined;
+try {
+  let ready: { pid: number; port: number; version: string; token: string } | undefined;
+  for (let count = 0; count < 600 && !ready; count++) { ready = await readFile(readyFile, "utf8").then(JSON.parse).catch(() => undefined); if (!ready) await Bun.sleep(100); }
+  if (!ready) throw new Error("Installer desktop did not confirm production workbench startup");
+  desktopPid = ready.pid;
+  if (ready.token !== probeId || ready.version !== manifest.version || !(await fetch(`http://127.0.0.1:${ready.port}/health`)).ok) throw new Error("Installer desktop handshake failed");
+  process.kill(desktopPid, 0);
+} finally {
+  for (const pid of [desktopPid, launcher.exitCode === null ? launcher.pid : undefined].filter((pid): pid is number => !!pid)) await Bun.spawn(["taskkill.exe", "/T", "/F", "/PID", String(pid)], { stdout: "ignore", stderr: "ignore", windowsHide: true }).exited;
+  const probeRoot = await realpath(workspace); if (!probeRoot.startsWith(await realpath(tmpdir()) + sep)) throw new Error("Installer probe cleanup leaves temporary directory");
+  await rm(probeRoot, { recursive: true, force: true });
+}
+
 const version = JSON.parse(await readFile(join(root, "installer", "package.json"), "utf8")).version;
 if (version !== manifest.version) throw new Error("Installer version differs from the portable release");
 const filename = `Alpha-Setup-${version}-x64.exe`;
@@ -55,7 +77,7 @@ for await (const chunk of createReadStream(executable)) hash.update(chunk);
 await mkdir(finalOutput, { recursive: false });
 await rename(executable, join(finalOutput, filename));
 await writeFile(join(finalOutput, "SHA256SUMS.txt"), `${hash.digest("hex")}  ${filename}\r\n`);
-await writeFile(join(finalOutput, "build.json"), JSON.stringify({ portable, gitSha: manifest.gitSha, sourceFiles: Object.keys(manifest.sources).length, builtAt: new Date().toISOString(), version, electron: manifest.electron, uiFiles: Object.keys(manifest.ui.files).length, payloadSmoke: "passed", signing: "unsigned" }, null, 2));
+await writeFile(join(finalOutput, "build.json"), JSON.stringify({ portable, gitSha: manifest.gitSha, sourceFiles: Object.keys(manifest.sources).length, builtAt: new Date().toISOString(), version, electron: manifest.electron, uiFiles: Object.keys(manifest.ui.files).length, payloadSmoke: "passed", productionDesktopSmoke: "passed", signing: "unsigned" }, null, 2));
 const actual = await realpath(output);
 if (!actual.startsWith(await realpath(releaseRoot) + sep) || !basename(actual).startsWith(".alpha-installer-")) throw new Error(`Refusing to remove unexpected staging directory: ${actual}`);
 await rm(actual, { recursive: true, force: true });
