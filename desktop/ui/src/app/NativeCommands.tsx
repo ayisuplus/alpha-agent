@@ -9,7 +9,7 @@ import { shortcutFor } from "./desktop-preferences";
 export function NativeCommands({ session, onClose }: { session: SessionController; onClose(): void }) {
   const [search, setSearch] = useState("");
   const [native, setNative] = useState<Array<{ name: string; description?: string }>>([]);
-  useEffect(() => { if (session.selected && session.opened) void sessionRequest<{ data: { commands: typeof native } }>(session.selected, "command", { type: "get_available_commands" }).then(result => setNative(result.data.commands), cause => session.setError(String(cause))); }, [session.selected, session.opened]);
+  useEffect(() => { let cancelled = false; if (session.selected && session.opened) void sessionRequest<{ data: { commands: typeof native } }>(session.selected, "command", { type: "get_available_commands" }).then(result => { if (!cancelled) setNative(result.data.commands); }, cause => { if (!cancelled) session.setError(String(cause)); }); return () => { cancelled = true; }; }, [session.selected, session.opened]);
   return <NativeModal title={t("命令与技能")} onCancel={onClose}>
     <input autoFocus aria-label={t("搜索命令")} placeholder={t("搜索命令或输入 /skill:…")} value={search} onChange={event => setSearch(event.target.value)} />
     <div className="native-command-results">

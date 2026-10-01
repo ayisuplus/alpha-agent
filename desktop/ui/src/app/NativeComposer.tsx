@@ -48,7 +48,7 @@ export function NativeComposer({ session, models, model, thinking, onModel, onTh
   useEffect(() => {
     if (!session.selected || !session.opened) return;
     let cancelled = false;
-    void sessionRequest<{ data: { commands: typeof commands } }>(session.selected, "command", { type: "get_available_commands" }).then(result => { if (!cancelled) setCommands(result.data.commands); }, cause => session.setError(String(cause)));
+    void sessionRequest<{ data: { commands: typeof commands } }>(session.selected, "command", { type: "get_available_commands" }).then(result => { if (!cancelled) setCommands(result.data.commands); }, cause => { if (!cancelled) session.setError(String(cause)); });
     void sessionRequest<{ files: typeof files }>(session.selected, "files").then(result => { if (!cancelled) setFiles(result.files); }, () => undefined);
     return () => { cancelled = true; };
   }, [session.selected, session.opened]);

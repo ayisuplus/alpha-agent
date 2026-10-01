@@ -9,6 +9,7 @@ mkdirSync(evidence, { recursive: true });
 const workspace = mkdtempSync(path.join(evidence, "windows-"));
 const agentDir = path.join(workspace, "omp"), project = path.join(workspace, "project");
 mkdirSync(agentDir); mkdirSync(project);
+writeFileSync(path.join(project, "desktop-file.txt"), "FILE_COMPLETION_PROOF\n");
 const plugin = path.join(workspace, "native-plugin"), pluginName = "alpha-desktop-proof";
 mkdirSync(plugin);
 const pluginVersion = version => writeFileSync(path.join(plugin, "package.json"), JSON.stringify({ name: pluginName, version, license: "MIT", omp: { extensions: ["index.ts"], settings: { access: { type: "string", secret: true } }, features: { extra: { default: false, extensions: ["extra.ts"] } } } }));
@@ -26,7 +27,7 @@ async function until(condition, detail) { for (let count = 0; count < 600; count
 const click = async (page, label) => { await until(() => evaluate(page, `return [...document.querySelectorAll('button')].some(node => !node.disabled && node.textContent.trim() === ${JSON.stringify(label)});`), "enabled button: " + label); return evaluate(page, `const node = [...document.querySelectorAll('button')].find(node => !node.disabled && node.textContent.trim() === ${JSON.stringify(label)}); if (!node) throw new Error('Missing button: ' + ${JSON.stringify(label)}); node.click();`); };
 const english = require("../desktop/ui/src/app/ui-english.json");
 const input = (page, label, text) => evaluate(page, `const node=document.querySelector('[aria-label='+${JSON.stringify(JSON.stringify(label))}+']'); if (!node) throw new Error('Missing field: '+${JSON.stringify(label)}); Object.getOwnPropertyDescriptor(node.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(node,${JSON.stringify(text)}); node.dispatchEvent(new Event('input',{bubbles:true}));`);
-const result = { electron: process.versions.electron, productionMain: true, windows: false, sharedSession: false, language: false, preferences: false, restart: false, definitions: false, skillEditor: false, pluginOperations: false, busyReload: false, keyboard: false, mcpTools: false, lspConfiguration: false, logs: false, closeOne: false };
+const result = { electron: process.versions.electron, productionMain: true, windows: false, sharedSession: false, language: false, preferences: false, restart: false, definitions: false, skillEditor: false, builtinCopy: false, pluginOperations: false, busyReload: false, keyboard: false, fileCompletion: false, mcpTools: false, lspConfiguration: false, logs: false, closeOne: false };
 process.on("uncaughtException", error => { writeFileSync(path.join(evidence, "desktop-windows-failure.txt"), String(error.stack || error)); writeFileSync(path.join(evidence, "desktop-windows-result.json"), JSON.stringify({ ...result, error: String(error) }, null, 2)); console.error(error); app.exit(1); });
 require("../desktop/main.cjs");
 app.whenReady().then(async () => {
@@ -79,6 +80,12 @@ app.whenReady().then(async () => {
     await until(() => evaluate(first, `return document.body.textContent.includes(${JSON.stringify(english["会话仍在工作，请在结束后重新加载。"])});`), "busy reload tells user to wait");
     await request("command", {type:"abort"}); await until(async () => (await state(first)).data?.isSettled, "native streaming fully settles");
     await click(first, english["重新加载"]); await until(async () => { const catalog=await request("host/catalog");return !catalog.pendingReload&&catalog.entries.some(row=>row.name==='desktop-method'&&row.loaded); }, "pending Skill becomes loaded only after reload"); result.busyReload = true;
+    const builtinPath = path.resolve("presets/alpha-plugin/skills/analyze-results/SKILL.md"), originalBuiltin = readFileSync(builtinPath,"utf8");
+    await click(first, english["返回目录"]); await click(first, "analyze-results");
+    await until(() => evaluate(first, `return document.querySelector('textarea[aria-label="${english["扩展内容"]}"]')?.value===${JSON.stringify(originalBuiltin.replaceAll("\r\n","\n"))};`), "bundled Skill opened");
+    await input(first, english["扩展内容"], originalBuiltin + "\nBUILTIN_PROJECT_COPY_PROOF\n"); await click(first, english["保存"]);
+    await until(async () => (await request("host/catalog")).entries.some(row=>row.name==='analyze-results'&&row.scope==='project'&&row.loaded), "bundled Skill copy is the native project winner");
+    if (readFileSync(builtinPath,"utf8") !== originalBuiltin || !readFileSync(path.join(project,".omp/skills/analyze-results/SKILL.md"),"utf8").includes("BUILTIN_PROJECT_COPY_PROOF")) throw new Error("Bundled Skill copy altered its source"); result.builtinCopy = true;
     await click(first, english["插件"]); await until(() => evaluate(first, `return !!document.querySelector('input[aria-label="${english["扩展目录"]}"]');`), "plugin manager");
     await input(first, english["扩展名称"], pluginName); await input(first, english["扩展目录"], plugin); await click(first, english["链接目录"]);
     const pluginRow = async () => (await request("host/catalog")).entries.find(row => row.name === pluginName);
@@ -101,6 +108,12 @@ app.whenReady().then(async () => {
     await input(first, english["向 Alpha 说明任务"], "/sett");
     await evaluate(first, "const node=document.querySelector('[data-testid=composer]');node.focus();node.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}));");
     await until(() => evaluate(first, "return document.querySelector('[data-testid=composer]').value==='/settings ';"), "Tab slash completion");
+    await input(first, english["向 Alpha 说明任务"], "@desktop-file.txt");
+    await until(() => evaluate(first, "return [...document.querySelectorAll('.native-completions button')].some(node=>node.textContent.includes('desktop-file.txt'));"), "native file completion");
+    await evaluate(first, "document.querySelector('[data-testid=composer]').dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true}));");
+    await until(() => evaluate(first, `const value=document.querySelector('[data-testid=composer]').value;return value.startsWith('@"')&&value.endsWith('desktop-file.txt" ');`), "Tab inserts quoted file reference");
+    const fileReference = await evaluate(first, "return document.querySelector('[data-testid=composer]').value;");
+    if (path.resolve(project, JSON.parse(fileReference.slice(1).trim())) !== path.join(project,"desktop-file.txt")) throw new Error("File completion points outside its native project result"); result.fileCompletion = true;
     await input(first, english["向 Alpha 说明任务"], "中文输入法草稿");
     const turns = await evaluate(first, "return document.querySelectorAll('.native-message.user').length;");
     await evaluate(first, "document.querySelector('[data-testid=composer]').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',ctrlKey:true,isComposing:true,bubbles:true}));"); await sleep(300);
@@ -137,7 +150,7 @@ app.whenReady().then(async () => {
   } catch (error) {
     writeFileSync(path.join(evidence, "desktop-windows-failure.txt"), String(error.stack || error));
     for (const page of pages()) {
-      try { writeFileSync(path.join(evidence, `desktop-windows-diagnostic-${page.id}.json`), JSON.stringify(await evaluate(page, "const id=window.alpha.storage('getItem','alpha-last-session').value; const response=await fetch('/api/native/sessions/'+id+'/host/catalog',{headers:{'x-alpha-token':await window.alpha.serverToken()}}); return {text:document.querySelector('.settings-content')?.innerText,catalog:await response.json()};"), null, 2)); } catch {}
+      try { writeFileSync(path.join(evidence, `desktop-windows-diagnostic-${page.id}.json`), JSON.stringify(await evaluate(page, "const id=window.alpha.storage('getItem','alpha-last-session').value; const response=await fetch('/api/native/sessions/'+id+'/host/catalog',{headers:{'x-alpha-token':await window.alpha.serverToken()}}); return {text:document.querySelector('.settings-content')?.innerText??document.body.innerText,errors:[...document.querySelectorAll('.native-error')].map(node=>node.innerText),catalog:await response.json()};"), null, 2)); } catch {}
     }
     writeFileSync(path.join(evidence, "desktop-windows-result.json"), JSON.stringify({ ...result, error: String(error) }, null, 2)); console.error(error); process.exitCode = 1;
   }
