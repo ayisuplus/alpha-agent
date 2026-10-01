@@ -58,9 +58,13 @@ bun run package:exe <verified-portable-directory>
 
 生产桌面结果 `artifacts/parity-2026-10-01-delivery-ui/desktop-windows-result.json` 全部通过；项目恢复结果 `artifacts/parity-2026-10-01-delivery-project/project-ui-result.json` 包含 conflict=true。最终便携包的更新结果 `artifacts/parity-2026-10-01-delivery-update-final/app-update-result.json` 也全部通过。
 
+原始证据保留在隔离工作树 `C:\Users\36322\.codex\worktrees\opencode-parity\alpha-agent`；本文的 `artifacts/`、`release/` 路径均以该目录为根，不把带本机临时状态的证据写入 Git。可直接读取 [原生回归日志](C:/Users/36322/.codex/worktrees/opencode-parity/alpha-agent/artifacts/parity-2026-10-01-batch4-proof/native-tests-delivery-final.log)、[生产桌面结果](C:/Users/36322/.codex/worktrees/opencode-parity/alpha-agent/artifacts/parity-2026-10-01-delivery-ui/desktop-windows-result.json)、[生产更新结果](C:/Users/36322/.codex/worktrees/opencode-parity/alpha-agent/artifacts/parity-2026-10-01-delivery-update-final/app-update-result.json)。
+
 最终安装器：658318391 字节，SHA256 `185ba900049f1ca28e3593ce9a697106cb00b41f916e224212023ff960fff680`；独立重算一致。build.json 的 payloadSmoke 和 productionDesktopSmoke 均为 passed，包含完整文件哈希、随包原生服务、实际 Alpha.exe 入口、独立随包 Electron 工作台及健康检查。其源码身份与最终便携包一致，均为上述 ce66ee7。
 
 四批功能分别提交为 `b47a90a`、`5f8cff3`、`7ba470a`、`d727ddd`，随后修复与验收分别追加提交。主工作区合并采用 fast-forward，不改动原有 `.tmp-host-window.png` 和 `reference/oh-my-pi` 子模块内容；子模块 HEAD 保持 `73a11421fe34fbab8ad058ab9c1a2e4f447852ea`。
+
+2026-10-01 已快进合并回 `E:\projects\alpha-agent`，该工作区的 UI 重建与类型检查通过，原有两项未提交状态保持不变。测试 fixture 服务已停止；最终产品包和证据保留在上述隔离工作树。
 
 失败的临时 staging 目录不作为交付。自动审批拒绝清理其中两份，返回 blocked by policy；保留它们并在最终交付中单独说明。安装器探针的临时 Electron profile 若被 Windows 暂时占用，会记录保留路径，启动探针本身失败仍会阻止发行。
 
