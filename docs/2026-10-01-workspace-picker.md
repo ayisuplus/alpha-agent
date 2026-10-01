@@ -21,6 +21,12 @@
 
 本次更新源码和当前桌面 UI 构建；此前 0.3.0 便携包和安装包仍对应其原交付版本，没有重新打包。
 
+## 当前预览页
+
+更新界面构建后，原预览后端仍运行较早源码，项目目录接口返回 404。确认四个会话均未打开后，更新该预览后端，保留原预览数据根和模型服务。新服务仍有四个会话和两个项目；监听端口按既有原生规则重新分配。新的本机运行信息保存在主工作区 `artifacts/ui-redesign-2026-10-01/review/workspace-picker-startup.json`，旧记录保留。
+
+通过 Codex 内置浏览器在当前用户预览页检查了已有项目、不在项目中工作及添加文件夹路径弹窗；无项目选择显示正确，取消弹窗正常。当前截图位于主工作区 `artifacts/workspace-picker-2026-10-01/add-folder-preview.png` 与 `no-project-preview.png`。这份当前预览截图与上面的隔离 Electron 截图捕获失败分开记录。
+
 ## 复现
 
 先运行 `bun run scripts/probe-workbench-ui.ts artifacts/workspace-picker-2026-10-01` 保持隔离模型服务可用。另一个 PowerShell 中设置 `ALPHA_EVIDENCE_DIR` 为上述证据绝对目录、`ALPHA_FIXTURE_STARTUP` 为其中的 `startup.json`，通过 `Start-Process -WindowStyle Hidden -Wait` 启动 `node_modules/electron/dist/electron.exe scripts/probe-workspace-picker.cjs`。不使用用户凭据。
