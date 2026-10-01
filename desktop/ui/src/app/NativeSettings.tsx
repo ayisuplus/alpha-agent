@@ -19,6 +19,7 @@ import { NativeAppUpdates } from "./NativeAppUpdates";
 import { NativeLogs } from "./NativeLogs";
 import {
   ALPHA_VERSION,
+  modelPreference,
   nativeApi,
   nativeDelete,
   sessionRequest,
@@ -345,7 +346,7 @@ export function NativeSettings({ config, catalog, onConfig, reload, onClose, fon
             <SectionTitle title={t("模型与账号")} description={t("在这里选择默认模型、管理 API Key。与内核命令行共享，保存后新会话生效。")} />
             {shownCatalog.error && <p role="alert">{shownCatalog.error}</p>}
             {(shownCatalog.roles ?? [{ id: "default", name: "Default", candidates: shownCatalog.models.map(model => model.selector) }]).map(role => <Field key={role.id} label={role.id === "default" ? t("默认模型") : role.name} description={tf`原生角色：${role.id} · 来源：${shownConfig.roles?.find(item => item.id === role.id)?.provenance ?? "default"}`}>
-              <NativeModelPicker models={(shownCatalog.roleModels ?? shownCatalog.models).filter(model => role.candidates.includes(model.selector))} value={shownConfig.modelRoles[role.id] ?? ""} disabled={busy} label={tf`选择 ${role.id} 模型`} onChange={model => void save({ role: role.id, model })} />
+              <NativeModelPicker models={(shownCatalog.roleModels ?? shownCatalog.models).filter(model => role.candidates.includes(model.selector))} value={modelPreference(shownCatalog.roleModels ?? shownCatalog.models, shownConfig.modelRoles[role.id] ?? "").selector} disabled={busy} label={tf`选择 ${role.id} 模型`} onChange={model => void save({ role: role.id, model })} />
               <button disabled={busy} onClick={() => void save({ role: role.id, model: "" })}>{t("重置")}</button>
             </Field>)}
             {fields.filter(item => item.id === "defaultThinkingLevel").map(item => <SettingRow key={`${item.id}-${item.value}`} item={item} save={save} busy={busy} />)}
