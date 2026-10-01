@@ -2,6 +2,10 @@
 
 依据 `2026-10-01-browser-and-office-foundation-audit.md`，按用户“开始修复”实施。只改浏览器所有权、真实输入、原格式只读预览及随包验证；未安装新引擎、修改系统配置或用户文档。
 
+## Electron 文件用途
+
+`node_modules/electron/dist/electron.exe` 是项目现有的 Windows Electron 41.2.2 运行时。`scripts/start-desktop.ts` 用它运行 `desktop/main.cjs`，创建 Alpha 桌面窗口；主进程再用同一个可执行文件运行 `desktop/browser-host.cjs`，承载内置 Chromium 页面和浏览器自动化。开发态与便携包使用相同目录结构；本轮没有另行安装 Electron。
+
 ## 浏览器
 
 Alpha 继续使用原生 OMP browser 工具和 Electron 41.2.2 / Chromium 146。每个 Alpha 会话分配独立的本机 CDP 端点及页面，登录 profile 共享。工作台从根端点观察全部页面；会话端点过滤目标列表、附加事件和跨会话目标请求。按需创建原生视图，弹出页及其后续弹出页继承打开者的会话。
@@ -31,6 +35,14 @@ UI 支持工作表/幻灯片切换、滚动、缩放、原文字复制、公式�
 - 会话 API：身份校验、跨会话拒绝、文件范围、原格式默认打开/PNG、关闭失效和原文件不变通过。
 - `bun run check`、`bun run build:desktop-ui`、开发运行时 `scripts/probe-office-runtime.ts`（含 DOCX/XLSX/PPTX 原格式预览）通过。
 - 内置浏览器中的真实 Alpha UI：DOCX 修订；XLSX B2 `=A2*3`/`21`、批注、隐藏表提示及恢复；PPTX 页切换和中文多段备注；主动静态预览及切回原格式。备注保留段落换行。隔离 profile 采用虚拟 key 初始化静态模型目录，未发送模型提示。
-- 完整原生套件、独立代码审查与最终便携包结果在完成后补录；此处不将阶段测试等同于完整发行验收。
+- 独立全量代码审查发现接管遗留输入锁、异步 Runtime 占用协调器/队列、后台建页抢前台三项重要问题；集中修复提交 `e671950c34926cee9f165515a51e1b44cdb869bf`。修复范围复核通过，原三项问题闭合，未发现新的 Important/Critical 退化。复核者独立运行当前源码的协议探针；原生按键复位和实际窗口视图层序依据上述真实 Electron 测试及对应测试代码。
+- 首次最终完整套件为 162 通过 / 1 失败：既有 `native-plan.test.ts` 仅等待文件创建就读取，偶尔读到尚未写完的空文件。原测试单例和整个计划测试文件单独复跑通过；提交 `1e33ca5a3004a2339bca078f2138fc83d465abe0` 只将等待条件改为完整执行证明内容，保留原断言。三种批准执行方式复测 3 通过 / 23 断言，类型检查通过；产品会话执行代码没有改动。
+- 最终完整原生套件在 `1e33ca5a3004a2339bca078f2138fc83d465abe0` 验证：`bun run test` 退出 0，163 通过 / 0 失败，1128 断言，33 个文件，389.68 秒。此前失败的批准压缩后恢复执行测试也通过。
+
+## 最终便携包
+
+`release/alpha-portable-2026-10-01T10-42-35-618Z/Alpha.cmd` 已离线构建通过，版本 0.3.0。随包 Office 探针和桌面探针均通过后，打包器才发布此目录。Office 探针在隔离的“未安装 Office”环境指向随包引擎，验证原格式 DOCX/XLSX/PPTX 加载、PNG 绘制、关闭和源字节不变；桌面探针验证清单、UI、原生 OMP RPC，以及发行包 Electron 双会话的真实 trusted click。
+
+`release.json` 的产品源码 SHA 为 `e671950c34926cee9f165515a51e1b44cdb869bf`，Electron 41.2.2、OMP 18.4.3、LibreOffice 26.2.5.2。104 个随包产品源码哈希全部与当前工作区一致；其后的提交只修正测试等待和记录验证证据，不改变随包产品源码。这里只记录本机运行证据，不替代独立干净 Windows 机器与全部复杂 Office 文件的兼容验收。
 
 便携包清单新增 `desktop/browser-proxy.cjs` 和 `office-view-worker.py`，原格式 TS 入口随可达源码收集；现有 `probe-portable.ts` 增加发行包 Electron 双会话真实点击，`probe-office-runtime.ts` 增加发行包原格式三类文档加载/绘图/关闭/源文件不变。打包使用现有版本和离线缓存。
