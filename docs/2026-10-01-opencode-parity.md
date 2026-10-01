@@ -27,7 +27,7 @@
 | 1.2 | Skill 来源、启停、正文与参考材料 | 原生 loadSkills / capability all；原生 disabledExtensions；有边界的正文读写 | native-host.test；Electron 41.2.2 清单、正文导航 |
 | 1.3 | Skill 本地导入并调用 | 原生 scanSkillsFromDir 验证，复制到原生目录，原生 /skill: | native-extensions.test：导入后的方法正文进入本机模型请求 |
 | 1.4 | Skill 编辑与内置复制 | 原生 frontmatter 解析，旧内容比较，用户/项目目录 | 正文保存及旧内容冲突拒绝通过；生产 Electron 项目 Skill 连续两次保存及实际重载通过；内置复制有入口，UI 专项待做 |
-| 1.5 | MCP 添加编辑删除启停 | 原生 config-writer / getMCPConfigPath；外部来源只读 | native-extensions.test 三种配置添加；编辑/删除专项待做 |
+| 1.5 | MCP 添加编辑删除启停 | 原生 config-writer / getMCPConfigPath；外部来源只读 | 三种配置添加、HTTP 配置编辑、stdio 禁用冷恢复、SSE 删除冷恢复通过；外部来源文件保持只读 |
 | 1.6 | MCP 状态、测试、重连、工具资源刷新 | 当前 MCPManager 和原生 xd:// 路由 | stdio/HTTP/SSE 连通与资源读取、重连；真实 Microsoft Learn HTTP 服务的原生工具调用、重连和刷新通过；已补全桌面自动更新与原生 resources 对象读取 |
 | 1.7 | MCP OAuth、取消与手动回调 | 原生 discoverOAuthEndpoints / MCPOAuthFlow / AuthStorage | 本机 metadata→PKCE→回调→token 入原生凭据库及取消通过；外部服务授权待验收 |
 | 1.8 | 插件安装、链接、更新卸载、诊断 | 原生 PluginManager | 本地插件加载、禁用后重启、链接更新、卸载且源文件保留通过；实际本机 marketplace 的项目安装、禁用/启用冷恢复、1.1 更新与卸载通过；公共 registry 待外部验收 |
@@ -111,5 +111,7 @@
 - 实际 MCP 详情 UI 专项发现原生资源返回是 `{resources, templates}`，数组假设会导致 React 页面空白；已按原生结构修复。页面每两秒读取当前会话目录，刷新同步已打开条目的工具和资源；实际生产 Electron 详情已显示 Microsoft Learn 工具。
 - 第一版安装器资源合并触发 electron-builder 默认排除 node_modules，完整 payload 校验拒绝发布。恢复独立 node_modules 文件集合并保留随包 Electron，目录构建逐文件复核 added/removed/changed 均为 0。最终安装包重新构建，不交付失败的 staging 包。
 - 完整发行包生产更新专项 `ALPHA_APP_UPDATE_OK`：实际 main/preload→独立助手→新桌面渲染握手→原生会话、草稿、英文偏好与用户文件恢复通过。测试旧包采用同一代码的人工版本标识 0.2.99，新包为真实 0.3.0；证明当前升级机制，不能冒充旧 0.2.1/0.2.0 迁移验收。
+- MCP 禁用/删除冷恢复专项发现 `loadAllMCPConfigs` 只返回原生选定的启用项。目录另用原生 MCP capability 的 all 来源记录显示禁用/覆盖项，启用判定仍以原生 loader 和 manager 为准，不另写发现或去重算法；配置只把原生 canonical `transport` 映射为编辑格式的 `type`。修复后扩展/CLI 接入/导入边界 5 pass/0 fail、42 assertions、13.36 秒。
+- 生产 Electron 双窗口专项复核包含新 `mcpTools: true`：从桌面添加真实 Microsoft Learn MCP、打开详情、自动显示真实工具及刷新均通过；规则、Skill 连续保存、LSP、日志、跨窗恢复仍通过。探针失败会记录当前 false 项，并返回失败退出码，避免读取旧结果误报通过。
 
 核对路径均为当前依赖 `node_modules/@oh-my-pi/pi-coding-agent/src/`；SDK 结果为权威运行状态，配置目录只表示已配置。忙碌时的配置修改必须显示待生效，真正刷新并确认后才标记已生效。

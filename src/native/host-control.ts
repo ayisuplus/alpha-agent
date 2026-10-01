@@ -15,6 +15,7 @@ import { isRpcSessionSettled } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-ses
 import { NativeMcpOAuth } from "./mcp-oauth";
 import { loadCapability, type Skill as DiscoveredSkill } from "@oh-my-pi/pi-coding-agent/discovery";
 import { skillCapability } from "@oh-my-pi/pi-coding-agent/capability/skill";
+import { mcpCapability, type MCPServer } from "@oh-my-pi/pi-coding-agent/capability/mcp";
 import type { ExtensionCatalog, ExtensionRow, HostMethod } from "./host-types";
 import { NativePlanHost } from "./plan-host";
 import { createSessionWorktree } from "@oh-my-pi/pi-coding-agent/session/session-worktree";
@@ -122,10 +123,20 @@ export class NativeHostControl {
     for (const [name, config] of Object.entries(configs.configs)) {
       const source = configs.sources[name]; const connection = manager?.getConnection(name);
       const failure = startup?.failed.find(item => item.name === name)?.error;
-      const enabled = config.enabled !== false;
+      // The native loader already applied disable and force-enable rules.
       entries.push({ kind: "mcp", id: name, name, source: source?.provider ?? "native", scope: source?.level ?? "user", path: source?.path,
-        enabled, loaded: !!connection?.tools, status: enabled ? manager?.getConnectionStatus(name) ?? "disconnected" : "disabled", error: failure,
+        enabled: true, loaded: !!connection?.tools, status: manager?.getConnectionStatus(name) ?? "disconnected", error: failure,
         details: { config: redact(config), endpoint: "url" in config ? safeUrl(config.url) : undefined, tools: connection?.tools?.map(tool => ({ name: tool.name, description: tool.description })), resources: manager?.getServerResources(name), prompts: manager?.getServerPrompts(name) } });
+    }
+    const allMcp = await loadCapability<MCPServer>(mcpCapability.id, { cwd: this.cwd, extensionRoots: this.session.effectiveExtensionRoots, disabledExtensions: [] });
+    for (const server of allMcp.all) {
+      const { name, transport, _source, _shadowed, ...config } = server;
+      if (entries.some(row => row.kind === "mcp" && row.name === name && row.path === _source.path && row.source === _source.provider)) continue;
+      const overridden = !!configs.configs[name];
+      const connection = manager?.getConnection(name);
+      const loaded = !overridden && connection?._source?.path === _source.path && !!connection.tools;
+      entries.push({ kind: "mcp", id: `mcp:${_source.path}:${name}`, name, path: _source.path, source: _source.provider, scope: _source.level,
+        enabled: false, loaded, status: overridden ? "overridden" : "disabled", details: { config: redact({ ...config, type: transport ?? (config.command ? "stdio" : "http") }), endpoint: config.url ? safeUrl(config.url) : undefined } });
     }
     const plugins = new PluginManager(this.cwd);
     const enabledPlugins = await getEnabledPlugins(this.cwd);
@@ -177,7 +188,7 @@ export class NativeHostControl {
     entries.push({ kind: "plugin", id: "bundled:alpha", name: "Alpha", description: manifest.description, version: manifest.version, source: bundled, path: bundled, scope: "bundled", enabled: true,
       loaded: this.session.skills.some(skill => contained(bundled, skill.filePath)), status: this.session.skills.some(skill => contained(bundled, skill.filePath)) ? "bundled" : "configured" });
     for (const row of entries) if (row.kind === "skill" && row.path && contained(bundled, row.path)) row.scope = "bundled";
-    return { entries, warnings: [...discovered.warnings.map(warning => warning.message), ...this.runtime.extensionsResult.errors.map(error => error.error)] };
+    return { entries, warnings: [...discovered.warnings.map(warning => warning.message), ...allMcp.warnings, ...this.runtime.extensionsResult.errors.map(error => error.error)] };
   }
   private target(scope: unknown, leaf: string) { return join(scope === "project" ? join(this.cwd, ".omp") : getAgentDir(), leaf); }
   private async extension(input: Record<string, unknown>) {
