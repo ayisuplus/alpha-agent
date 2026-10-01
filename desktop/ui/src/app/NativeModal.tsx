@@ -3,11 +3,12 @@ import { useEffect, useId, useRef, type ReactNode } from "react";
 
 export function NativeModal({ title, onCancel, children }: { title: string; onCancel(): void; children: ReactNode }) {
   const root = useRef<HTMLDivElement>(null);
+  const previousFocus = useRef(document.activeElement as HTMLElement | null);
   const titleId = useId();
   const cancel = useRef(onCancel);
   cancel.current = onCancel;
   useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
+    const previous = previousFocus.current;
     const element = root.current!;
     const focusable = () => [...element.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex="0"]')].filter(item => item.getClientRects().length);
     (element.querySelector<HTMLElement>("[autofocus], textarea, input, select") ?? focusable()[0] ?? element).focus();

@@ -1,5 +1,5 @@
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { YAML } from "bun";
 import { discoverAuthStorage, getAgentDir, ModelRegistry, Settings } from "@oh-my-pi/pi-coding-agent";
@@ -8,6 +8,7 @@ import { all, lookup, type AnySetting } from "@oh-my-pi/pi-coding-agent/config/r
 import { ModelsConfigFile } from "@oh-my-pi/pi-coding-agent/config/models-config";
 import { getKnownRoleIds, getRoleInfo, roleCandidatePool } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import { replaceFileAtomically } from "@oh-my-pi/pi-coding-agent/utils/atomic-file";
 import { redact, preserveRedacted } from "./config-redaction";
 
 const revision = (value: string | null) => createHash("sha256").update(value === null ? "absent" : value).digest("hex");
@@ -24,7 +25,7 @@ export async function replaceNativeConfiguration(path: string, content: string, 
   try {
     await writeFile(temporary, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
     if (await readOptional(path) !== previous) throw new Error("Configuration changed since opening; reload before saving");
-    await rename(temporary, path);
+    await replaceFileAtomically(temporary, path);
   } finally { await rm(temporary, { force: true }); }
 }
 

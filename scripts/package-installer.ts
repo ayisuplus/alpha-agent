@@ -49,6 +49,7 @@ if (probeExit !== 0) throw new Error(`Installer payload smoke failed: ${probeErr
 // Exercise the actual installer launcher and its independent bundled Electron process.
 const workspace = await mkdtemp(join(tmpdir(), "alpha-installer-desktop-"));
 const readyFile = join(workspace, ".alpha", "updates", "probe-ready.json"), probeId = randomUUID();
+await mkdir(join(workspace, ".alpha", "updates"), { recursive: true });
 const launcher = Bun.spawn([join(output, "win-unpacked", "Alpha.exe")], {
   env: { ...process.env, HOME: workspace, USERPROFILE: workspace, ALPHA_WORKSPACE_ROOT: workspace, PI_CODING_AGENT_DIR: join(workspace, "profile"), ALPHA_UPDATE_READY_FILE: readyFile, ALPHA_UPDATE_READY_TOKEN: probeId, ALPHA_UPDATE_TRANSACTION_ID: probeId },
   stdout: "ignore", stderr: "ignore", windowsHide: true,

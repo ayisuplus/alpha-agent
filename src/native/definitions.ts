@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -18,6 +18,7 @@ import { configCache } from "@oh-my-pi/pi-coding-agent/lsp/config";
 import { isRpcSessionSettled } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-session-settle";
 import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { nativeLspConfiguration } from "./lsp-configuration";
+import { replaceFileAtomically } from "@oh-my-pi/pi-coding-agent/utils/atomic-file";
 
 export interface DefinitionRow { kind: string; name: string; path?: string; source: string; scope: string; loaded: boolean; content?: string; status: string }
 const directories: Record<string, string> = { rule: "rules", command: "commands", prompt: "prompts", task: "agents" };
@@ -85,7 +86,7 @@ export class NativeDefinitions {
     try {
       await writeFile(temporary, input.content, { encoding: "utf8", flag: "wx" });
       if (await readOptional(path) !== previous) throw new Error("Definition changed before saving");
-      await rename(temporary, path); invalidate(path);
+      await replaceFileAtomically(temporary, path); invalidate(path);
     } finally { await rm(temporary, { force: true }); }
     return { path, pendingReload: true };
   }
