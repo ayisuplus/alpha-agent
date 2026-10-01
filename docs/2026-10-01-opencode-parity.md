@@ -10,10 +10,10 @@
 | 2 | session commands、composer、requests | 共享命令目录、补全、多图草稿、队列、原生会话树、全文搜索标签、压缩导出、todo 与子 agent | 原生会话、图片队列取回/冷恢复、非空 Todo、两个实际并行子任务及记录冷恢复通过；Electron 入口通过 |
 | 2 | OMP 原生计划机制 | local:// 文件、xd://propose 审阅、五种选择、模型工具恢复、暂停重进 | 五种选择及取消压缩通过真实内核 fixture；Electron 审阅和清空执行通过；外部编辑器/系统另存对话框待人工验收 |
 | 3 | workspace、file、review、terminal | worktree、文件搜索标签与行引用、行级反馈、独立 shell、外部编辑器 | 已接入；原生行为与 Electron 操作通过，外部编辑器系统交互待人工验收 |
-| 3 | snapshot / revert | 独立快照、差异预览、冲突保护、撤销重做 | 原生集成与 Electron 撤销重做通过；冲突由集成专项验证，UI 冲突专项待做 |
+| 3 | snapshot / revert | 独立快照、差异预览、冲突保护、撤销重做 | 原生集成与 Electron 撤销重做通过；桌面确认时检测预览后编辑、停止恢复并保留后续内容通过 |
 | 4 | providers、models、permissions、LSP | 原生配置与凭据、自定义服务商、权限规则、规则命令任务配置与 LSP | 已实现；配置/遮罩/项目来源/冷恢复、实际工具拒绝、原生 LSP 格式化与重连通过；外部 OAuth 待验收 |
 | 4 | settings、desktop menu、updater | 快捷键、字体主题、通知声音、语言、多窗口、日志、导入与在线更新 | 已实现；生产 Electron 双窗口/英文/冷恢复/规则/LSP 配置/原生日志通过；更新助手与回滚通过；系统通知声音待人工验收 |
-| 4 | packaging | 便携包、Office 探针、安装包、更新失败恢复 | 最终打包与完整发行包更新专项执行中，结果另记 |
+| 4 | packaging | 便携包、Office 探针、安装包、更新失败恢复 | 完整便携包、随包 Office、NSIS payload 和生产桌面启动、完整发行包更新与失败恢复通过；干净机器安装待验收 |
 
 每批记录类型检查、原生测试、UI 构建及真实行为证据；fixture、外部服务、Electron 与安装包验收分别记录。源码实现或 API 成功响应不能代替真实运行验收。
 
@@ -26,14 +26,14 @@
 | 1.1 | 启动身份、配置与 Skill 和 CLI 一致 | 保留 runRootCommand；同一 SDK session 加 IPC | native-host.test：CLI 清单相等；启动参数测试 |
 | 1.2 | Skill 来源、启停、正文与参考材料 | 原生 loadSkills / capability all；原生 disabledExtensions；有边界的正文读写 | native-host.test；Electron 41.2.2 清单、正文导航 |
 | 1.3 | Skill 本地导入并调用 | 原生 scanSkillsFromDir 验证，复制到原生目录，原生 /skill: | native-extensions.test：导入后的方法正文进入本机模型请求 |
-| 1.4 | Skill 编辑与内置复制 | 原生 frontmatter 解析，旧内容比较，用户/项目目录 | 正文保存及旧内容冲突拒绝通过；生产 Electron 项目 Skill 连续两次保存及实际重载通过；内置复制有入口，UI 专项待做 |
+| 1.4 | Skill 编辑与内置复制 | 原生 frontmatter 解析，旧内容比较，用户/项目目录 | 正文保存及旧内容冲突拒绝通过；生产 Electron 项目 Skill 连续保存及实际重载、内置 Skill 复制为原生项目胜出项且原文件不变通过 |
 | 1.5 | MCP 添加编辑删除启停 | 原生 config-writer / getMCPConfigPath；外部来源只读 | 三种配置添加、HTTP 配置编辑、stdio 禁用冷恢复、SSE 删除冷恢复通过；外部来源文件保持只读 |
 | 1.6 | MCP 状态、测试、重连、工具资源刷新 | 当前 MCPManager 和原生 xd:// 路由 | stdio/HTTP/SSE 连通与资源读取、重连；真实 Microsoft Learn HTTP 服务的原生工具调用、重连和刷新通过；已补全桌面自动更新与原生 resources 对象读取 |
 | 1.7 | MCP OAuth、取消与手动回调 | 原生 discoverOAuthEndpoints / MCPOAuthFlow / AuthStorage | 本机 metadata→PKCE→回调→token 入原生凭据库及取消通过；外部服务授权待验收 |
 | 1.8 | 插件安装、链接、更新卸载、诊断 | 原生 PluginManager | 本地插件加载、禁用后重启、链接更新、卸载且源文件保留通过；实际本机 marketplace 的项目安装、禁用/启用冷恢复、1.1 更新与卸载通过；公共 registry 待外部验收 |
-| 1.9 | 插件配置、功能、来源许可错误 | 原生 settings/features/doctor，SDK 加载错误 | secret 配置不出现在目录响应；其它桌面操作专项待验收 |
-| 1.10 | 配置状态与运行状态区分 | 单写者；空闲安全重开，忙碌待生效；其他已打开会话提示待加载 | 代码已接；忙碌、异步任务、终端接管专项待做 |
-| 2.1 | 菜单/快捷键/斜杠共享命令与补全 | 原生 get_available_commands + 桌面命令目录 | Electron 命令目录和导航通过；Slash/Tab/中文组合输入有入口，逐键专项待做 |
+| 1.9 | 插件配置、功能、来源许可错误 | 原生 settings/features/doctor，SDK 加载错误 | 生产 Electron 链接、版本/许可、secret 配置遮罩、可选功能实际进入原生命令目录、诊断、启停、更新卸载且来源不变通过 |
+| 1.10 | 配置状态与运行状态区分 | 单写者；空闲安全重开，忙碌待生效；其他已打开会话提示待加载 | 生产 Electron 生成中保存、提示待生效、拒绝忙碌重载、停止真正结束后重载通过；双窗恢复与原生终端单写者/身份接管专项通过；异步子任务期间的扩展重载专项待做 |
+| 2.1 | 菜单/快捷键/斜杠共享命令与补全 | 原生 get_available_commands + 桌面命令目录 | Electron 命令目录和导航、Slash/Tab、组合输入 Enter 防误发、Ctrl+K、模态 Tab 焦点约束及 Escape 焦点恢复通过；真实 Windows 输入法人工操作待验收 |
 | 2.2 | 文件引用、附件草稿恢复 | 原生 prompt；Electron preload 的磁盘存储，限制图片合计大小 | Electron 销毁/重建窗口后文字和图片恢复通过；根目录 @ 补全已接；行范围引用留在第三批 |
 | 2.3 | 排队、中途补充及队列状态 | 原生 steer/follow_up、getQueuedMessages、popLastQueuedMessage / toRestoredQueuedMessage | 实际生成中取回 steering 图片，保留 follow-up 并实际消费；先保存原生原图恢复格式再 dequeue，冷恢复通过 |
 | 2.4 | 会话全文搜索标签、分支、历史树 | 原生 session-loader / sessionManager / navigateTree / branch | native-session.test：正文搜索、标签、历史导航、带图片分支、新旧 ID 与冷启动恢复通过 |
@@ -55,7 +55,7 @@
 | 4.6 | 快捷键、字体主题、通知声音、语言 | desktop/commands.json + 持久 Electron storage | 共用菜单/快捷键/斜杠目录，英文静态与插值文字、语言/字体跨窗口和重载通过；不翻译用户正文或工具 ID；通知/声音系统效果待人工验收 |
 | 4.7 | 多窗口、日志 | BaseWindow/WebContentsView + getLogsDir/getLogPath | 两窗口共用单原生会话、关一窗保留另一窗；原生日志末尾 256 KiB、遮罩、越界拒绝实测；生产 Electron 日志入口通过 |
 | 4.8 | 本地包与在线更新、校验备份恢复 | Alpha AppUpdates + 独立 Windows helper；原生 compareVersions | 源未配置如实显示；完整 payload/ZIP/下载 SHA256、取消、旧版本冲突、备份、启动握手/失败重启旧版、部分替换恢复专项通过；完整发行包专项另记 |
-| 4.9 | 便携与安装包运行验收 | package-portable、portable/Office probe、installer | 已补全命令目录/更新助手/全包 SHA256；最终打包执行中 |
+| 4.9 | 便携与安装包运行验收 | package-portable、portable/Office probe、installer | format-3 便携包、隔离 Office 探针、NSIS 全 payload 校验及真正生产桌面启动通过；未签名，干净机器安装待验收 |
 
 ## 已执行证据
 
@@ -115,3 +115,24 @@
 - 生产 Electron 双窗口专项复核包含新 `mcpTools: true`：从桌面添加真实 Microsoft Learn MCP、打开详情、自动显示真实工具及刷新均通过；规则、Skill 连续保存、LSP、日志、跨窗恢复仍通过。探针失败会记录当前 false 项，并返回失败退出码，避免读取旧结果误报通过。
 
 核对路径均为当前依赖 `node_modules/@oh-my-pi/pi-coding-agent/src/`；SDK 结果为权威运行状态，配置目录只表示已配置。忙碌时的配置修改必须显示待生效，真正刷新并确认后才标记已生效。
+
+## 前一轮候选发行记录（后续焦点与保存修复已替换）
+
+- 发行源码：`a24540d129de0f8d9cd5666fe7c0c57b20ab1568`，Alpha 0.3.0 / OMP 18.4.3。之后的验收脚本、记录提交不改变随包源码；release.json 的逐文件 SHA256 是 payload 身份。
+- 最终全套：137 pass / 0 fail / 973 assertions / 366.38 秒，日志 `artifacts/parity-2026-10-01-batch4-proof/native-tests-delivery.log`；类型检查、UI 构建及 Skill 校验通过。
+- 便携包 `release/alpha-portable-2026-10-01T02-19-04-456Z/Alpha.cmd`，format 3，101 个源码文件、5 个 UI 文件以及完整运行时逐文件校验。打包执行了随包 Bun 的原生服务探针与 LibreOffice 26.2.5.2 探针，不依赖系统 Office。
+- 安装包 `release/alpha-installer-2026-10-01T02-23-54-637Z/Alpha-Setup-0.3.0-x64.exe`，658318868 字节，SHA256 `c17264a933e0ddf32560fe8ab550e057b58eaa401ed17b7190f82929c3194d5b`。build.json 的 payloadSmoke 和 productionDesktopSmoke 均为 passed；验证包含 NSIS 输入完整性、随包原生服务、实际 Alpha.exe 入口启动独立随包 Electron、工作台渲染及 /health。没有在用户系统安装，也不能算干净机器安装或签名发布通过。
+- 完整发行包更新复核使用上述最终便携包，`app-update-result.json` 中的原生会话恢复、草稿/英文/字体、用户文件、独立助手及新进程存活均为 true；人工旧版本标签仍明确记录为 0.2.99，不冒充历史版本迁移。
+- 桌面文件恢复补验 `artifacts/parity-2026-10-01-delivery-project/project-ui-result.json` 所有项目均通过，包含 `conflict: true`；在预览后写入后续内容，再点击确认，UI 显示停止恢复并禁用确认，文件保留后续编辑。截图 `snapshot-conflict-electron.png` 已检查。
+
+这些包仅保留历史验收记录，不作为最终交付入口。可复现实测入口与交付限制见 `2026-10-01-desktop-parity-delivery.md`。尚未完成的外部授权和系统人工验收条目保持原状态，不计为全部完成。
+
+## 最终源码复核
+
+- 冻结源码 `8d54739d532091a6a4a923eb11618a93948597d7`：命令面板 autoFocus 曾先占据焦点，现于模态渲染时保存原焦点，实际 Escape 后回到 composer；Windows 连续保存曾返回 EPERM，现复用 OMP `utils/atomic-file.replaceFileAtomically`，继续保留旧内容冲突检查，没有另写覆盖/回滚算法。
+- 冻结后 `bun run test`：137 pass / 0 fail / 973 assertions / 364.41 秒，日志 `native-tests-final-frozen.log`；`bun run check`、`bun run build:desktop-ui` 通过，Skill 校验仍为 30 个 / 4833 description 字符。
+- 生产 Electron 补验：项目 Skill 连续保存、内置 Skill 项目复制、插件实际配置/功能/生命周期、生成中的待生效与安全重载均通过；命令面板焦点专项包含 Tab 环绕与 Escape 恢复。探针重载期间仅重试只读状态查询，不重发 prompt 或写入操作。
+- 更密集的双窗口重载复核发现输入框/面板已经取消的命令查询仍写入错误；在原有查询完成回调上补齐取消检查。最终产品源码 `ce66ee7edfbb16eb7478a3da3a4f1f15b84a356d`，完整原生回归 137 pass / 0 fail / 973 assertions / 372.96 秒，日志 `native-tests-delivery-final.log`；类型及 UI 构建通过。
+- 最终生产 Electron 结果 `artifacts/parity-2026-10-01-delivery-ui/desktop-windows-result.json` 全部为 true：包括新增 builtinCopy、fileCompletion、pluginOperations、busyReload 和 keyboard，以及共享会话、语言字体冷恢复、MCP 工具详情、LSP、日志及关闭一窗保留另一窗。文件补全保留原生返回的相对/绝对路径，解析 JSON 引用后确认指向项目中的实际文件。
+- 最终便携包 `release/alpha-portable-2026-10-01T03-11-37-097Z` 的随包办公/原生服务探针通过。其完整生产更新复核 `artifacts/parity-2026-10-01-delivery-update-final/app-update-result.json` 再次全部通过；仍使用人工旧版本标识 0.2.99，未扩大历史迁移的证据边界。
+- 最终安装包 `release/alpha-installer-2026-10-01T03-15-49-015Z/Alpha-Setup-0.3.0-x64.exe`，658318391 字节，SHA256 `185ba900049f1ca28e3593ce9a697106cb00b41f916e224212023ff960fff680`；build.json 的完整 payload 与生产桌面启动探针均通过。Windows 暂时占用的测试 profile 单独记录为 EBUSY 保留，探针失败仍阻止发行；未签名/干净机器安装/历史迁移的验收边界不变。
