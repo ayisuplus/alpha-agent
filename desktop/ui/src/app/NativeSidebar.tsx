@@ -3,7 +3,7 @@ import { t } from "./ui-language";
 
 import { desktopStorage } from "./desktop-storage";
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, PanelLeftClose, PanelLeftOpen, Pin, Plus, Settings, Sparkles, Timer } from "lucide-react";
+import { Archive, ChevronDown, ChevronRight, FolderOpen, PanelLeftClose, PanelLeftOpen, Pin, Plus, Search, Settings, Sparkles, Timer } from "lucide-react";
 import { nativeApi, type LegacyTask, type SessionItem } from "./native-api";
 import { groupSessions } from "./workbench-state";
 import { invokeDesktopCommand } from "./desktop-commands";
@@ -59,10 +59,11 @@ export function NativeSidebar({ collapsed, onToggle, sessions, legacy, selected,
       </button>
     </div>
     <button className="native-new" onClick={onNew} disabled={busy} aria-label={t("新会话")} title={t("新会话")}><Plus size={16} /><span className="native-sidebar-label">{t("新会话")}</span></button>
-    <input className="native-session-search" aria-label={t("搜索会话")} placeholder={t("搜索会话或项目…")} value={search} onChange={event => setSearch(event.target.value)} />
+    <label className="native-session-search"><Search size={15} aria-hidden="true" /><input aria-label={t("搜索会话")} placeholder={t("搜索会话或项目…")} value={search} onChange={event => setSearch(event.target.value)} /></label>
     {searchError && <p className="native-muted" role="alert">{t(searchError)}</p>}
-    <div className="native-list-title">{t("会话")}</div>
-    <button className="native-project-choice" onClick={() => setArchived(value => !value)}>{archived ? t("返回会话") : t("查看归档")}</button>
+    <div className="native-session-heading"><strong>{archived ? t("归档会话") : t("会话")}</strong>
+      <button className="native-project-choice" aria-pressed={archived} onClick={() => setArchived(value => !value)}><Archive size={14} aria-hidden="true" />{archived ? t("返回会话") : t("查看归档")}</button>
+    </div>
     <div className="native-session-list">{groupSessions(shown, pinned).map(project => <section className="native-project-group" key={project.key}>
       <button className="native-project-heading" title={project.path} aria-expanded={!!search || !folded.includes(project.key)} onClick={() => setFolded(current => current.includes(project.key) ? current.filter(key => key !== project.key) : [...current, project.key])}>
         {folded.includes(project.key) && !search ? <ChevronRight size={14} /> : <ChevronDown size={14} />}<span>{project.path.split(/[\\/]/).filter(Boolean).at(-1) || project.path}</span><small>{project.rows.length}</small>
@@ -87,7 +88,7 @@ export function NativeSidebar({ collapsed, onToggle, sessions, legacy, selected,
         <button onClick={() => onContinueLegacy(item)} disabled={busy}>{t("继续这个任务")}</button>
       </div>)}</div>}
     <div className="native-sidebar-footer"><nav className="native-sidebar-links" aria-label={t("功能入口")}>
-      <button onClick={() => void invokeDesktopCommand("projects")} title={t("项目与工作树")} aria-label={t("项目与工作树")}><span className="native-sidebar-label">{t("项目")}</span></button>
+      <button onClick={() => void invokeDesktopCommand("projects")} title={t("项目与工作树")} aria-label={t("项目与工作树")}><FolderOpen size={17} /><span className="native-sidebar-label">{t("项目")}</span></button>
       {[{ id: "skills", label: "技能", Icon: Sparkles }, { id: "schedules", label: "定时任务", Icon: Timer }].map(({ id, label, Icon }) =>
         <button key={id} onClick={() => onOpenSettings(id)} aria-label={t(label)} title={t(label)}><Icon size={17} /><span className="native-sidebar-label">{t(label)}</span></button>)}
     </nav><button className="native-settings-entry" onClick={() => onOpenSettings()} aria-label={t("设置")} title={t("设置")}><Settings size={17} /><span className="native-sidebar-label">{t("设置")}</span><kbd>Ctrl ,</kbd></button></div>

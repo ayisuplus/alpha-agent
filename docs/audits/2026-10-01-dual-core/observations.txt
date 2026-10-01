@@ -1,0 +1,35 @@
+{
+  "passedThenFailed": {
+    "issues": [],
+    "unverifiedMutation": false
+  },
+  "oldClaimAfterNewWrite": {
+    "issues": [
+      {
+        "kind": "test",
+        "line": "天枢提醒：对话里出现了“测试通过/全绿”类宣称，但最后一次代码变更之后没有对应族的通过记录。改完没重跑的结论是旧结论。请由你判断，必要时先补跑对应验证再确认。"
+      }
+    ]
+  },
+  "failedReadFailed": {
+    "failureCount": 1
+  },
+  "echoIsVerification": [
+    "test"
+  ],
+  "gitMutation": {
+    "resetHard": false,
+    "commitOnly": true
+  },
+  "launchEnv": {
+    "proxyPreserved": false,
+    "bypassPreserved": false,
+    "profilePreserved": false
+  }
+}
+{
+  "localBuiltin": {
+    "pendingAfterLocalCommand": true,
+    "completionSettledAfterResponse": false
+  }
+}
