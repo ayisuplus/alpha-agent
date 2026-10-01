@@ -231,6 +231,7 @@
 .native-office-selection { display: grid; gap: 6px; padding: 10px; background: var(--surface); border-radius: var(--radius-sm); }
 .native-office-selection textarea { width: 100%; min-height: 56px; resize: vertical; color: var(--text-primary); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .native-office-notes { font-size: var(--ui-caption); overflow-wrap: anywhere; }
+.native-office-notes p { white-space: pre-wrap; }
 .native-diff-file { margin: 8px 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .native-diff-file summary { display: flex; gap: 8px; padding: 8px 12px; background: var(--bg-inset); font-size: var(--ui-caption); }
 .native-diff-file summary > span:first-child { min-width: 0; flex: 1; overflow-wrap: anywhere; }

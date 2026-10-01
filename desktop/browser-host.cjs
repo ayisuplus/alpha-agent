@@ -49,6 +49,7 @@ let controlSession = null;
 let frontView = null;
 let quitting = false;
 let manualTakeover = false;
+let cancelInput = async () => {};
 
 function readCdpPort() {
   const file = path.join(profile, "DevToolsActivePort");
@@ -125,7 +126,9 @@ function closePage(targetId) {
 
 /** 隐身（交还）：窗口移出所有显示器（用户看不见、点不到、不进任务栏），但保持出帧，截屏流实时。
  *  不用 win.hide()/最小化/透明度：Chromium 对这些状态的窗口停止出帧，Page.startScreencast 会冻结。 */
-function enterHiddenMode() {
+async function enterHiddenMode() {
+  manualTakeover = true;
+  await cancelInput();
   manualTakeover = false;
   hostWindow.setIgnoreMouseEvents(true);
   hostWindow.setSkipTaskbar(true);
@@ -138,12 +141,13 @@ function enterVisibleMode() {
   hostWindow.setIgnoreMouseEvents(false);
 }
 
-function applyShow(message) {
+async function applyShow(message) {
   const numbers = ["x", "y", "width", "height"].map(key => Number(message[key]));
   if (!numbers.every(Number.isFinite)) return;
   const [x, y, width, height] = numbers.map(Math.round);
   if (width < 120 || height < 80) return;
   manualTakeover = true;
+  await cancelInput();
   hostWindow.setBounds({ x, y, width, height });
   for (const page of pages) page.view.setBounds(pageFrame());
   bringToFront(typeof message.targetId === "string" ? message.targetId : undefined);
@@ -154,8 +158,9 @@ function applyShow(message) {
 }
 
 function managePage(owner, view) {
-  hostWindow.contentView.addChildView(view); view.setBounds(pageFrame());
-  frontView = view;
+  // Register behind the active view. Only coordinated input or an explicit takeover raises it.
+  hostWindow.contentView.addChildView(view, 0); view.setBounds(pageFrame());
+  if (!frontView) frontView = view;
   const contentsId = view.webContents.id;
   const page = { view, owner, targetId: null };
   pages.push(page);
@@ -193,10 +198,24 @@ async function checkInput(targetId, x, y) {
   if (disabled) throw Error("Click target is disabled");
 }
 
+async function resetInput(targetId, buttons, keys) {
+  const page = resolveTarget(targetId);
+  if (!page || page.view.webContents.isDestroyed()) return;
+  const debuggerApi = page.view.webContents.debugger;
+  const attached = debuggerApi.isAttached();
+  if (!attached) debuggerApi.attach("1.3");
+  try {
+    // Release outside the viewport so even a full-page button cannot complete its click.
+    if (buttons.length) await debuggerApi.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x: -1, y: -1 });
+    for (const button of buttons) await debuggerApi.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", x: -1, y: -1, button, buttons: 0 });
+    for (const key of keys) await debuggerApi.sendCommand("Input.dispatchKeyEvent", { ...key, type: "keyUp", modifiers: 0, text: "", unmodifiedText: "" });
+  } finally { if (!attached && debuggerApi.isAttached()) debuggerApi.detach(); }
+}
+
 function handleCommand(message) {
   if (!message || typeof message !== "object") return;
-  if (message.op === "show") applyShow(message);
-  else if (message.op === "hide") enterHiddenMode();
+  if (message.op === "show") return applyShow(message);
+  else if (message.op === "hide") return enterHiddenMode();
   else if (message.op === "quit") { quitting = true; app.quit(); }
 }
 
@@ -208,25 +227,30 @@ app.whenReady().then(async () => {
   hostWindow.on("close", event => {
     if (quitting) return;
     event.preventDefault();
-    enterHiddenMode();
+    void enterHiddenMode();
   });
   bringToFront(undefined); // 默认前置第一页（此后换层才重新加入视图）
   // 启动即隐身出帧：面板在首次“接管”前就能实时显示页面。
-  enterHiddenMode();
+  await enterHiddenMode();
   hostWindow.show();
 
   const port = readCdpPort();
   await waitForCdp(port);
   const proxy = await createBrowserProxy({ rawPort: port, port: Number(cdpPort), registryFile: path.join(profile, "session-ports.json"), pages: () => pages, resolveTarget,
-    createPage, closePage, activate: bringToFront, checkInput, manual: () => manualTakeover });
+    createPage, closePage, activate: bringToFront, checkInput, resetInput, manual: () => manualTakeover });
+  cancelInput = proxy.cancelInput;
 
   // 控制面：仅 127.0.0.1。父进程（desktop/main.cjs）保持一条连接；连接断开即视为父进程退出。
   const control = createServer(socket => {
     if (controlSession) { socket.destroy(); return; } // 单会话：只服务父进程的第一条连接
     controlSession = socket;
+    let commands = Promise.resolve();
     const input = createInterface({ input: socket });
     input.on("line", line => {
-      try { handleCommand(JSON.parse(line)); } catch { /* 非法行忽略 */ }
+      try {
+        const message = JSON.parse(line);
+        commands = commands.then(() => handleCommand(message)).catch(error => console.error(`ALPHA_BROWSER_CONTROL_ERROR ${error.message}`));
+      } catch { /* 非法行忽略 */ }
     });
     socket.on("close", () => { if (!quitting) { quitting = true; app.quit(); } });
     socket.on("error", () => {});

@@ -123,7 +123,7 @@ await writeFile(join(output, "README.txt"), [
   "Alpha 自有代码使用 Apache-2.0，见 LICENSE 与 NOTICE；第三方组件保留原许可。",
   "天枢认知改编代码的 Apache-2.0 许可证在 licenses/Tianshu-APACHE-2.0.txt。",
   "离线办公引擎及其许可证保存在 runtime/libreoffice；通过任务附件读取与修改 DOCX、XLSX、PPTX 和 PDF。",
-  "定时任务仅在 Alpha 运行时执行；浏览器标签页与登录状态在所有会话间共享。",
+  "定时任务仅在 Alpha 运行时执行；浏览器页面按会话隔离，登录状态共享；接管期间暂停自动输入。",
   "",
 ].join("\r\n"));
 const updateManifestPath = join(output, "release.json");

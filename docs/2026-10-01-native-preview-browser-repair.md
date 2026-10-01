@@ -6,7 +6,7 @@
 
 Alpha 继续使用原生 OMP browser 工具和 Electron 41.2.2 / Chromium 146。每个 Alpha 会话分配独立的本机 CDP 端点及页面，登录 profile 共享。工作台从根端点观察全部页面；会话端点过滤目标列表、附加事件和跨会话目标请求。按需创建原生视图，弹出页及其后续弹出页继承打开者的会话。
 
-真实输入前置顶对应 WebContentsView，鼠标按下到松开的过程串行，错误、目标销毁及 CDP 会话脱离会释放协调器。Puppeteer 点击前的 DOM 准备也需页面出帧，故 Runtime 准备和 bringToFront 使用同一个协调器。手动接管时拒绝自动输入，交还后恢复。顶层、同源 iframe 和开放 shadow 内禁用控件明确报错；业务成功仍应检查页面真实结果。
+真实输入前置顶对应 WebContentsView，鼠标按下到松开的过程串行，错误、目标销毁及 CDP 会话脱离会释放协调器。Puppeteer 点击前的 DOM 准备也需页面出帧，因此协调器负责 Runtime 命令发送前的视图激活，不持有任意异步脚本的等待结果。手动接管时取消自动手势并清除 Chromium 按键状态，拒绝自动输入，交还后恢复；闲置五秒的自动手势同样取消，避免遗留输入锁。新页面在当前视图后方注册，接管中的页面不会被后台建页盖住。顶层、同源 iframe 和开放 shadow 内禁用控件明确报错；业务成功仍应检查页面真实结果。
 
 修复中隔离弹出页测试曾漏传 Electron 提供的 `options.webContents`，触发用户看到的主进程错误。现使用该 WebContents 创建原生视图；致命宿主异常向父进程报告并退出，避免遗留模态错误框。
 
@@ -26,11 +26,11 @@ UI 支持工作表/幻灯片切换、滚动、缩放、原文字复制、公式�
 
 ## 验证记录
 
-- 真 Electron / Chromium / 已安装原生 OMP 浏览器：10 项测试、46 断言通过；包括双会话有效 trusted click、禁用点击、同源 iframe、多级弹出页、画面流、接管、关闭、输入错误、中断手势和宿主重启。
+- 真 Electron / Chromium / 已安装原生 OMP 浏览器：17 项测试、83 断言通过；包括双会话有效 trusted click、禁用点击、同源 iframe、多级弹出页、画面流、接管、关闭、输入错误、中断手势和宿主重启。新增七项测试覆盖接管时真实 mouseUp/keyUp、闲置手势释放、同页/跨页异步 Runtime 等待，以及窗口实际 child-view 顺序不被建页/弹窗改变。鼠标在视口外释放，避免覆盖全页的按钮被取消动作误点击。
 - 原格式引擎：7 项测试、53 断言通过；元数据、有效 PNG、打印区域外内容、页切换、中文备注、源哈希和加载取消。
 - 会话 API：身份校验、跨会话拒绝、文件范围、原格式默认打开/PNG、关闭失效和原文件不变通过。
 - `bun run check`、`bun run build:desktop-ui`、开发运行时 `scripts/probe-office-runtime.ts`（含 DOCX/XLSX/PPTX 原格式预览）通过。
-- 内置浏览器中的真实 Alpha UI：DOCX 修订；XLSX B2 `=A2*3`/`21`、批注、隐藏表提示及恢复；PPTX 页切换和中文多段备注。隔离 profile 采用虚拟 key 初始化静态模型目录，未发送模型提示。
+- 内置浏览器中的真实 Alpha UI：DOCX 修订；XLSX B2 `=A2*3`/`21`、批注、隐藏表提示及恢复；PPTX 页切换和中文多段备注；主动静态预览及切回原格式。备注保留段落换行。隔离 profile 采用虚拟 key 初始化静态模型目录，未发送模型提示。
 - 完整原生套件、独立代码审查与最终便携包结果在完成后补录；此处不将阶段测试等同于完整发行验收。
 
 便携包清单新增 `desktop/browser-proxy.cjs` 和 `office-view-worker.py`，原格式 TS 入口随可达源码收集；现有 `probe-portable.ts` 增加发行包 Electron 双会话真实点击，`probe-office-runtime.ts` 增加发行包原格式三类文档加载/绘图/关闭/源文件不变。打包使用现有版本和离线缓存。

@@ -3,23 +3,40 @@ const { createServer } = require("node:http");
 const { readFileSync, writeFileSync } = require("node:fs");
 const { WebSocket, WebSocketServer } = require("ws");
 
-async function createBrowserProxy({ rawPort, port, registryFile, pages, resolveTarget, createPage, closePage, activate, checkInput, manual }) {
+async function createBrowserProxy({ rawPort, port, registryFile, pages, resolveTarget, createPage, closePage, activate, checkInput, resetInput, manual }) {
   const raw = `http://127.0.0.1:${rawPort}`;
   const version = await (await fetch(`${raw}/json/version`)).json();
   const sessions = new Map();
   const creating = new Map();
   const creatingPages = new Map();
-  let inputTarget = null, pressed = false;
+  let inputLease = null, inputEpoch = 0;
   const inputWaiters = [];
-  async function acquire(target) {
-    if (inputTarget && inputTarget !== target) await new Promise(resolve => inputWaiters.push(resolve));
-    // Recheck after waking: only one target can own Chromium's native mouse at once.
-    if (inputTarget && inputTarget !== target) return acquire(target);
-    inputTarget = target;
+  async function acquire(target, token) {
+    // A mouse/key sequence owns the native view until release, cancellation or five seconds idle.
+    while (inputLease && inputLease.token !== token) await new Promise(resolve => inputWaiters.push(resolve));
+    if (!inputLease) inputLease = { target, token, buttons: new Set(), keys: new Map(), timer: null, cancelled: false };
+    return inputLease;
   }
-  function release() {
-    inputTarget = null; pressed = false;
+  function held(lease) { return lease.buttons.size || lease.keys.size; }
+  function release(lease) {
+    if (inputLease !== lease) return;
+    clearTimeout(lease.timer); inputLease = null;
     for (const resolve of inputWaiters.splice(0)) resolve();
+  }
+  function cancelLease(lease) {
+    if (!lease || inputLease !== lease) return Promise.resolve();
+    if (lease.cancelled) return lease.recovery;
+    lease.cancelled = true; clearTimeout(lease.timer);
+    lease.recovery = (async () => {
+      try { if (held(lease)) await resetInput(lease.target, [...lease.buttons], [...lease.keys.values()]); }
+      finally { release(lease); }
+    })();
+    return lease.recovery;
+  }
+  function cancelInput() { inputEpoch++; return cancelLease(inputLease); }
+  function renew(lease) {
+    clearTimeout(lease.timer);
+    if (held(lease)) lease.timer = setTimeout(() => { void cancelLease(lease).catch(error => console.error(`ALPHA_BROWSER_INPUT_RESET_ERROR ${error.message}`)); }, 5000);
   }
   function owns(owner, id) { return !owner || resolveTarget(id)?.owner === owner; }
   function save() { writeFileSync(registryFile, JSON.stringify(Object.fromEntries([...sessions].map(([id, server]) => [id, server.address().port])))); }
@@ -76,6 +93,7 @@ async function createBrowserProxy({ rawPort, port, registryFile, pages, resolveT
     const attached = new Map();
     const pending = new Map();
     const queues = new Map();
+    const tokens = new Map();
     const childOwners = new Map();
     const knownTargets = new Set();
     const send = value => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(value)); };
@@ -118,18 +136,17 @@ async function createBrowserProxy({ rawPort, port, registryFile, pages, resolveT
       if (message.sessionId && !pageId && !attached.has(message.sessionId)) return;
       send(message);
       if (message.method === "Target.detachedFromTarget") {
-        if (parentView(attached.get(message.params.sessionId)) === inputTarget) release();
+        if (tokens.get(message.params.sessionId) === inputLease?.token) void cancelLease(inputLease);
         attached.delete(message.params.sessionId);
       }
-      if (message.method === "Target.targetDestroyed") { knownTargets.delete(message.params.targetId); if (parentView(message.params.targetId) === inputTarget) release(); }
+      if (message.method === "Target.targetDestroyed") { knownTargets.delete(message.params.targetId); if (parentView(message.params.targetId) === inputLease?.target) void cancelLease(inputLease); }
     });
     let internalId = 0;
-    async function forward(message) {
-      await opened;
+    function forward(message) {
       return new Promise(resolve => { pending.set(message.id, { message, resolve }); upstream.send(JSON.stringify(message)); });
     }
-    async function dispatch(message) {
-      let acquired = false;
+    async function dispatch(message, token, epoch) {
+      let lease;
       try {
         await opened;
         const method = message.method, params = message.params || {};
@@ -151,42 +168,54 @@ async function createBrowserProxy({ rawPort, port, registryFile, pages, resolveT
         if (method.startsWith("Input.")) {
           if (!view || !owns(owner, view)) throw Error("Input requires an owned page target");
           if (manual()) throw Error("Browser is under manual takeover; automated input is paused");
-          await acquire(view); acquired = true;
+          lease = await acquire(view, token);
           if (manual()) throw Error("Browser is under manual takeover; automated input is paused");
+          if (epoch !== inputEpoch) throw Error("Automated input was cancelled by manual takeover");
           activate(view);
           if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed") await checkInput(view, params.x, params.y);
+          if (manual() || epoch !== inputEpoch || lease.cancelled) throw Error("Automated input was cancelled by manual takeover");
+          const key = params.code || params.key || String(params.windowsVirtualKeyCode || params.nativeVirtualKeyCode || "");
+          if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed" && ["left", "middle", "right", "back", "forward"].includes(params.button)) lease.buttons.add(params.button);
+          if (method === "Input.dispatchKeyEvent" && (params.type === "keyDown" || params.type === "rawKeyDown")) lease.keys.set(key, params);
+          renew(lease);
           const reply = await forward(message);
-          if (reply?.error) { release(); return; }
-          if (method === "Input.dispatchMouseEvent") {
-            if (params.type === "mousePressed") pressed = true;
-            else if (params.type === "mouseReleased") pressed = false;
-          }
-          if (!pressed) release();
+          if (lease.cancelled) return;
+          if (reply?.error) { await cancelLease(lease); return; }
+          if (method === "Input.dispatchMouseEvent" && params.type === "mouseReleased") lease.buttons.delete(params.button);
+          if (method === "Input.dispatchKeyEvent" && params.type === "keyUp") lease.keys.delete(key);
+          renew(lease);
+          if (!held(lease)) release(lease);
           return;
         }
         // Puppeteer's DOM preparation can wait for an IntersectionObserver frame before
         // sending Input. Covered native views need to be raised for that preparation too.
-        if (!manual() && view && (method === "Page.bringToFront" || method === "Target.activateTarget"
+        if (view && (method === "Page.bringToFront" || method === "Target.activateTarget"
           || method === "Runtime.callFunctionOn" || method === "Runtime.evaluate")) {
-          await acquire(view); acquired = true;
-          activate(view);
-          await forward(message);
-          if (!pressed) release();
+          if (!manual()) {
+            lease = await acquire(view, token);
+            if (!manual()) activate(view);
+          }
+          // Queue only activation and protocol dispatch. An arbitrary awaited Runtime promise
+          // must remain in-flight while later commands (including its resolving input) run.
+          void forward(message);
+          if (lease && !held(lease)) release(lease);
           return;
         }
         await forward(message);
-      } catch (failure) { error(message, failure.message); if (acquired) release(); }
+      } catch (failure) { error(message, failure.message); if (lease) await cancelLease(lease); }
     }
     client.on("message", data => {
       let message; try { message = JSON.parse(String(data)); } catch { return; }
       if (!Number.isInteger(message.id) || typeof message.method !== "string") return;
       // Keep each CDP target ordered without blocking another target's mouse-release behind its waiter.
       const key = message.sessionId || pageId || "browser";
-      const next = (queues.get(key) || Promise.resolve()).then(() => dispatch(message));
+      if (!tokens.has(key)) tokens.set(key, {});
+      const epoch = inputEpoch;
+      const next = (queues.get(key) || Promise.resolve()).then(() => dispatch(message, tokens.get(key), epoch));
       queues.set(key, next);
     });
     const closed = () => {
-      if ([...attached.values(), pageId].includes(inputTarget)) release();
+      if ([...tokens.values()].includes(inputLease?.token)) void cancelLease(inputLease);
       for (const request of pending.values()) request.resolve(); pending.clear();
       upstream.close(); client.close();
     };
@@ -197,7 +226,7 @@ async function createBrowserProxy({ rawPort, port, registryFile, pages, resolveT
   await listen(publicServer, port);
   let previous = {}; try { previous = JSON.parse(readFileSync(registryFile, "utf8")); } catch {}
   for (const [owner, value] of Object.entries(previous)) if (/^[a-zA-Z0-9_-]{1,100}$/.test(owner) && Number.isInteger(value)) await ensure(owner, value);
-  return { port: publicServer.address().port };
+  return { port: publicServer.address().port, cancelInput };
 }
 
 module.exports = { createBrowserProxy };
