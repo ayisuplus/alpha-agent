@@ -24,7 +24,7 @@ await writeFile(join(root, "user-note.txt"), "USER_FILE_MUST_SURVIVE");
 const fixture = JSON.parse(await readFile(fixturePath, "utf8")), agent = join(workspace, "profile"); await mkdir(agent);
 for (const name of ["config.yml", "models.yml"]) await cp(join(fixture.workspace, "omp", name), join(agent, name));
 const token = randomBytes(24).toString("hex");
-const driver = Bun.spawn([join(root, "node_modules/electron/dist/electron.exe"), resolve("scripts/probe-app-update-driver.cjs")], { cwd: root, env: { ...process.env, HOME: workspace, USERPROFILE: workspace, PI_CODING_AGENT_DIR: agent, ALPHA_WORKSPACE_ROOT: workspace, ALPHA_SERVER_TOKEN: token, ALPHA_UPDATE_PROBE_ROOT: root, ALPHA_UPDATE_PROBE_EVIDENCE: directory, ALPHA_UPDATE_PROBE_PROJECT: project, ALPHA_UPDATE_PROBE_CANDIDATE: candidate }, stdout: "ignore", stderr: "pipe", windowsHide: true });
+const driver = Bun.spawn([join(root, "node_modules/electron/dist/electron.exe"), resolve("scripts/probe-app-update-driver.cjs")], { cwd: root, env: { ...process.env, HOME: workspace, USERPROFILE: workspace, PI_CODING_AGENT_DIR: agent, ALPHA_WORKSPACE_ROOT: workspace, ALPHA_BUN_PATH: join(root, "runtime/bun.exe"), ALPHA_SERVER_TOKEN: token, ALPHA_UPDATE_PROBE_ROOT: root, ALPHA_UPDATE_PROBE_EVIDENCE: directory, ALPHA_UPDATE_PROBE_PROJECT: project, ALPHA_UPDATE_PROBE_CANDIDATE: candidate }, stdout: "ignore", stderr: "pipe", windowsHide: true });
 let newPid: number | undefined;
 try {
   let handoff: { id: string; sessionId: string; nativeSessionId: string } | undefined;
