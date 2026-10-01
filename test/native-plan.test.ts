@@ -128,7 +128,7 @@ for (const action of ["approve-clear", "approve-keep", "approve-compact"] as con
     await f.child.promptAndWait("Warm context. " + "Keep verified user constraints and implementation context. ".repeat(300));
     const view = await f.draft(); const prior = await f.child.command({ type: "get_state" });
     f.execute(); await f.child.hostCommand("plan", { action }); await f.waitExecution();
-    for (let attempt = 0; attempt < 100 && !await stat(join(f.cwd, "execution-proof.txt")).then(() => true, () => false); attempt++) await Bun.sleep(50);
+    for (let attempt = 0; attempt < 100 && !await readFile(join(f.cwd, "execution-proof.txt"), "utf8").then(text => text === "NATIVE_WRITE_RESTORED", () => false); attempt++) await Bun.sleep(50);
     expect(await readFile(join(f.cwd, "execution-proof.txt"), "utf8")).toBe("NATIVE_WRITE_RESTORED");
     expect(f.executions.some(entry => entry.text.includes("Plan approved."))).toBe(true);
     expect(f.executions.at(-1)?.model).toBe("executor");
