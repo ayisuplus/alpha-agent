@@ -1,8 +1,9 @@
 import { tf, t } from "./ui-language";
 import { desktopStorage } from "./desktop-storage";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, CircleStop, FolderOpen, MoreHorizontal, Paperclip, X } from "lucide-react";
+import { ArrowUp, CircleStop, MoreHorizontal, Paperclip, X } from "lucide-react";
 import { NativeModelPicker } from "./NativeModelPicker";
+import { NativeWorkspacePicker } from "./NativeWorkspacePicker";
 import { sessionRequest, type NativeModel } from "./native-api";
 import type { SessionController } from "./useSession";
 import { clearSentDraft, draftVersion, promptText, readDraft, shouldSubmit, subscribeDraft, writeDraft, type ComposerDraft } from "./workbench-state";
@@ -121,10 +122,7 @@ export function NativeComposer({ session, models, model, thinking, onModel, onTh
       <button className="native-icon-button" aria-label={t("添加材料")} title={window.alpha?.choosePaths ? t("添加文件") : t("添加图片")} onClick={() => void pickFiles()}><Paperclip size={17} /></button>
       <input hidden multiple ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp,image/gif" aria-label={t("选择图片")} onChange={event => { const selected = [...event.target.files ?? []]; event.target.value = ""; void (async () => { for (const file of selected) await attach(file); })(); }} />
       <NativeModelPicker models={models} value={model} onChange={onModel} thinking={thinking} onThinkingChange={onThinking} onOpenSettings={onOpenSettings} disabled={sending} allowAuto={!!home} />
-      {home && <div className="native-home-directory" title={projectPath || "Alpha 工作区"}>
-        {window.alpha?.choosePaths ? <button className="native-icon-button" aria-label={t("选择工作目录")} title={t("选择文件夹")} onClick={() => void window.alpha!.choosePaths!("directory").then(paths => { if (paths[0]) setProjectPath?.(paths[0]); }, cause => session.setError(String(cause)))}><FolderOpen size={16} /></button> : <FolderOpen size={16} />}
-        <input aria-label={t("工作目录")} value={projectPath} onChange={event => setProjectPath?.(event.target.value)} placeholder={t("Alpha 工作区")} />
-      </div>}
+      {home && <NativeWorkspacePicker value={projectPath ?? ""} onChange={value => setProjectPath?.(value)} onError={session.setError} disabled={sending || session.busy} />}
       {!home && <details className="native-more"><summary aria-label={t("更多输入操作")} title={t("更多操作")}><MoreHorizontal size={18} /></summary><div onClick={event => event.currentTarget.parentElement?.removeAttribute("open")}>
         <button onClick={onOpenSettings}>{t("模型与账号设置")}</button>
         <button onClick={() => void invokeDesktopCommand("compact")}>{t("压缩上下文")}</button>

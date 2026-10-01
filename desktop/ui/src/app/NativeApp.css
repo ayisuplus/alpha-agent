@@ -154,7 +154,7 @@
 .native-stop { display: grid; place-items: center; width: 36px; color: var(--danger) !important; }
 .native-home-directory { display: flex; align-items: center; flex: 1; gap: 8px; min-width: 130px; max-width: 240px; padding: 0 8px; color: var(--text-muted); }
 .native-home-directory svg { flex-shrink: 0; }
-.native-home-directory input { flex: 1; min-width: 0; border: 0; background: transparent; font-size: var(--ui-caption) !important; }
+.native-home-directory select { flex: 1; width: 100%; min-width: 0; border: 0; background: transparent; color: var(--text-secondary); font-size: var(--ui-caption) !important; cursor: pointer; }
 .native-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .native-attachments > span { display: inline-flex; align-items: center; gap: 8px; padding: 4px 8px; max-width: 100%; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: var(--radius); font-size: var(--ui-caption); }
 .native-attachments img { width: 32px; height: 32px; object-fit: cover; border-radius: var(--radius-sm); }

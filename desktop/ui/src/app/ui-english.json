@@ -727,5 +727,12 @@
   "检测到中断的更新，可退出并恢复上一版本。": "An interrupted update was found. Exit and restore the previous version.",
   "恢复上一版本并重启": "Restore previous version and restart",
   "凭据已保存，忙碌的会话待重新加载。": "Credentials saved. Busy sessions need to reload.",
-  "凭据已保存，原生模型目录已刷新。": "Credentials saved. The native model catalog has refreshed."
+  "凭据已保存，原生模型目录已刷新。": "Credentials saved. The native model catalog has refreshed.",
+  "工作区": "Workspace",
+  "不在项目中工作": "Work without a project",
+  "使用 Alpha 默认工作目录": "Use Alpha's default working directory",
+  "已有项目": "Existing projects",
+  "添加文件夹…": "Add folder…",
+  "添加文件夹": "Add folder",
+  "输入本机文件夹的完整路径。": "Enter the full path to a local folder."
 }
