@@ -27,13 +27,26 @@ export function NativeExtensions({ kind, sessionId, onUse }: { kind: ExtensionRo
   const [inputDialog, setInputDialog] = useState<"oauth" | "features" | null>(null);
   const [inputValue, setInputValue] = useState("");
   useEffect(() => { void nativeApi<{ sessions: SessionItem[] }>("sessions").then(value => { setSessions(value.sessions); }, cause => setError(String(cause))); }, []);
-  const refresh = async () => { if (selected) { const value = await nativeApi<ExtensionCatalog>(`sessions/${selected}/host/catalog`); setCatalog(value); return value; } };
+  const applyCatalog = (value: ExtensionCatalog) => { setCatalog(value); setRow(previous => previous ? value.entries.find(entry => entry.id === previous.id && entry.kind === previous.kind) ?? null : null); };
+  const refresh = async () => { if (selected) { const value = await nativeApi<ExtensionCatalog>(`sessions/${selected}/host/catalog`); applyCatalog(value); return value; } };
   useEffect(() => {
     let current = true;
     setRow(null); setCatalog(null);
     if (selected) void nativeApi<ExtensionCatalog>(`sessions/${selected}/host/catalog`).then(value => { if (current) setCatalog(value); }, cause => { if (current) setError(String(cause)); });
     return () => { current = false; };
   }, [selected, kind]);
+  useEffect(() => {
+    if (!selected || kind !== "mcp" || busy) return;
+    let current = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try { const value = await nativeApi<ExtensionCatalog>(`sessions/${selected}/host/catalog`); if (current) applyCatalog(value); }
+      catch (cause) { if (current) setError(String(cause)); }
+      finally { if (current) timer = setTimeout(() => void poll(), 2000); }
+    };
+    timer = setTimeout(() => void poll(), 2000);
+    return () => { current = false; clearTimeout(timer); };
+  }, [selected, kind, busy]);
   async function run(action: string, input: Record<string, unknown> = {}) {
     if (!selected) { setError("请选择一个会话，读取它实际加载的扩展。"); return; }
     setBusy(true); setError(""); setNotice("");
@@ -93,7 +106,7 @@ export function NativeExtensions({ kind, sessionId, onUse }: { kind: ExtensionRo
       {kind === "plugin" ? <><button disabled={busy || !name} onClick={() => void run("install", { name })}>{t("安装原生包")}</button><button disabled={busy} onClick={() => void run("doctor")}>{t("原生诊断")}</button><p className="native-muted">{t("OpenCode JS/npm 插件接口需要适配，不能直接执行。npm 包与本地链接保存到用户目录；name@marketplace 可安装到项目。")}</p><Field label={t("原生插件市场来源")}><input aria-label={t("插件市场来源")} value={path} onChange={event => setPath(event.target.value)} placeholder={t("本地市场目录或原生支持的仓库来源")} /><button disabled={busy || !path} onClick={() => void run("marketplace", { path })}>{t("添加市场")}</button><button disabled={busy} onClick={() => void run("marketplaces")}>{t("查看市场")}</button></Field></> : <Field label={kind === "skill" ? t("Skill 正文") : t("原生 MCP 配置（JSON）")} stacked><textarea aria-label={t("扩展内容")} rows={14} spellCheck={false} value={content} onChange={event => setContent(event.target.value)} /><button disabled={busy || !name || !content} onClick={commit}>{t("保存")}</button></Field>}
       {kind === "skill" && references.length > 0 && <Field label={t("参考材料")}>{references.map(reference => <button key={reference} disabled={busy} onClick={() => void run("read", { id: row?.id, reference })}>{reference}</button>)}</Field>}
       {kind === "mcp" && row && <><button disabled={busy} onClick={() => void run("refresh")}>{t("刷新工具列表")}</button><button disabled={busy} onClick={() => void run("oauth")}>{t("OAuth 授权")}</button><button onClick={() => void run("oauth-status").then(value => { const url = (value as { url?: string })?.url; if (url) void window.alpha?.openExternal?.(url); })}>{t("授权状态 / 打开授权页")}</button><button onClick={() => { setInputDialog("oauth"); setInputValue(""); }}>{t("输入回调")}</button><button onClick={() => void run("oauth-cancel")}>{t("取消授权")}</button></>}
-      {row && kind !== "skill" && <details open><summary>{t("功能、工具与资源")}</summary><pre className="native-code-block">{JSON.stringify(row.details, null, 2)}</pre>{kind === "mcp" && ((row.details as { resources?: Array<{ uri: string; name?: string }> }).resources ?? []).map(resource => <button key={resource.uri} onClick={() => void run("resource", { uri: resource.uri })}>{resource.name ?? resource.uri}</button>)}
+      {row && kind !== "skill" && <details open><summary>{t("功能、工具与资源")}</summary><pre className="native-code-block">{JSON.stringify(row.details, null, 2)}</pre>{kind === "mcp" && ((row.details as { resources?: { resources?: Array<{ uri: string; name?: string }> } }).resources?.resources ?? []).map(resource => <button key={resource.uri} onClick={() => void run("resource", { uri: resource.uri })}>{resource.name ?? resource.uri}</button>)}
         {kind === "plugin" && row.scope !== "bundled" && <><Field label={t("配置项")}><input aria-label={t("插件配置键")} placeholder={t("配置键")} value={path} onChange={event => setPath(event.target.value)} /><input aria-label={t("插件配置值")} type="password" placeholder={t("JSON 值")} value={content} onChange={event => setContent(event.target.value)} /><button disabled={busy} onClick={() => { try { void run("setting", { key: path, value: JSON.parse(content) }); } catch (cause) { setError(String(cause)); } }}>{t("保存配置")}</button></Field><button onClick={() => { setInputDialog("features"); setInputValue(((row.details as { features?: string[] }).features ?? []).join(", ")); }}>{t("选择功能")}</button></>}
       </details>}
       {output !== null && <details open><summary>{t("操作结果")}</summary><pre className="native-code-block">{JSON.stringify(output, null, 2)}</pre></details>}

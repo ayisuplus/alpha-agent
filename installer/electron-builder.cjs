@@ -10,7 +10,10 @@ module.exports = {
   electronVersion: "41.2.2",
   electronDist: `${portable}/node_modules/electron/dist`,
   files: ["main.cjs", "package.json"],
-  extraResources: [{ from: portable, to: "alpha", filter: ["**/*"] }],
+  extraResources: [
+    { from: portable, to: "alpha", filter: ["**/*", "!node_modules/**"] },
+    { from: `${portable}/node_modules`, to: "alpha/node_modules", filter: ["**/*"] },
+  ],
   win: { target: ["nsis"], icon: "icon.ico", signExecutable: false },
   nsis: { oneClick: true, perMachine: false, installerIcon: "icon.ico", deleteAppDataOnUninstall: false, runAfterFinish: false },
 };

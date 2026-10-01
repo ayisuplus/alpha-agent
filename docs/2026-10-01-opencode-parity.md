@@ -28,7 +28,7 @@
 | 1.3 | Skill 本地导入并调用 | 原生 scanSkillsFromDir 验证，复制到原生目录，原生 /skill: | native-extensions.test：导入后的方法正文进入本机模型请求 |
 | 1.4 | Skill 编辑与内置复制 | 原生 frontmatter 解析，旧内容比较，用户/项目目录 | 正文保存及旧内容冲突拒绝通过；生产 Electron 项目 Skill 连续两次保存及实际重载通过；内置复制有入口，UI 专项待做 |
 | 1.5 | MCP 添加编辑删除启停 | 原生 config-writer / getMCPConfigPath；外部来源只读 | native-extensions.test 三种配置添加；编辑/删除专项待做 |
-| 1.6 | MCP 状态、测试、重连、工具资源刷新 | 当前 MCPManager 和原生 xd:// 路由 | stdio/HTTP/SSE 连通与资源读取、重连；实际模型调用通过 |
+| 1.6 | MCP 状态、测试、重连、工具资源刷新 | 当前 MCPManager 和原生 xd:// 路由 | stdio/HTTP/SSE 连通与资源读取、重连；真实 Microsoft Learn HTTP 服务的原生工具调用、重连和刷新通过；已补全桌面自动更新与原生 resources 对象读取 |
 | 1.7 | MCP OAuth、取消与手动回调 | 原生 discoverOAuthEndpoints / MCPOAuthFlow / AuthStorage | 本机 metadata→PKCE→回调→token 入原生凭据库及取消通过；外部服务授权待验收 |
 | 1.8 | 插件安装、链接、更新卸载、诊断 | 原生 PluginManager | 本地插件加载、禁用后重启、链接更新、卸载且源文件保留通过；实际本机 marketplace 的项目安装、禁用/启用冷恢复、1.1 更新与卸载通过；公共 registry 待外部验收 |
 | 1.9 | 插件配置、功能、来源许可错误 | 原生 settings/features/doctor，SDK 加载错误 | secret 配置不出现在目录响应；其它桌面操作专项待验收 |
@@ -107,5 +107,9 @@
 - `bun run check`、`bun run build:desktop-ui`、`bun run validate:skills` 通过，30 个 Skill、4833 description 字符；没有修改 Skill 正文。UI 构建的 bundle 大小提示保留，未把它当构建失败。
 - 最终发行前全套复核：137 pass/0 fail、970 assertions、349.41 秒，包含新增 goal/goal_paused/vibe 的实际原生会话模式冷恢复互斥专项。安装包保留完整可校验 payload；安装入口启动随包 Electron，使浏览器宿主及后续升级使用随包运行时。
 - 首次全包校验拒绝了 Office 探针生成的 LibreOffice 内嵌 Python 字节码缓存（只有新增缓存，无修改或丢失）；给两个 soffice 子进程设置 `PYTHONDONTWRITEBYTECODE=1`，避免运行时修改发行文件。完整校验改为 8 个流式 SHA256 读取，保留逐文件覆盖并限制内存；相关更新/办公/导入边界复核 29 pass/0 fail、218 assertions、82.09 秒。失败的 staging 包不作为交付物。
+- 外部服务专项 `ALPHA_EXTERNAL_MCP_OK`：按照 [Microsoft Learn 官方 MCP 文档](https://learn.microsoft.com/en-us/training/support/mcp-developer-reference) 配置公开 HTTP 端点，用实际 OMP MCPManager 连接并经原生 write→xd 路由调用 `microsoft_docs_search`，得到真实 PowerShell 官方文档，重连和刷新通过。本机模型仅负责固定分派，未发送用户项目内容；此服务不要求 OAuth，不代表外部账号授权验收。
+- 实际 MCP 详情 UI 专项发现原生资源返回是 `{resources, templates}`，数组假设会导致 React 页面空白；已按原生结构修复。页面每两秒读取当前会话目录，刷新同步已打开条目的工具和资源；实际生产 Electron 详情已显示 Microsoft Learn 工具。
+- 第一版安装器资源合并触发 electron-builder 默认排除 node_modules，完整 payload 校验拒绝发布。恢复独立 node_modules 文件集合并保留随包 Electron，目录构建逐文件复核 added/removed/changed 均为 0。最终安装包重新构建，不交付失败的 staging 包。
+- 完整发行包生产更新专项 `ALPHA_APP_UPDATE_OK`：实际 main/preload→独立助手→新桌面渲染握手→原生会话、草稿、英文偏好与用户文件恢复通过。测试旧包采用同一代码的人工版本标识 0.2.99，新包为真实 0.3.0；证明当前升级机制，不能冒充旧 0.2.1/0.2.0 迁移验收。
 
 核对路径均为当前依赖 `node_modules/@oh-my-pi/pi-coding-agent/src/`；SDK 结果为权威运行状态，配置目录只表示已配置。忙碌时的配置修改必须显示待生效，真正刷新并确认后才标记已生效。

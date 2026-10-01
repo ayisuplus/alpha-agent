@@ -21,7 +21,7 @@ async function until(condition, detail) { for (let count = 0; count < 600; count
 const click = (page, label) => evaluate(page, `const node = [...document.querySelectorAll('button')].find(node => !node.disabled && node.textContent.trim() === ${JSON.stringify(label)}); if (!node) throw new Error('Missing button: ' + ${JSON.stringify(label)}); node.click();`);
 const english = require("../desktop/ui/src/app/ui-english.json");
 const input = (page, label, text) => evaluate(page, `const node=document.querySelector('[aria-label='+${JSON.stringify(JSON.stringify(label))}+']'); if (!node) throw new Error('Missing field: '+${JSON.stringify(label)}); Object.getOwnPropertyDescriptor(node.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(node,${JSON.stringify(text)}); node.dispatchEvent(new Event('input',{bubbles:true}));`);
-const result = { electron: process.versions.electron, productionMain: true, windows: false, sharedSession: false, language: false, preferences: false, restart: false, definitions: false, skillEditor: false, lspConfiguration: false, logs: false, closeOne: false };
+const result = { electron: process.versions.electron, productionMain: true, windows: false, sharedSession: false, language: false, preferences: false, restart: false, definitions: false, skillEditor: false, mcpTools: false, lspConfiguration: false, logs: false, closeOne: false };
 require("../desktop/main.cjs");
 app.whenReady().then(async () => {
   try {
@@ -66,6 +66,11 @@ app.whenReady().then(async () => {
     await input(first, english["语言服务配置正文"], '{"servers":{}}');
     await evaluate(first, `const editor=document.querySelector('textarea[aria-label="${english["语言服务配置正文"]}"]'); const node=[...editor.closest('details').querySelectorAll('button')].find(node=>!node.disabled&&node.textContent.trim()===${JSON.stringify(english["保存配置"])});if(!node)throw new Error('Missing LSP save');node.click();`);
     await until(() => { try { return JSON.parse(readFileSync(path.join(project,".omp/lsp.json"),"utf8")).servers !== undefined; } catch { return false; } }, "native LSP file saved"); result.lspConfiguration = true;
+    await click(first, "MCP"); await until(() => evaluate(first, `return !!document.querySelector('textarea[aria-label="${english["扩展内容"]}"]');`), "MCP editor");
+    await input(first, english["扩展名称"], "desktop-learn"); await input(first, english["扩展内容"], '{"type":"http","url":"https://learn.microsoft.com/api/mcp"}'); await click(first, english["保存"]);
+    await until(() => evaluate(first, "return [...document.querySelectorAll('button')].some(node=>!node.disabled&&node.textContent.trim()==='desktop-learn');"), "MCP server saved"); await click(first, "desktop-learn");
+    await until(() => evaluate(first, "return [...document.querySelectorAll('.native-code-block')].some(node=>node.textContent.includes('microsoft_docs_search'));"), "external native tools appear in open MCP details");
+    await click(first, english["刷新工具列表"]); await until(() => evaluate(first, "return [...document.querySelectorAll('.native-code-block')].some(node=>node.textContent.includes('microsoft_docs_search'));"), "MCP details refresh"); result.mcpTools = true;
     await click(first, english["关于"]); await click(first, english["读取日志目录"]);
     await until(() => evaluate(first, "return [...document.querySelectorAll('.settings-content button')].some(node=>/^omp\\.[\\d-]+\\.\\d+\\.log$/.test(node.textContent));"), "native persistent logs"); result.logs = true;
     await until(() => evaluate(second, "return !!document.querySelector('.native-plan-bar button:not(:disabled)') && !document.body.textContent.includes('Operation incomplete') && !document.body.textContent.includes('Session not open');"), "shared renderer recovers native runtime reloads without an error");
@@ -78,6 +83,12 @@ app.whenReady().then(async () => {
     const remaining = await state(second); result.closeOne = remaining.data?.sessionId === latest.data?.sessionId;
     if (Object.values(result).some(value => value === false)) throw new Error("Desktop assertions failed");
     writeFileSync(path.join(evidence, "desktop-windows-result.json"), JSON.stringify(result, null, 2)); console.log("ALPHA_DESKTOP_WINDOWS_OK " + JSON.stringify(result));
-  } catch (error) { writeFileSync(path.join(evidence, "desktop-windows-failure.txt"), String(error.stack || error)); console.error(error); process.exitCode = 1; }
-  finally { app.quit(); }
+  } catch (error) {
+    writeFileSync(path.join(evidence, "desktop-windows-failure.txt"), String(error.stack || error));
+    for (const page of pages()) {
+      try { writeFileSync(path.join(evidence, `desktop-windows-diagnostic-${page.id}.json`), JSON.stringify(await evaluate(page, "const id=window.alpha.storage('getItem','alpha-last-session').value; const response=await fetch('/api/native/sessions/'+id+'/host/catalog',{headers:{'x-alpha-token':await window.alpha.serverToken()}}); return {text:document.querySelector('.settings-content')?.innerText,catalog:await response.json()};"), null, 2)); } catch {}
+    }
+    writeFileSync(path.join(evidence, "desktop-windows-result.json"), JSON.stringify({ ...result, error: String(error) }, null, 2)); console.error(error); process.exitCode = 1;
+  }
+  finally { const code=process.exitCode ?? 0; app.once("will-quit",()=>app.exit(code)); app.quit(); }
 });

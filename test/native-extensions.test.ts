@@ -75,6 +75,13 @@ test("real OMP loads imported skill, invokes MCP over stdio/HTTP/SSE, and manage
     expect(auth.status).toBe("cancelled");
     const receipt = await child!.promptAndWait("/skill:imported-method Verify the imported method and use fixture_http echo.");
     expect(receipt.status).toBe("completed"); expect(skillObserved).toBe(true); expect(toolObserved).toBe(true);
+    await child!.hostCommand("extension", { kind: "mcp", action: "toggle", name: "fixture_stdio", enabled: false });
+    await child!.hostCommand("extension", { kind: "mcp", action: "remove", name: "fixture_sse", scope: "project" });
+    await child!.stop(); await start();
+    catalog = await child!.hostCommand("catalog") as ExtensionCatalog;
+    expect(catalog.entries.find(row => row.name === "fixture_stdio")?.enabled).toBe(false);
+    expect(catalog.entries.find(row => row.name === "fixture_stdio")?.loaded).toBe(false);
+    expect(catalog.entries.some(row => row.name === "fixture_sse")).toBe(false);
     await child!.hostCommand("extension", { kind: "plugin", action: "toggle", name: "alpha-native-test-plugin", enabled: false });
     await child!.stop(); await start();
     catalog = await child!.hostCommand("catalog") as ExtensionCatalog;
