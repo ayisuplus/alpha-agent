@@ -1,4 +1,4 @@
-const { app, BaseWindow, dialog, ipcMain, Menu, Notification, screen, shell: electronShell, WebContentsView } = require("electron");
+const { app, BaseWindow, dialog, ipcMain, Menu, nativeTheme, Notification, screen, shell: electronShell, WebContentsView } = require("electron");
 const { spawn } = require("node:child_process");
 const { mkdirSync, readFileSync, realpathSync, writeFileSync } = require("node:fs");
 const { connect, createServer } = require("node:net");
@@ -332,10 +332,22 @@ function installMenu() {
   ]));
 }
 
+// The window canvas follows the workbench theme so a dark start does not flash white.
+function windowBackground() {
+  let theme = "light";
+  try { theme = desktopState.getItem("alpha-theme") ?? "light"; } catch {}
+  return theme === "dark" || (theme === "system" && nativeTheme.shouldUseDarkColors) ? "#060B14" : "#ECEFF1";
+}
+function syncWindowBackgrounds() {
+  const color = windowBackground();
+  for (const item of workbenchWindows.values()) { item.window.setBackgroundColor(color); item.shell.setBackgroundColor(color); }
+}
+
 async function createDesktopWindow(port, restore = false) {
   const saved = restore ? savedWindowState() : null;
-  const nextWindow = new BaseWindow({ width: 1460, height: 900, ...(saved ? { x: saved.x, y: saved.y, width: saved.width, height: saved.height } : {}), minWidth: 1080, minHeight: 620, title: "Alpha", backgroundColor: "#f8fafc", autoHideMenuBar: true });
+  const nextWindow = new BaseWindow({ width: 1460, height: 900, ...(saved ? { x: saved.x, y: saved.y, width: saved.width, height: saved.height } : {}), minWidth: 1080, minHeight: 620, title: "Alpha", backgroundColor: windowBackground(), autoHideMenuBar: true });
   const nextShell = new WebContentsView({ webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  nextShell.setBackgroundColor(windowBackground());
   nextWindow.contentView.addChildView(nextShell);
   workbenchWindows.set(nextShell.webContents.id, { window: nextWindow, shell: nextShell });
   window = nextWindow; shell = nextShell;
@@ -375,6 +387,7 @@ app.whenReady().then(async () => {
     const port = await startSidecar();
     sidecarPort = port;
     installMenu();
+    nativeTheme.on("updated", syncWindowBackgrounds);
     ipcMain.handle("alpha:new-window", event => { if (!workbenchWindows.has(event.sender.id)) throw new Error("Unauthorized window"); return createDesktopWindow(sidecarPort); });
     let updateInstalling = false;
     ipcMain.handle("alpha:install-update", async (event, id) => {
@@ -496,7 +509,7 @@ app.whenReady().then(async () => {
     ipcMain.on("alpha:storage", (event, operation, key, value) => {
       const owner = workbenchWindows.get(event.sender.id); const window = owner?.window; const shell = owner?.shell;
       if (!owner || !["getItem", "setItem", "removeItem"].includes(operation)) { event.returnValue = { error: "Invalid desktop storage request" }; return; }
-      try { event.returnValue = { value: desktopState[operation](key, value) }; if (operation !== "getItem" && key === "alpha-ui-preferences") installMenu(); if (operation !== "getItem") for (const item of workbenchWindows.values()) if (item !== owner) item.shell.webContents.send("alpha:storage-changed", { key, value: operation === "removeItem" ? null : value }); }
+      try { event.returnValue = { value: desktopState[operation](key, value) }; if (operation !== "getItem" && key === "alpha-ui-preferences") installMenu(); if (operation !== "getItem" && key === "alpha-theme") syncWindowBackgrounds(); if (operation !== "getItem") for (const item of workbenchWindows.values()) if (item !== owner) item.shell.webContents.send("alpha:storage-changed", { key, value: operation === "removeItem" ? null : value }); }
       catch (error) { event.returnValue = { error: error.message }; }
     });
     ipcMain.handle("alpha:server-token", event => {

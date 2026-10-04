@@ -318,7 +318,7 @@ export function NativeThread({ session, sessionInfo, models, onOpenFile, onOpenS
   const state = session.state;
   const loading = !state && !session.terminalActive && !session.hostNotice;
   return <>
-    <header className="native-header">
+    <header className="native-header" data-running={state?.isStreaming ? "" : undefined}>
       <div><strong>{sessionInfo.title}</strong><small title={sessionInfo.cwd}>{sessionInfo.cwd.split(/[\\/]/).filter(Boolean).at(-1)}</small></div>
       <div className="native-header-actions">
         <details className="native-more"><summary aria-label={t("会话操作")} title={t("会话操作")}><MoreHorizontal size={18} /></summary><div onClick={event => event.currentTarget.parentElement?.removeAttribute("open")}>

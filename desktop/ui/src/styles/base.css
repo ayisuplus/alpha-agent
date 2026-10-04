@@ -25,6 +25,7 @@ code, pre, kbd { font-family: var(--font-mono); }
 time, .numeric { font-variant-numeric: tabular-nums; }
 
 * { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+:hover { scrollbar-color: color-mix(in srgb, var(--accent-fill) 70%, var(--border-strong)) transparent; }
 
 ::selection { background: var(--bg-highlight); color: var(--text); }
 

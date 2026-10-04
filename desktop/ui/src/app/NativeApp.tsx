@@ -84,7 +84,7 @@ export function NativeApp() {
   useEffect(() => { desktopStorage.setItem("alpha-theme", theme); document.documentElement.dataset.alphaTheme = theme; }, [theme]);
   useEffect(() => {
     document.documentElement.lang = preferences.language === "en" ? "en" : "zh-CN";
-    const fonts = { segoe: '"Segoe UI", "Microsoft YaHei UI", sans-serif', yahei: '"Microsoft YaHei UI", "Segoe UI", sans-serif', system: "" };
+    const fonts = { segoe: '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif', yahei: '"Microsoft YaHei UI", "Segoe UI", sans-serif', system: "" };
     if (preferences.font === "system") document.documentElement.style.removeProperty("--font-sans");
     else document.documentElement.style.setProperty("--font-sans", fonts[preferences.font]);
   }, [preferences]);

@@ -100,7 +100,7 @@ export function NativeComposer({ session, models, model, thinking, onModel, onTh
     try { const paths = await window.alpha.choosePaths("files"); update({ ...latest.current, paths: [...new Set([...latest.current.paths, ...paths])] }); }
     catch (cause) { session.setError(String(cause)); }
   };
-  return <div className={`native-compose ${home ? "native-home-composer" : ""}`}
+  return <div className={`native-compose ${home ? "native-home-composer" : ""}`} data-streaming={session.state?.isStreaming ? "" : undefined}
     onDragOver={event => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }}
     onDrop={event => { event.preventDefault(); void (async () => { for (const file of event.dataTransfer.files) await attach(file); })(); }}>
     {session.widgets.filter(block => block.key !== "alpha-header").map(block => block.lines.map((line, index) => <div className="native-tool-call" key={`${block.key}:${index}`}>{line}</div>))}
