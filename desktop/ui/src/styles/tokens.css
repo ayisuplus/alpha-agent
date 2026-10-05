@@ -1,0 +1,141 @@
+/* Alpha · Pearl Optics: pearl-white surfaces lit by sky blue. Depth is expressed with light, not thickness. */
+:root {
+  color-scheme: light;
+
+  /* Signature hues. Sky fills are for live things only: the primary action, focus, running state and selection marks. */
+  --sky-100: #E0F2FE;
+  --sky-200: #BAE6FD;
+  --sky-300: #7DD3FC;
+  --sky-400: #38BDF8;
+  --sky-500: #0EA5E9;
+  --sky-600: #0284C7;
+  --pearl: #FAFAF7;
+
+  /* Layer 1 · back: canvas and sidebar sit behind the work. */
+  --bg-app: light-dark(#ECEFF1, #060B14);
+  --bg-sidebar: light-dark(rgb(243 245 244 / 78%), rgb(10 17 29 / 82%));
+  /* Layer 2 · work surface. */
+  --bg-surface: light-dark(var(--pearl), #0E1726);
+  /* Layer 3 · operation surfaces and menus. */
+  --bg-elevated: light-dark(#FDFDFB, #142033);
+  --bg-hover: light-dark(rgb(15 27 42 / 5%), rgb(125 211 252 / 8%));
+  --bg-active: light-dark(rgb(15 27 42 / 7%), rgb(125 211 252 / 12%));
+  --bg-inset: light-dark(#F0F2F1, #0A121E);
+  --bg-highlight: light-dark(rgb(56 189 248 / 24%), rgb(56 189 248 / 32%));
+
+  --border-subtle: light-dark(rgb(15 27 42 / 8%), rgb(125 211 252 / 10%));
+  --border: light-dark(rgb(15 27 42 / 14%), rgb(125 211 252 / 18%));
+  --border-strong: light-dark(#94A3B8, #4A6079);
+  --hairline-glow: light-dark(rgb(56 189 248 / 38%), rgb(125 211 252 / 40%));
+
+  /* Light text is deep ink; dark text is pearl white. Every pair is at least 4.5:1 on its surfaces. */
+  --text: light-dark(#0F1B2A, #F4F3EE);
+  --text-secondary: light-dark(#475569, #B8C4D2);
+  --text-muted: light-dark(#526273, #8FA0B3);
+  --text-faint: light-dark(#5B6B7C, #8394A8);
+
+  /* --accent is the text-safe sky (links, small labels); --accent-fill is the luminous sky itself. */
+  --accent: light-dark(#0369A1, var(--sky-300));
+  --accent-strong: light-dark(#075985, var(--sky-200));
+  --accent-deep: light-dark(#075985, var(--sky-200));
+  --accent-fill: var(--sky-400);
+  --accent-gradient: linear-gradient(135deg, var(--sky-300), var(--sky-400) 52%, var(--sky-500));
+  --accent-bg: light-dark(rgb(56 189 248 / 12%), rgb(56 189 248 / 14%));
+  --accent-border: light-dark(rgb(2 132 199 / 55%), rgb(125 211 252 / 55%));
+  --on-accent: #082F49;
+  --on-accent-soft: var(--on-accent);
+  --focus-color: light-dark(var(--sky-600), var(--sky-300));
+
+  /* Light. */
+  --sky-glow: light-dark(rgb(56 189 248 / 30%), rgb(56 189 248 / 38%));
+  --sky-glow-soft: light-dark(rgb(56 189 248 / 16%), rgb(56 189 248 / 20%));
+  --glow-sky-sm: 0 0 0 1px var(--hairline-glow), 0 0 12px var(--sky-glow-soft);
+  --glow-sky: 0 0 0 1px var(--hairline-glow), 0 6px 22px var(--sky-glow);
+  --aurora-a: light-dark(rgb(56 189 248 / 16%), rgb(56 189 248 / 14%));
+  --aurora-b: light-dark(rgb(186 230 253 / 45%), rgb(14 165 233 / 9%));
+  --aurora: radial-gradient(1100px 620px at 92% -8%, var(--aurora-a), transparent 62%), radial-gradient(900px 560px at -6% 108%, var(--aurora-b), transparent 60%);
+
+  /* Pearl sheen: a near-neutral iridescence laid over elevated surfaces. */
+  --sheen-a: light-dark(rgb(255 255 255 / 85%), rgb(125 211 252 / 7%));
+  --sheen-b: light-dark(rgb(224 242 254 / 42%), rgb(255 255 255 / 2%));
+  --sheen-c: light-dark(rgb(252 231 243 / 24%), rgb(244 114 182 / 3%));
+  --sheen-pearl: linear-gradient(135deg, var(--sheen-a), var(--sheen-b) 40%, var(--sheen-c) 72%, var(--sheen-a));
+  --surface-raised: var(--sheen-pearl), var(--bg-elevated);
+  --surface-glint: light-dark(rgb(255 255 255 / 90%), rgb(125 211 252 / 10%));
+
+  /* Glass is reserved for floating layers. */
+  --glass-bg: light-dark(rgb(253 253 251 / 80%), rgb(20 32 51 / 80%));
+  --glass-filter: blur(20px) saturate(160%);
+  --scrim: light-dark(rgb(15 27 42 / 28%), rgb(2 6 12 / 55%));
+
+  --shadow-contact: light-dark(rgb(15 27 42 / 8%), rgb(0 0 0 / 40%));
+  --shadow-ambient: light-dark(rgb(15 27 42 / 7%), rgb(0 0 0 / 34%));
+
+  --success: light-dark(#166534, #86EFAC);
+  --success-bg: light-dark(#F0FDF4, #0F2A22);
+  --success-border: light-dark(#BBF7D0, #2F5F48);
+  --warning: light-dark(#92400E, #FCD34D);
+  --warning-bg: light-dark(#FFFBEB, #2B2414);
+  --warning-border: light-dark(#FDE68A, #6B5A2E);
+  --danger: light-dark(#B91C1C, #FCA5A5);
+  --danger-bg: light-dark(#FEF2F2, #2E1820);
+  --danger-border: light-dark(#FECACA, #74414D);
+  --user-bubble-bg: light-dark(#F1F3F2, #172538);
+  --user-bubble-border: var(--border-subtle);
+  --diff-add-bg: var(--success-bg);
+  --diff-add-gutter: light-dark(#DCFCE7, #1D4A35);
+  --diff-del-bg: var(--danger-bg);
+  --diff-del-gutter: light-dark(#FEE2E2, #57303B);
+  /* Same value as presets/terminal-themes/alpha-sky.json export.pageBg, so xterm and its frame match. */
+  --terminal-bg: #191F28;
+
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "Microsoft YaHei UI", monospace;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 21px;
+  --text-2xl: 28px;
+  --text-display: clamp(28px, 3vw, 36px);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --radius-sm: 10px;
+  --radius: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-pill: 999px;
+  --shadow-low: inset 0 1px 0 var(--surface-glint), 0 1px 2px var(--shadow-contact);
+  --shadow-inset: inset 0 1px 2px var(--shadow-contact);
+  --shadow-card: inset 0 1px 0 var(--surface-glint), 0 1px 2px var(--shadow-contact), 0 12px 32px var(--shadow-ambient);
+  --shadow-pop: inset 0 1px 0 var(--surface-glint), 0 4px 10px var(--shadow-contact), 0 24px 56px var(--shadow-ambient);
+  --shadow-lg: var(--shadow-pop);
+  --focus-ring: 0 0 0 2px var(--bg-surface), 0 0 0 4px var(--focus-color), 0 0 14px 2px var(--sky-glow-soft);
+
+  --ease-out: cubic-bezier(.16, 1, .3, 1);
+  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+
+  --sidebar-width: 248px;
+  --sidebar-rail: 56px;
+  --thread-min: 420px;
+  --preview-min: 320px;
+  --splitter: 6px;
+}
+:root[data-alpha-theme="dark"] { color-scheme: dark; }
+@media (prefers-color-scheme: dark) { :root[data-alpha-theme="system"] { color-scheme: dark; } }
+
+/* The sky orbit used by running indicators; registered so the angle can animate. */
+@property --alpha-angle { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+@keyframes alpha-pulse { 0%, 100% { box-shadow: 0 0 0 0 var(--sky-glow); } 50% { box-shadow: 0 0 0 4px transparent; } }
+@keyframes alpha-scan { from { background-position: -70% 0; } to { background-position: 170% 0; } }
+@keyframes alpha-orbit { to { --alpha-angle: 360deg; } }
+@keyframes alpha-spin-slow { to { transform: rotate(360deg); } }
+@keyframes alpha-pop { from { opacity: 0; transform: translateY(4px) scale(.98); } }

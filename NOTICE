@@ -1,0 +1,16 @@
+Alpha
+Copyright 2026 Alpha Contributors
+
+Alpha's own code is licensed under Apache-2.0 (see LICENSE).
+Third-party components retain their respective licenses:
+
+- OMP 18.4.3: MIT; see node_modules/@oh-my-pi/*/LICENSE.
+- Tianshu-harness adaptations: Apache-2.0; see licenses/Tianshu-NOTICE.txt
+  and licenses/Tianshu-APACHE-2.0.txt. Original attribution is retained.
+- Skill method sources and retained license texts:
+  presets/alpha-plugin/SOURCES.md.
+- Electron, LibreOffice and npm dependencies: licenses distributed in
+  their corresponding runtime and dependency directories.
+
+This license does not relicense third-party code, user documents,
+generated content, model weights, or external services.

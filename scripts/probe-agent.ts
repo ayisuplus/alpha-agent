@@ -8,7 +8,7 @@ process.env.PI_STRICT_EDIT_MODE = "1";
 const { createAgentSession, discoverAuthStorage, ModelRegistry, SessionManager } = await import("@oh-my-pi/pi-coding-agent");
 const authStorage = await discoverAuthStorage();
 const modelRegistry = new ModelRegistry(authStorage);
-const model = modelRegistry.getAvailable().find(item => item.provider === "alibaba-token-plan" && item.id === "qwen3.6-flash");
+const model = modelRegistry.getAvailable().find(item => item.provider === "xiaomi-token-plan-cn" && item.id === "mimo-v2.6-flash");
 if (!model) throw new Error("Probe model is unavailable");
 
 const workspace = await mkdtemp(join(tmpdir(), "alpha-agent-probe-"));

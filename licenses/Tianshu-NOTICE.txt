@@ -1,0 +1,17 @@
+Alpha Agent
+Copyright 2026 Alpha Contributors
+
+This product includes software adapted from the Tianshu-harness project
+(version 3.27.0), Copyright 2025-2026 Tianshu Contributors, licensed under the
+Apache License, Version 2.0 (see licenses/Tianshu-APACHE-2.0.txt).
+
+Adapted source files:
+  src/native/tianshu/claims.ts
+    adapted from src/agent/claim-audit.ts
+  src/native/tianshu/change-class.ts
+    adapted from src/agent/change-classification.ts
+
+Both adaptations are distributed under the Apache License, Version 2.0. The
+license text is included at licenses/Tianshu-APACHE-2.0.txt; the upstream
+NOTICE obligations are satisfied by this file (Tianshu-harness ships no
+separate NOTICE file).

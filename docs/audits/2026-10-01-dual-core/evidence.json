@@ -1,0 +1,91 @@
+{
+  "schema": 1,
+  "recordedAt": "2026-10-01T07:59:30.7821213Z",
+  "baseRevision": "ee2c8a59db3178e3dc805a9edfd94ca35d977165",
+  "ompVersion": "18.4.3",
+  "tianshuReferenceRevision": "a6aeec3c06d56f1689c9404a307be739d7ae4aba",
+  "previewKind": "real-alpha-and-omp-with-isolated-loopback-model",
+  "frontendAssets": [
+    "index-C-NzLcng.js",
+    "index-BvpzATEi.css"
+  ],
+  "sources": [
+    {
+      "path": "desktop/ui/src/styles/tokens.css",
+      "sha256": "ceefe4b90c108aa213387064627b3c702767a4f25fea5031b96f1b389544efb6"
+    },
+    {
+      "path": "desktop/ui/src/app/NativeApp.css",
+      "sha256": "657c4c98924ffe7b88acbc1bec1346a88707f855944e6e775c80f1eedd38be02"
+    },
+    {
+      "path": "desktop/ui/src/app/NativeHome.tsx",
+      "sha256": "053ba4898f4b0879c615f39640163ef8457a9ae591228aa8e5729c69ffe5ee3f"
+    },
+    {
+      "path": "desktop/ui/src/app/NativeSidebar.tsx",
+      "sha256": "ba24b8c5c0b821aee25a9d6f3d1cc018ac8eaa36898985e7849b9314cb5de8ea"
+    },
+    {
+      "path": "desktop/ui/src/app/ui-english.json",
+      "sha256": "20c145c7e1ec3a567f37fc1e46e0ea3ef02ca01dfd05a929d4f2feb7f3b94175"
+    },
+    {
+      "path": "scripts/probe-workbench-ui.ts",
+      "sha256": "b1e3bb5e0f427943c4a2865125eb7c7d28431b54ce7f4a34de14b6fce18d39af"
+    }
+  ],
+  "screenshots": [
+    {
+      "path": "baseline-home.png",
+      "sha256": "150e303b048810bc1dc38b433fc4879e1ca0d5b17e7431e96348e7ce8efda66b"
+    },
+    {
+      "path": "implemented-dark-home.png",
+      "sha256": "754c3094e8703d52c7ecf50f7fb118eb261c1b5453b41553e6582b602fafabb4"
+    },
+    {
+      "path": "implemented-light-home.png",
+      "sha256": "e8baaebe05ba1cdfffd8381e491f9ce181f7ea148502675f31ffa30f3589a6e2"
+    },
+    {
+      "path": "implemented-tool-thread.png",
+      "sha256": "44a24080911cbd6b49a8fac160bded8ae9b5474756c47e825f54f0a8f1a1a9c2"
+    },
+    {
+      "path": "local-command-terminal-block.png",
+      "sha256": "aa0f8c7e86828ae551bab79b9be2fbbf5e365c5200526c9761e9b57b0f68c5dd"
+    }
+  ],
+  "validation": {
+    "typeCheck": "passed",
+    "desktopBuild": "passed",
+    "tests": {
+      "passed": 138,
+      "failed": 0,
+      "assertions": 977,
+      "files": 30,
+      "seconds": 345.94
+    },
+    "skills": "30 passed before UI changes; no Skill changes",
+    "review": "Ready",
+    "actualViewports": [
+      "1280x720",
+      "1101x800",
+      "1024x800",
+      "1024x620",
+      "720x800",
+      "400x720",
+      "1434x1052"
+    ],
+    "localToolFlow": "read plus alpha_office docx; real page preview",
+    "injectedFailure": "401 fixture; visible error and recovery controls",
+    "reducedMotion": "hover transform none",
+    "primaryContrast": {
+      "lightMinimum": 4.76,
+      "darkMinimum": 6.45
+    },
+    "kernelImplementationChanges": false,
+    "packageOrInstallerValidation": false
+  }
+}

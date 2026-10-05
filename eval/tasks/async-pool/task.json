@@ -1,0 +1,8 @@
+{
+  "id": "async-pool",
+  "kind": "code",
+  "hidden": [
+    "hidden/pool.hidden.test.ts"
+  ],
+  "objective": "src/pool.ts 的 mapLimit 帮助函数有问题。它应当：\n- 用最多 `limit` 个并发任务处理 `items`（真实并发，不能一个个排队，也不能全部一次性启动）；\n- 结果数组与输入顺序一致，与完成先后无关；\n- 任意一个任务 reject 时，整个 promise 以该错误 reject，且不再调度后续未开始的任务；\n- `items` 为空或 `limit < 1` 时 resolve 空数组。\n请修复实现并补充测试。"
+}

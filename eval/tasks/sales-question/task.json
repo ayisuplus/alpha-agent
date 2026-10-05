@@ -1,0 +1,18 @@
+{
+  "id": "sales-question",
+  "kind": "general",
+  "files": [
+    "files/sales.csv"
+  ],
+  "objective": "附件 sales.csv 是 2026 年上半年的销售明细（列为 month, region, product, amount，金额单位为元）。按地区汇总金额，告诉我总金额最高和最低的地区分别是哪个，以及各自的总金额。直接回答即可，不需要生成文件。",
+  "checks": {
+    "answer": {
+      "patterns": [
+        "东北",
+        "96,?131",
+        "华南",
+        "69,?371"
+      ]
+    }
+  }
+}

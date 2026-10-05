@@ -1,0 +1,498 @@
+{
+  "date": "2026-10-01",
+  "platform": "win32",
+  "bun": "1.3.14",
+  "runtime": {
+    "available": true,
+    "version": "cd7284b4cbbfeb507e630c1aac019f4157393acb",
+    "location": "system"
+  },
+  "observations": [
+    {
+      "file": "native-tracked.docx",
+      "originalSha256": "5ada1f5e369251ecfdb6adfea624050720a93e6efbc108de804719f1adbfb47a",
+      "originalUnchanged": true,
+      "loaded": {
+        "id": "a98aaa55-bf10-446f-9fa5-de67b669d785",
+        "kind": "text",
+        "parts": [
+          {
+            "index": 0,
+            "name": "Page 1"
+          }
+        ],
+        "part": 0,
+        "width": 12808,
+        "height": 16408,
+        "readOnly": true,
+        "comments": [],
+        "revisions": [
+          {
+            "index": 1,
+            "author": "Alpha QA",
+            "type": "Insert",
+            "comment": "",
+            "description": "Insert “Tracked target”",
+            "dateTime": "1970-01-01",
+            "textRange": "2933, 1724, 1382, 257"
+          }
+        ],
+        "pageRectangles": "284, 284, 12240, 15840"
+      },
+      "selected": {
+        "selection": "Original",
+        "part": 0,
+        "width": 12808,
+        "height": 16408
+      },
+      "final": {
+        "id": "a98aaa55-bf10-446f-9fa5-de67b669d785",
+        "kind": "text",
+        "parts": [
+          {
+            "index": 0,
+            "name": "Page 1"
+          }
+        ],
+        "part": 0,
+        "width": 12808,
+        "height": 16408,
+        "readOnly": true,
+        "comments": [],
+        "revisions": [
+          {
+            "index": 1,
+            "author": "Alpha QA",
+            "type": "Insert",
+            "comment": "",
+            "description": "Insert “Tracked target”",
+            "dateTime": "1970-01-01",
+            "textRange": "2933, 1724, 1382, 257"
+          }
+        ],
+        "pageRectangles": "284, 284, 12240, 15840"
+      },
+      "pngWidth": 800,
+      "pngHeight": 600,
+      "pngSha256": "637c21546045937a2d6c3d5b11feef0fa1a4b946eef1b9ef9c2779dce7133f5b",
+      "elapsedMs": 2624
+    },
+    {
+      "file": "native-comments.docx",
+      "originalSha256": "5efae93594182dc24ffeb71aed4b755bf063af1fe740bdb279e45d3a6d8ff03b",
+      "originalUnchanged": true,
+      "loaded": {
+        "id": "ed1fec36-8718-4aec-abc4-4fe992bb74fe",
+        "kind": "text",
+        "parts": [
+          {
+            "index": 0,
+            "name": "Page 1"
+          }
+        ],
+        "part": 0,
+        "width": 16976,
+        "height": 17406,
+        "readOnly": true,
+        "comments": [
+          {
+            "id": 1,
+            "parentId": 0,
+            "author": "Alpha QA",
+            "html": "<div>WORD_NATIVE_COMMENT 中文批注正文</div>",
+            "resolved": "false",
+            "dateTime": "2026-10-01",
+            "anchorPos": "3018, 1724, 1, 231",
+            "textRange": "1724, 1724, 1294, 230",
+            "layoutStatus": 1,
+            "text": "WORD_NATIVE_COMMENT 中文批注正文"
+          }
+        ],
+        "revisions": [],
+        "pageRectangles": "284, 284, 11906, 16838"
+      },
+      "selected": {
+        "selection": "Comment",
+        "part": 0,
+        "width": 16976,
+        "height": 17406
+      },
+      "final": {
+        "id": "ed1fec36-8718-4aec-abc4-4fe992bb74fe",
+        "kind": "text",
+        "parts": [
+          {
+            "index": 0,
+            "name": "Page 1"
+          }
+        ],
+        "part": 0,
+        "width": 16976,
+        "height": 17406,
+        "readOnly": true,
+        "comments": [
+          {
+            "id": 1,
+            "parentId": 0,
+            "author": "Alpha QA",
+            "html": "<div>WORD_NATIVE_COMMENT 中文批注正文</div>",
+            "resolved": "false",
+            "dateTime": "2026-10-01",
+            "anchorPos": "3018, 1724, 1, 231",
+            "textRange": "1724, 1724, 1294, 230",
+            "layoutStatus": 1,
+            "text": "WORD_NATIVE_COMMENT 中文批注正文"
+          }
+        ],
+        "revisions": [],
+        "pageRectangles": "284, 284, 11906, 16838"
+      },
+      "pngWidth": 800,
+      "pngHeight": 600,
+      "pngSha256": "7a1254118427038a5b10a3fffbf56189c5dd61ed62a3164df06e9640ab46ef62",
+      "elapsedMs": 2457
+    },
+    {
+      "file": "native-structure.xlsx",
+      "originalSha256": "21fb16a6f5c1373a00721b40a34652183ed13affd930e36bf9a9d61022ebff59",
+      "originalUnchanged": true,
+      "loaded": {
+        "id": "0341fddb-25af-4d20-aba0-867a2a0afb7b",
+        "kind": "spreadsheet",
+        "parts": [
+          {
+            "index": 0,
+            "name": "Visible",
+            "hidden": false
+          },
+          {
+            "index": 1,
+            "name": "Hidden",
+            "hidden": true
+          },
+          {
+            "index": 2,
+            "name": "Second",
+            "hidden": false
+          }
+        ],
+        "part": 0,
+        "width": 6106,
+        "height": 6047,
+        "readOnly": true,
+        "comments": [
+          {
+            "part": 0,
+            "cellAddress": "B2",
+            "author": "Author",
+            "date": "",
+            "text": "FORMULA_REVIEW_COMMENT"
+          }
+        ],
+        "revisions": [],
+        "notes": []
+      },
+      "selected": {
+        "part": 0,
+        "width": 6106,
+        "height": 6047,
+        "formula": "=A2*3",
+        "cellAddress": "B2",
+        "selection": "21"
+      },
+      "final": {
+        "id": "0341fddb-25af-4d20-aba0-867a2a0afb7b",
+        "kind": "spreadsheet",
+        "parts": [
+          {
+            "index": 0,
+            "name": "Visible",
+            "hidden": false
+          },
+          {
+            "index": 1,
+            "name": "Hidden",
+            "hidden": true
+          },
+          {
+            "index": 2,
+            "name": "Second",
+            "hidden": false
+          }
+        ],
+        "part": 2,
+        "width": 939,
+        "height": 300,
+        "readOnly": true,
+        "comments": [
+          {
+            "part": 0,
+            "cellAddress": "B2",
+            "author": "Author",
+            "date": "",
+            "text": "FORMULA_REVIEW_COMMENT"
+          }
+        ],
+        "revisions": [],
+        "notes": []
+      },
+      "pngWidth": 800,
+      "pngHeight": 600,
+      "pngSha256": "882c6efc04bdf9bc658d7df018ce33a1ca8cdafb53caf35da64f79ed4ff450ed",
+      "elapsedMs": 3636
+    },
+    {
+      "file": "native-notes-deck.pptx",
+      "originalSha256": "f5ad4b47834b1c1e61fe579191f164b6e0ae889f72d6fac65d9fa4a7c53a46aa",
+      "originalUnchanged": true,
+      "loaded": {
+        "id": "febe3676-7f6f-44f9-a1c1-43a9676afda3",
+        "kind": "presentation",
+        "parts": [
+          {
+            "index": 0,
+            "name": "page1"
+          },
+          {
+            "index": 1,
+            "name": "page2"
+          }
+        ],
+        "part": 0,
+        "width": 14400,
+        "height": 10800,
+        "readOnly": true,
+        "comments": [],
+        "revisions": [],
+        "notes": [
+          {
+            "part": 0,
+            "text": "Native speaker note 1\n中文第二段笔记"
+          },
+          {
+            "part": 1,
+            "text": "Native speaker note 2\n中文第二段笔记"
+          }
+        ]
+      },
+      "selected": {
+        "part": 0,
+        "width": 14400,
+        "height": 10800,
+        "selection": "Opening target"
+      },
+      "final": {
+        "id": "febe3676-7f6f-44f9-a1c1-43a9676afda3",
+        "kind": "presentation",
+        "parts": [
+          {
+            "index": 0,
+            "name": "page1"
+          },
+          {
+            "index": 1,
+            "name": "page2"
+          }
+        ],
+        "part": 1,
+        "width": 14400,
+        "height": 10800,
+        "readOnly": true,
+        "comments": [],
+        "revisions": [],
+        "notes": [
+          {
+            "part": 0,
+            "text": "Native speaker note 1\n中文第二段笔记"
+          },
+          {
+            "part": 1,
+            "text": "Native speaker note 2\n中文第二段笔记"
+          }
+        ]
+      },
+      "pngWidth": 800,
+      "pngHeight": 600,
+      "pngSha256": "184f4cefdcefca92903ff015ca41db193963efa0cd670dbb82f576777c01d37a",
+      "elapsedMs": 4690
+    },
+    {
+      "file": "native-tracked.odt",
+      "originalSha256": "53a91d85f270d51a24ffc675a0380e7311f8ae576768f7c47c1ba71c14589ac1",
+      "originalUnchanged": true,
+      "unavailable": "Error: 当前 Windows LibreOffice 的 ODT/RTF 原格式视图尚未通过验证，请在原应用中打开；可另行选择静态预览",
+      "elapsedMs": 1
+    },
+    {
+      "file": "native-tracked.rtf",
+      "originalSha256": "56dfdaf5a00448540ca9642366546a884090833a35f8bff686b301e9e3a792d4",
+      "originalUnchanged": true,
+      "unavailable": "Error: 当前 Windows LibreOffice 的 ODT/RTF 原格式视图尚未通过验证，请在原应用中打开；可另行选择静态预览",
+      "elapsedMs": 0
+    },
+    {
+      "file": "native-structure.ods",
+      "originalSha256": "56174499f1a44b2f643ab3270e081097834b14cf6e978ae2934a9980d5793ee2",
+      "originalUnchanged": true,
+      "loaded": {
+        "id": "e946f8e8-7b20-4d46-a386-70cfe7a80b85",
+        "kind": "spreadsheet",
+        "parts": [
+          {
+            "index": 0,
+            "name": "Visible",
+            "hidden": false
+          },
+          {
+            "index": 1,
+            "name": "Hidden",
+            "hidden": true
+          },
+          {
+            "index": 2,
+            "name": "Second",
+            "hidden": false
+          }
+        ],
+        "part": 0,
+        "width": 6106,
+        "height": 5592,
+        "readOnly": true,
+        "comments": [
+          {
+            "part": 0,
+            "cellAddress": "B2",
+            "author": "Author",
+            "date": "2026-10-01T17:55:47,946369100",
+            "text": "FORMULA_REVIEW_COMMENT"
+          }
+        ],
+        "revisions": [],
+        "notes": []
+      },
+      "selected": {
+        "part": 0,
+        "width": 6106,
+        "height": 5592,
+        "formula": "=A2*3",
+        "cellAddress": "B2",
+        "selection": "21"
+      },
+      "final": {
+        "id": "e946f8e8-7b20-4d46-a386-70cfe7a80b85",
+        "kind": "spreadsheet",
+        "parts": [
+          {
+            "index": 0,
+            "name": "Visible",
+            "hidden": false
+          },
+          {
+            "index": 1,
+            "name": "Hidden",
+            "hidden": true
+          },
+          {
+            "index": 2,
+            "name": "Second",
+            "hidden": false
+          }
+        ],
+        "part": 2,
+        "width": 939,
+        "height": 277,
+        "readOnly": true,
+        "comments": [
+          {
+            "part": 0,
+            "cellAddress": "B2",
+            "author": "Author",
+            "date": "2026-10-01T17:55:47,946369100",
+            "text": "FORMULA_REVIEW_COMMENT"
+          }
+        ],
+        "revisions": [],
+        "notes": []
+      },
+      "pngWidth": 800,
+      "pngHeight": 600,
+      "pngSha256": "18b91d92f8691cc3ab1d474445f4693e122d6e56688a7c387ebb5435a4e1d30a",
+      "elapsedMs": 3638
+    },
+    {
+      "file": "native-notes-deck.odp",
+      "originalSha256": "a90387a01bae4941e7f9e182c7c593aa3a1eb3f66e34bf0927f335b25d9aac93",
+      "originalUnchanged": true,
+      "loaded": {
+        "id": "dff44129-135b-4b6d-b139-40227ef06676",
+        "kind": "presentation",
+        "parts": [
+          {
+            "index": 0,
+            "name": "page1"
+          },
+          {
+            "index": 1,
+            "name": "page2"
+          }
+        ],
+        "part": 0,
+        "width": 14400,
+        "height": 10800,
+        "readOnly": true,
+        "comments": [],
+        "revisions": [],
+        "notes": [
+          {
+            "part": 0,
+            "text": "Native speaker note 1\n中文第二段笔记"
+          },
+          {
+            "part": 1,
+            "text": "Native speaker note 2\n中文第二段笔记"
+          }
+        ]
+      },
+      "selected": {
+        "part": 0,
+        "width": 14400,
+        "height": 10800,
+        "selection": ""
+      },
+      "final": {
+        "id": "dff44129-135b-4b6d-b139-40227ef06676",
+        "kind": "presentation",
+        "parts": [
+          {
+            "index": 0,
+            "name": "page1"
+          },
+          {
+            "index": 1,
+            "name": "page2"
+          }
+        ],
+        "part": 1,
+        "width": 14400,
+        "height": 10800,
+        "readOnly": true,
+        "comments": [],
+        "revisions": [],
+        "notes": [
+          {
+            "part": 0,
+            "text": "Native speaker note 1\n中文第二段笔记"
+          },
+          {
+            "part": 1,
+            "text": "Native speaker note 2\n中文第二段笔记"
+          }
+        ]
+      },
+      "pngWidth": 800,
+      "pngHeight": 600,
+      "pngSha256": "184f4cefdcefca92903ff015ca41db193963efa0cd670dbb82f576777c01d37a",
+      "elapsedMs": 4476
+    }
+  ]
+}

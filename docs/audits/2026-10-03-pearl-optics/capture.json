@@ -1,0 +1,101 @@
+{
+  "capturedAt": "2026-10-03T15:57:38.822Z",
+  "screenshots": [
+    "home-light.png",
+    "palette-light.png",
+    "model-menu-light.png",
+    "thread-light.png",
+    "tool-timeline-light.png",
+    "settings-light.png",
+    "home-dark.png",
+    "palette-dark.png",
+    "model-menu-dark.png",
+    "thread-dark.png",
+    "tool-timeline-dark.png",
+    "settings-dark.png",
+    "running-light.png",
+    "running-reduced-motion-light.png",
+    "drawer-1101x800.png",
+    "thread-720x800.png",
+    "thread-400x720.png"
+  ],
+  "overflow": {
+    "home-1440x900": {
+      "viewport": 1440,
+      "documentScrollWidth": 1440,
+      "horizontalOverflow": false
+    },
+    "thread-1440x900": {
+      "viewport": 1440,
+      "documentScrollWidth": 1440,
+      "horizontalOverflow": false
+    },
+    "home-1280x800": {
+      "viewport": 1280,
+      "documentScrollWidth": 1280,
+      "horizontalOverflow": false
+    },
+    "thread-1280x800": {
+      "viewport": 1280,
+      "documentScrollWidth": 1280,
+      "horizontalOverflow": false
+    },
+    "home-1101x800": {
+      "viewport": 1101,
+      "documentScrollWidth": 1101,
+      "horizontalOverflow": false
+    },
+    "thread-1101x800": {
+      "viewport": 1101,
+      "documentScrollWidth": 1101,
+      "horizontalOverflow": false
+    },
+    "home-1024x768": {
+      "viewport": 1024,
+      "documentScrollWidth": 1024,
+      "horizontalOverflow": false
+    },
+    "thread-1024x768": {
+      "viewport": 1024,
+      "documentScrollWidth": 1024,
+      "horizontalOverflow": false
+    },
+    "home-720x800": {
+      "viewport": 720,
+      "documentScrollWidth": 720,
+      "horizontalOverflow": false
+    },
+    "thread-720x800": {
+      "viewport": 720,
+      "documentScrollWidth": 720,
+      "horizontalOverflow": false
+    },
+    "home-400x720": {
+      "viewport": 400,
+      "documentScrollWidth": 400,
+      "horizontalOverflow": false
+    },
+    "thread-400x720": {
+      "viewport": 400,
+      "documentScrollWidth": 400,
+      "horizontalOverflow": false
+    }
+  },
+  "fonts": {
+    "segoeVariableText": true,
+    "segoeVariableDisplay": true
+  },
+  "running": {
+    "headerRunning": true,
+    "composerStreaming": true,
+    "animations": [
+      "alpha-orbit",
+      "alpha-pulse",
+      "alpha-scan"
+    ]
+  },
+  "reducedMotion": {
+    "runningAnimations": 0,
+    "headerScanBackgroundSize": "100% 100%"
+  }
+}

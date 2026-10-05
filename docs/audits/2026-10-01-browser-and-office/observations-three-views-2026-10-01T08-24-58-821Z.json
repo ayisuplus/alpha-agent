@@ -1,0 +1,193 @@
+{
+  "sourceHead": "02a31c3cee2422e3559a0b7f48ce75b6d7584831",
+  "runtimeDirectory": "C:\\Users\\36322\\AppData\\Local\\Temp\\alpha-browser-office-audit-iR5Vfg",
+  "chromium": {
+    "Browser": "Chrome/146.0.7680.188",
+    "Protocol-Version": "1.3",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) AlphaBrowserHost/41.2.2 Chrome/146.0.7680.188 Electron/41.2.2 Safari/537.36",
+    "V8-Version": "14.6.202.33",
+    "WebKit-Version": "537.36 (@dee106bfbade3fd4005056572bde889b805c9af0)",
+    "webSocketDebuggerUrl": "ws://127.0.0.1:62247/devtools/browser/d3b2639f-1886-444a-9e45-e1a3421b5b79"
+  },
+  "normalClick": {
+    "returned": {
+      "normal": 0,
+      "disabled": 0,
+      "covered": 0,
+      "stale": 0,
+      "duplicate": [],
+      "moving": 0,
+      "trusted": []
+    }
+  },
+  "coveredClick": {
+    "error": "ToolError: tab.click(\"#covered\") blocked: covered by <div#overlay>"
+  },
+  "disabledClick": {
+    "returned": 0
+  },
+  "duplicateSelector": {
+    "returned": []
+  },
+  "movingElement": {
+    "returned": 0
+  },
+  "iframeClick": {
+    "returned": null
+  },
+  "staleHandle": {
+    "error": "ToolError: Element id 3 is stale. Run tab.observe() again."
+  },
+  "ariaClick": {
+    "returned": 0
+  },
+  "coordinateClick": {
+    "returned": 0
+  },
+  "popupLink": {
+    "returned": {
+      "before": 3,
+      "after": 3,
+      "currentUrl": "http://127.0.0.1:50736/main"
+    }
+  },
+  "primaryTabs": [
+    {
+      "name": "primary-session",
+      "url": "http://127.0.0.1:50736/main",
+      "title": "Alpha isolated browser audit",
+      "targetId": "594DBF10459F77B11C2CB3D0CB9D787A",
+      "kind": "connected",
+      "persist": false
+    }
+  ],
+  "pagesVisibility": {
+    "returned": [
+      {
+        "url": "http://127.0.0.1:50736/main",
+        "state": "hidden"
+      },
+      {
+        "url": "about:blank",
+        "state": "visible"
+      },
+      {
+        "url": "about:blank",
+        "state": "visible"
+      }
+    ]
+  },
+  "afterCdpBringToFront": {
+    "returned": {
+      "audit": {
+        "normal": 0,
+        "disabled": 0,
+        "covered": 0,
+        "stale": 0,
+        "duplicate": [],
+        "moving": 0,
+        "trusted": []
+      },
+      "state": "hidden",
+      "focused": true
+    }
+  },
+  "afterNativeTargetActivation": {
+    "returned": {
+      "audit": {
+        "normal": 1,
+        "disabled": 0,
+        "covered": 0,
+        "stale": 0,
+        "duplicate": [],
+        "moving": 0,
+        "trusted": [
+          true
+        ]
+      },
+      "input": "keyboard input"
+    }
+  },
+  "screencastAndClick": {
+    "returned": {
+      "frames": 2,
+      "audit": {
+        "normal": 2,
+        "disabled": 0,
+        "covered": 0,
+        "stale": 0,
+        "duplicate": [],
+        "moving": 0,
+        "trusted": [
+          true,
+          true
+        ]
+      }
+    }
+  },
+  "secondProcess": {
+    "returned": {
+      "stdout": "{\"tabs\":[{\"name\":\"second-session\",\"url\":\"http://127.0.0.1:50736/second\",\"title\":\"Second session\",\"targetId\":\"594DBF10459F77B11C2CB3D0CB9D787A\",\"kind\":\"connected\",\"persist\":false}]}",
+      "primaryUrlAfterSecondSession": "http://127.0.0.1:50736/second"
+    }
+  },
+  "viewportAndHandback": {
+    "returned": {
+      "before": {
+        "url": "http://127.0.0.1:50736/second",
+        "width": 1283,
+        "height": 780
+      },
+      "resized": {
+        "url": "http://127.0.0.1:50736/second",
+        "width": 641,
+        "height": 458
+      },
+      "after": {
+        "url": "http://127.0.0.1:50736/second",
+        "width": 643,
+        "height": 460
+      }
+    }
+  },
+  "eachNativeView": {
+    "returned": [
+      {
+        "index": 0,
+        "targetId": "594DBF10459F77B11C2CB3D0CB9D787A",
+        "before": 1,
+        "afterCdp": 2,
+        "afterNative": 3
+      },
+      {
+        "index": 1,
+        "targetId": "27C4C2D67C00FF6CF415BAABC6312417",
+        "before": 1,
+        "afterCdp": 2,
+        "afterNative": 3
+      },
+      {
+        "index": 2,
+        "targetId": "328F4768DBC009779185FF746D7EE867",
+        "before": 0,
+        "afterCdp": 0,
+        "afterNative": 1
+      }
+    ]
+  },
+  "officePreview": {
+    "returned": {
+      "engine": {
+        "available": true,
+        "version": "cd7284b4cbbfeb507e630c1aac019f4157393acb",
+        "location": "system"
+      },
+      "originalUnchanged": true,
+      "pdfPages": 1,
+      "text": "VISIBLE_PRINT_AREA  7   21  OUTSIDE_PRINT_AREA",
+      "hiddenSheetVisible": false,
+      "outsidePrintAreaVisible": true,
+      "commentVisible": false
+    }
+  }
+}

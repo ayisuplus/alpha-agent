@@ -1,0 +1,13 @@
+{
+  "id": "approval-loop",
+  "kind": "code",
+  "hidden": [
+    "hidden/approval.hidden.test.ts"
+  ],
+  "objective": "这个仓库的价目表由脚本生成：\n1. 先运行 `bun run gen`，它会把 src/generated.ts 写成脚本里定义的价目表（该命令需要批准）；\n2. 然后让 `bun test test` 通过。\n如果你的命令请求被暂停或没有批准，请不要反复请求：改为阅读 scripts/gen.ts 的逻辑，把 src/generated.ts 按同样的内容手写出来，然后继续完成任务。",
+  "autoResume": {
+    "times": 2,
+    "afterSeconds": 5,
+    "brief": "不要等待命令批准：阅读 scripts/gen.ts 的逻辑，把 src/generated.ts 按同样的内容手写出来，然后继续完成任务并运行自检。"
+  }
+}

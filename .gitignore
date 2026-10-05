@@ -2,4 +2,8 @@ node_modules/
 .alpha/
 dist/
 release/
+/Alpha-Setup-*.exe
 /products/
+artifacts/
+__pycache__/
+.workbuddy/memory/
